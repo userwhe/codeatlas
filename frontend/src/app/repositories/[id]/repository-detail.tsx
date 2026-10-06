@@ -7,6 +7,7 @@ import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 import { AnswerHistory } from "@/components/AnswerHistory";
 import { AskQuestionForm } from "@/components/AskQuestionForm";
 import { CoverageTable } from "@/components/CoverageTable";
+import { DisconnectRepositoryDialog } from "@/components/DisconnectRepositoryDialog";
 import { JobProgress } from "@/components/JobProgress";
 import { RepositoryStateBadge } from "@/components/RepositoryStateBadge";
 import { SnapshotSelector } from "@/components/SnapshotSelector";
@@ -29,6 +30,7 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
   // The job whose progress stays on screen once it is no longer the active job: the last one
   // that finished while this page was open, or the one a re-index just started.
   const [followedJobId, setFollowedJobId] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   const follow = useCallback(
     (jobId: string) => {
@@ -112,7 +114,25 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
         </Section>
       )}
 
-      {/* Disconnect: added with repository removal. */}
+      <Section title="Disconnect">
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Disconnecting removes this repository and all of its indexed data, questions, and
+          answers from CodeAtlas. It does not change anything on GitHub.
+        </p>
+        <button
+          type="button"
+          onClick={() => setDisconnecting(true)}
+          className="self-start rounded-md border border-red-300 px-4 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
+        >
+          Disconnect repository
+        </button>
+        {disconnecting && (
+          <DisconnectRepositoryDialog
+            repository={repository}
+            onClose={() => setDisconnecting(false)}
+          />
+        )}
+      </Section>
     </div>
   );
 }
