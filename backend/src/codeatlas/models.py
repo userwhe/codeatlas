@@ -1,7 +1,7 @@
 """Database tables. See specs/001-repository-qa/data-model.md for the rules behind each field."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -378,4 +378,128 @@ class JobEvent(Base):
     stage: Mapped[str | None] = mapped_column(Text)
     message: Mapped[str] = mapped_column(Text, default="")
     data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+# --- Questions and answers ------------------------------------------------------------------------
+
+
+class AnalysisRun(Base):
+    """A question and its answer (kind `repository_qa`); later analysis kinds reuse this table."""
+
+    __tablename__ = "analysis_runs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "repository_id"],
+            ["repositories.workspace_id", "repositories.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "snapshot_id"],
+            ["snapshots.workspace_id", "snapshots.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(_in("kind", ANALYSIS_KINDS), name="kind"),
+        CheckConstraint("char_length(question) BETWEEN 1 AND 2000", name="question_length"),
+        CheckConstraint(
+            f"quality_state IS NULL OR {_in('quality_state', QUALITY_STATES)}",
+            name="quality_state",
+        ),
+        Index("ix_analysis_runs_repository_created", "repository_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID]
+    repository_id: Mapped[uuid.UUID]
+    snapshot_id: Mapped[uuid.UUID]
+    commit_sha: Mapped[str] = mapped_column(Text)
+    index_version: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(Text, default="repository_qa")
+    question: Mapped[str] = mapped_column(Text)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
+    quality_state: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict[str, Any] | None]
+    model: Mapped[str] = mapped_column(Text)
+    thinking_level: Mapped[str] = mapped_column(Text)
+    prompt_version: Mapped[str] = mapped_column(Text)
+    usage: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    completed_at: Mapped[datetime | None]
+    expires_at: Mapped[datetime]
+
+
+class EvidenceItem(Base):
+    __tablename__ = "evidence_items"
+    __table_args__ = (
+        UniqueConstraint("analysis_run_id", "label"),
+        CheckConstraint(_in("source_type", EVIDENCE_SOURCE_TYPES), name="source_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    analysis_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE")
+    )
+    label: Mapped[str] = mapped_column(Text)
+    source_type: Mapped[str] = mapped_column(Text)
+    path: Mapped[str] = mapped_column(Text)
+    commit_sha: Mapped[str] = mapped_column(Text)
+    start_line: Mapped[int]
+    end_line: Mapped[int]
+    excerpt: Mapped[str] = mapped_column(Text)
+    excerpt_sha256: Mapped[bytes]
+    rank: Mapped[int]
+
+
+# --- Supporting records ---------------------------------------------------------------------------
+
+
+class IdempotencyRecord(Base):
+    __tablename__ = "idempotency_records"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    route: Mapped[str] = mapped_column(Text, primary_key=True)
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    payload_sha256: Mapped[bytes]
+    response_status: Mapped[int]
+    response_body: Mapped[dict[str, Any]]
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[datetime]
+
+
+class UsageCounter(Base):
+    __tablename__ = "usage_counters"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    usage_date: Mapped[date] = mapped_column(primary_key=True)
+    questions_count: Mapped[int] = mapped_column(default=0)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        CheckConstraint(_in("action", AUDIT_ACTIONS), name="action"),
+        CheckConstraint(_in("outcome", AUDIT_OUTCOMES), name="outcome"),
+        Index("ix_audit_events_workspace_created", "workspace_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="SET NULL")
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    action: Mapped[str] = mapped_column(Text)
+    resource_type: Mapped[str | None] = mapped_column(Text)
+    resource_id: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text)
+    request_id: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
