@@ -2,6 +2,17 @@ CLAUDE.local.md
 .DS_Store
 .env
 *.pem
+node_modules/
+.next/
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+frontend/playwright-report/
+frontend/test-results/
+backend/evals/out/
+*.log
 
 # Spec Kit tooling (regenerate with `specify init`)
 .agents/
