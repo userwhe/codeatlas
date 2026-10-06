@@ -17,6 +17,7 @@ from codeatlas.github.gateway import (
     GitHubRepository,
     GitHubUnavailable,
     get_gateway,
+    verify_access,
 )
 from codeatlas.jobs.queue import cancel_for_repository, enqueue
 from codeatlas.models import ACTIVE_JOB_STATUSES, Job, Repository, Snapshot, User, Workspace
@@ -77,7 +78,7 @@ def connect(
     accept_external_processing: bool,
     request_id: str | None,
 ) -> tuple[Repository, Job]:
-    """Connect a repository and queue its first indexing job. At most two GitHub calls (SC-007).
+    """Connect a repository and queue its first indexing job. At most three GitHub calls (SC-007).
 
     The caller commits.
     """
@@ -98,8 +99,10 @@ def connect(
         raise sign_in_again() from exc
     except GitHubUnavailable as exc:
         raise github_unavailable() from exc
+    # Every GitHub call happens before the workspace lock below: a denial is audited in its own
+    # transaction, which must not wait on a lock this request holds.
     try:
-        github_repo = gateway.get_repository(token, github_repository_id)
+        github_repo, installation_id = verify_access(gateway, token, github_repository_id)
     except (GitHubNotFound, GitHubAccessDenied) as exc:
         raise denied() from exc
     except GitHubUnavailable as exc:
@@ -113,8 +116,11 @@ def connect(
             "to an external model provider.",
         )
 
-    # Serialize connections per workspace so the repository limit holds (FR-009).
-    db.execute(select(Workspace.id).where(Workspace.id == workspace.id).with_for_update())
+    # Serialize connections per workspace so the repository limit holds (FR-009). FOR NO KEY
+    # UPDATE still lets other transactions insert rows that reference the workspace.
+    db.execute(
+        select(Workspace.id).where(Workspace.id == workspace.id).with_for_update(key_share=True)
+    )
     active = select(Repository).where(
         Repository.workspace_id == workspace.id, Repository.deleted_at.is_(None)
     )
@@ -129,13 +135,6 @@ def connect(
             f"A workspace can connect at most {limit} repositories.",
             details={"limit": limit},
         )
-
-    try:
-        installation_id = gateway.get_installation_id(github_repo.full_name)
-    except (GitHubNotFound, GitHubAccessDenied) as exc:
-        raise denied() from exc
-    except GitHubUnavailable as exc:
-        raise github_unavailable() from exc
 
     now = datetime.now(UTC)
     repository = Repository(

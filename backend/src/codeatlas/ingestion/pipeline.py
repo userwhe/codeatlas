@@ -23,6 +23,7 @@ from codeatlas.github.gateway import (
     GitHubUnavailable,
     RepositoryEmpty,
     get_gateway,
+    verify_access,
 )
 from codeatlas.ingestion.chunking import code_chunks, index_version, markdown_chunks
 from codeatlas.ingestion.extract import LimitExceeded, iter_archive
@@ -117,8 +118,9 @@ def _resolve(ctx: JobContext, gateway: GitHubGateway) -> Target | None:
             raise _access_denied(ctx, "requesting user no longer exists")
         try:
             token = get_user_token(db, user, gateway)
-            github_repo = gateway.get_repository(token, repository.github_repository_id)
-            installation_id = gateway.get_installation_id(github_repo.full_name)
+            github_repo, installation_id = verify_access(
+                gateway, token, repository.github_repository_id
+            )
         except (GitHubNotFound, GitHubAccessDenied) as exc:
             raise _access_denied(ctx, type(exc).__name__) from exc
         except GitHubUnavailable as exc:

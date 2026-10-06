@@ -121,10 +121,18 @@ class GitHubClient:
     def get_repository(self, user_token: str, github_repository_id: int) -> GitHubRepository:
         with self._client() as http:
             response = self._api(http, "GET", f"/repositories/{github_repository_id}", user_token)
-        # A user token only reaches what both the user and the installation can access, so a
-        # plain 403 means the same as 404 here (FR-003).
+        # A plain 403 means the same as 404 here (FR-003).
         _check(response, forbidden=GitHubNotFound)
         return _repository(_json(response))
+
+    def list_installation_ids(self, user_token: str) -> set[int]:
+        with self._client() as http:
+            installations = self._paginate(http, "/user/installations", "installations", user_token)
+        return {
+            int(installation["id"])
+            for installation in installations
+            if not installation.get("suspended_at")
+        }
 
     def get_installation_id(self, full_name: str) -> int:
         with self._client() as http:

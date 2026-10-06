@@ -9,8 +9,10 @@ from codeatlas.config import Settings
 from codeatlas.github.fake import (
     HUBOT_TOOLS_ID,
     NO_CODE_ID,
+    PUBLIC_UNINSTALLED_ID,
     SAMPLE_APP_ID,
     SAMPLE_APP_PRIVATE_ID,
+    SOLO_ID,
     get_fake_github,
 )
 from codeatlas.models import AuditEvent, Job, Repository
@@ -55,25 +57,44 @@ def test_connect_queues_indexing_and_audits(
     assert audit.outcome == "success"
 
 
-def test_connect_makes_at_most_two_github_calls(signed_in: Callable[[str], TestClient]) -> None:
+def test_connect_makes_at_most_three_github_calls(signed_in: Callable[[str], TestClient]) -> None:
     client = signed_in("octocat")
     fake = get_fake_github()
     fake.calls.clear()
 
+    private = connect(client, SAMPLE_APP_PRIVATE_ID, accept_external_processing=True)
+    assert private.status_code == 202  # type: ignore[attr-defined]
+    assert dict(fake.calls) == {"get_repository": 1, "get_installation_id": 1}
+    fake.calls.clear()
+    # GitHub shows a public repository to every user, so its installation must also be checked.
     assert connect(client, SAMPLE_APP_ID).status_code == 202  # type: ignore[attr-defined]
+    assert dict(fake.calls) == {
+        "get_repository": 1,
+        "get_installation_id": 1,
+        "list_installation_ids": 1,
+    }
 
-    assert sum(fake.calls.values()) <= 2
-    assert set(fake.calls) <= {"get_repository", "get_installation_id"}
 
-
+@pytest.mark.parametrize(
+    ("login", "github_id"),
+    [
+        ("octocat", HUBOT_TOOLS_ID),  # public, but installed only on another account
+        ("hubot", SOLO_ID),  # public, but installed only on another account
+        ("octocat", PUBLIC_UNINSTALLED_ID),  # public, and the App is not installed
+        ("hubot", SAMPLE_APP_PRIVATE_ID),  # private, and the user cannot see it
+    ],
+)
 def test_inaccessible_repository_is_not_found_and_audited(
-    db: Session, signed_in: Callable[[str], TestClient]
+    db: Session, signed_in: Callable[[str], TestClient], login: str, github_id: int
 ) -> None:
-    client = signed_in("octocat")
+    client = signed_in(login)
     fake = get_fake_github()
     fake.calls.clear()
 
-    response = client.post("/v1/repositories", json={"github_repository_id": HUBOT_TOOLS_ID})
+    response = client.post(
+        "/v1/repositories",
+        json={"github_repository_id": github_id, "accept_external_processing": True},
+    )
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"

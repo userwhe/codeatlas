@@ -187,7 +187,7 @@ def test_failed_reindex_keeps_previous_snapshot(
     run_all(run_worker_once)
     repository_id = body["repository"]["id"]
     active_before = client.get(f"/v1/repositories/{repository_id}").json()["active_snapshot"]
-    get_fake_github().revoke_access("octocat", SAMPLE_APP_ID)
+    get_fake_github().uninstall(SAMPLE_APP_ID)
 
     again = client.post(f"/v1/repositories/{repository_id}/index", json={}).json()
     run_all(run_worker_once)

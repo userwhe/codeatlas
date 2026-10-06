@@ -17,8 +17,11 @@ GitHub's (`<owner>-<repo>-<sha[:7]>/`).
 | 2007 | `octo-org/empty`              | no branches (`RepositoryEmpty`)           | octocat          |
 | 2008 | `octocat/solo`                | `no-code/`                                | octocat          |
 | 2009 | `hubot/tools`                 | `no-code/`                                | hubot            |
+| 2010 | `monalisa/public-lib`         | `no-code/`                                | App not installed |
 
-Installations: `octo-org` 5001, `octocat` 5002, `hubot` 5003. Commit SHAs are
+As on GitHub, every user can see a public repository; the Access column lists who reaches it
+through an installation of the App. Installations: `octo-org` 5001, `octocat` 5002, `hubot` 5003.
+Commit SHAs are
 `sha1("<repository id>:<commit name>")`; the module function `commit_sha` computes them.
 
 ## sample-app

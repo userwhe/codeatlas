@@ -76,10 +76,15 @@ class GitHubGateway(Protocol):
         ...
 
     def get_repository(self, user_token: str, github_repository_id: int) -> GitHubRepository:
-        """`GET /repositories/{id}` with the user token: the access check (FR-003).
+        """`GET /repositories/{id}` with the user token.
 
-        Raises `GitHubNotFound` unless both the user and the App installation can access it.
+        Raises `GitHubNotFound` unless the user can see it. GitHub shows a private repository
+        only through an installation of the App, but shows a public one to every user.
         """
+        ...
+
+    def list_installation_ids(self, user_token: str) -> set[int]:
+        """IDs of the App installations the user can access (`GET /user/installations`)."""
         ...
 
     def get_installation_id(self, full_name: str) -> int:
@@ -107,3 +112,21 @@ def get_gateway(settings: Settings | None = None) -> GitHubGateway:
     from codeatlas.github.client import GitHubClient
 
     return GitHubClient(settings)
+
+
+def verify_access(
+    gateway: GitHubGateway, user_token: str, github_repository_id: int
+) -> tuple[GitHubRepository, int]:
+    """The access check (FR-003): the user can see the repository, and an installation of the App
+    that the user can access covers it. Returns the repository and that installation's ID.
+
+    Raises `GitHubNotFound` otherwise. A private repository needs two GitHub calls, because GitHub
+    already hides it from users outside the installation; a public one needs a third.
+    """
+    repository = gateway.get_repository(user_token, github_repository_id)
+    installation_id = gateway.get_installation_id(repository.full_name)
+    if not repository.private and installation_id not in gateway.list_installation_ids(user_token):
+        raise GitHubNotFound(
+            f"repository {github_repository_id} is outside the user's installations"
+        )
+    return repository, installation_id

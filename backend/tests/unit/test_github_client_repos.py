@@ -188,6 +188,22 @@ def test_list_accessible_repositories_paginates_across_installations(settings: S
     assert fake.requests[0].url.params["per_page"] == "100"
 
 
+def test_list_installation_ids_skips_suspended_installations(settings: Settings) -> None:
+    fake = FakeGitHub(
+        {
+            f"GET {API}/user/installations": respond(
+                json={
+                    "total_count": 2,
+                    "installations": [{"id": 1}, {"id": 2, "suspended_at": "2026-01-01T00:00:00Z"}],
+                }
+            )
+        }
+    )
+
+    assert make_client(settings, fake).list_installation_ids("ghu_user") == {1}
+    assert fake.requests[0].headers["authorization"] == "Bearer ghu_user"
+
+
 # get_repository and get_installation_id
 
 
@@ -434,6 +450,10 @@ CALLS: dict[str, tuple[Callable[[GitHubClient], object], str]] = {
         f"GET {API}/user/installations",
     ),
     "get_repository": (lambda c: c.get_repository("ghu_user", 10), f"GET {API}/repositories/10"),
+    "list_installation_ids": (
+        lambda c: c.list_installation_ids("ghu_user"),
+        f"GET {API}/user/installations",
+    ),
     "get_installation_id": (
         lambda c: c.get_installation_id("octo/a"),
         f"GET {API}/repos/octo/a/installation",

@@ -143,15 +143,21 @@ which add bidirectional messaging that is not needed.
 - **Repository reads**: short-lived installation access tokens, minted per job and never stored.
 - **App permissions**: repository `Contents: read` and `Metadata: read` only. No webhooks in this
   increment.
-- **Access check** (FR-003): call `GET /repositories/{id}` with the user's token. A GitHub App
-  user token only reaches resources that both the user and the App installation can access, so a
-  successful response proves both. The check runs at connection and again at the start of each
-  indexing job. The installation listing (`GET /user/installations` and
-  `GET /user/installations/{installation_id}/repositories`) is used only to fill the connect
-  dialog.
-- **Fast submissions** (SC-007): connecting makes at most two GitHub calls: the access check, and
-  `GET /repos/{owner}/{repo}/installation` with the App JWT to find the installation. A re-index
-  submission makes none. Branch resolution happens inside the indexing job.
+- **Access check** (FR-003): the user can see the repository, and an installation of the App
+  that the user can access covers it.
+  - `GET /repositories/{id}` with the user's token proves the user can see it. For a private
+    repository, GitHub answers only when an installation the user can access covers it, so this
+    call alone proves both.
+  - A user token can read every public repository. `GET /repos/{owner}/{repo}/installation` with
+    the App JWT finds the covering installation (404 when the App is not installed there).
+  - For a public repository, that installation must also appear in `GET /user/installations`.
+    Otherwise another account's installation would be used.
+  - The check runs at connection and again at the start of each indexing job.
+  - The full installation listing (`GET /user/installations/{installation_id}/repositories`)
+    is used only to fill the connect dialog.
+- **Fast submissions** (SC-007): connecting makes two GitHub calls for a private repository and
+  three for a public one (the access check above). A re-index submission makes none. Branch
+  resolution happens inside the indexing job.
 - **Renames, transfers, and reinstalls**: before fetching, each indexing job refreshes `full_name`
   and `default_branch` from `GET /repositories/{id}`, and refreshes the installation ID from
   `GET /repos/{owner}/{repo}/installation`. A renamed or transferred repository, or one whose App

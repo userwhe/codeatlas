@@ -39,6 +39,7 @@ UNSAFE_PATHS_ID = 2006
 EMPTY_ID = 2007
 SOLO_ID = 2008
 HUBOT_TOOLS_ID = 2009
+PUBLIC_UNINSTALLED_ID = 2010
 
 # The second sample-app commit renames one Python file and deletes another.
 SAMPLE_APP_RENAMED = ("app/utils/strings.py", "app/utils/text.py")
@@ -260,6 +261,7 @@ def _initial_repositories() -> dict[int, _Repository]:
         _Repository(id=EMPTY_ID, full_name="octo-org/empty", private=False, commits=[]),
         _single_commit(SOLO_ID, "octocat/solo", no_code),
         _single_commit(HUBOT_TOOLS_ID, "hubot/tools", no_code),
+        _single_commit(PUBLIC_UNINSTALLED_ID, "monalisa/public-lib", no_code),
     ]
     return {repository.id: repository for repository in repositories}
 
@@ -282,8 +284,15 @@ class FakeGitHub:
     # Test switches -----------------------------------------------------------------------
 
     def revoke_access(self, login: str, github_repository_id: int) -> None:
-        """The user (or the App installation) can no longer reach the repository."""
+        """The user can no longer reach the repository through an installation of the App.
+
+        A public repository stays visible to the user, as on GitHub.
+        """
         self._access[login].discard(github_repository_id)
+
+    def uninstall(self, github_repository_id: int) -> None:
+        """Uninstall the App from the repository owner's account."""
+        del self._installations[self._repositories[github_repository_id].owner]
 
     def rename(self, github_repository_id: int, new_full_name: str) -> None:
         """Rename or transfer the repository; the old name stops resolving."""
@@ -334,18 +343,28 @@ class FakeGitHub:
 
     def list_accessible_repositories(self, user_token: str) -> list[GitHubRepository]:
         self.calls["list_accessible_repositories"] += 1
-        ids = sorted(self._access[_login_for(user_token)])
-        return [self._describe(self._repositories[repository_id]) for repository_id in ids]
+        return [self._describe(repository) for repository in self._reachable(user_token)]
 
     def get_repository(self, user_token: str, github_repository_id: int) -> GitHubRepository:
         self.calls["get_repository"] += 1
-        if github_repository_id not in self._access[_login_for(user_token)]:
+        repository = self._repositories.get(github_repository_id)
+        login = _login_for(user_token)
+        if repository is None or (
+            repository.private and github_repository_id not in self._access[login]
+        ):
             raise GitHubNotFound(f"repository {github_repository_id} not found")
-        return self._describe(self._repositories[github_repository_id])
+        return self._describe(repository)
+
+    def list_installation_ids(self, user_token: str) -> set[int]:
+        self.calls["list_installation_ids"] += 1
+        return {self._installations[r.owner] for r in self._reachable(user_token)}
 
     def get_installation_id(self, full_name: str) -> int:
         self.calls["get_installation_id"] += 1
-        return self._installations[self._by_name(full_name).owner]
+        owner = self._by_name(full_name).owner
+        if owner not in self._installations:
+            raise GitHubNotFound(f"the App is not installed on {full_name}")
+        return self._installations[owner]
 
     def resolve_commit(self, installation_id: int, full_name: str, branch: str) -> str:
         self.calls["resolve_commit"] += 1
@@ -373,13 +392,18 @@ class FakeGitHub:
         self._next_installation_id += 1
         return self._next_installation_id - 1
 
+    def _reachable(self, user_token: str) -> list[_Repository]:
+        """Repositories the user reaches through installations of the App, by ID."""
+        repositories = [self._repositories[i] for i in sorted(self._access[_login_for(user_token)])]
+        return [r for r in repositories if r.owner in self._installations]
+
     def _describe(self, repository: _Repository) -> GitHubRepository:
         return GitHubRepository(
             id=repository.id,
             full_name=repository.full_name,
             default_branch=repository.default_branch,
             private=repository.private,
-            installation_id=self._installations[repository.owner],
+            installation_id=self._installations.get(repository.owner),
         )
 
     def _by_name(self, full_name: str) -> _Repository:
@@ -390,7 +414,7 @@ class FakeGitHub:
 
     def _installed(self, installation_id: int, full_name: str) -> _Repository:
         repository = self._by_name(full_name)
-        if self._installations[repository.owner] != installation_id:
+        if self._installations.get(repository.owner) != installation_id:
             raise GitHubAccessDenied(f"installation {installation_id} cannot access {full_name}")
         return repository
 

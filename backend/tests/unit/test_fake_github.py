@@ -10,8 +10,10 @@ from codeatlas.config import Settings
 from codeatlas.github.fake import (
     EMPTY_ID,
     HUBOT_TOOLS_ID,
+    PUBLIC_UNINSTALLED_ID,
     SAMPLE_APP_DELETED,
     SAMPLE_APP_ID,
+    SAMPLE_APP_PRIVATE_ID,
     SAMPLE_APP_RENAMED,
     SOLO_ID,
     FakeGitHub,
@@ -76,15 +78,34 @@ def test_access_per_user(fake: FakeGitHub) -> None:
     assert hubot[SAMPLE_APP_ID].installation_id == 5001
     assert hubot[HUBOT_TOOLS_ID].installation_id == 5003
 
-    assert fake.get_repository(OCTOCAT, 2002).private is True
+    assert fake.list_installation_ids(OCTOCAT) == {5001, 5002}
+    assert fake.list_installation_ids(HUBOT) == {5001, 5003}
+
+    assert fake.get_repository(OCTOCAT, SAMPLE_APP_PRIVATE_ID).private is True
     with pytest.raises(GitHubNotFound):
-        fake.get_repository(HUBOT, SOLO_ID)
+        fake.get_repository(HUBOT, SAMPLE_APP_PRIVATE_ID)
     with pytest.raises(GitHubNotFound):
         fake.get_repository(OCTOCAT, 9999)
-
-    fake.revoke_access("octocat", SAMPLE_APP_ID)
+    # As on GitHub, public repositories are visible to every user.
+    assert fake.get_repository(HUBOT, SOLO_ID).full_name == "octocat/solo"
+    assert fake.get_repository(OCTOCAT, PUBLIC_UNINSTALLED_ID).installation_id is None
     with pytest.raises(GitHubNotFound):
-        fake.get_repository(OCTOCAT, SAMPLE_APP_ID)
+        fake.get_installation_id("monalisa/public-lib")
+
+    fake.revoke_access("octocat", SAMPLE_APP_PRIVATE_ID)
+    with pytest.raises(GitHubNotFound):
+        fake.get_repository(OCTOCAT, SAMPLE_APP_PRIVATE_ID)
+
+
+def test_uninstall(fake: FakeGitHub) -> None:
+    fake.uninstall(HUBOT_TOOLS_ID)
+
+    assert {repo.id for repo in fake.list_accessible_repositories(HUBOT)} == {SAMPLE_APP_ID}
+    assert fake.list_installation_ids(HUBOT) == {5001}
+    with pytest.raises(GitHubNotFound):
+        fake.get_installation_id("hubot/tools")
+    with pytest.raises(GitHubAccessDenied):
+        fake.resolve_commit(5003, "hubot/tools", "main")
 
 
 def test_sample_app_commits(fake: FakeGitHub) -> None:
