@@ -21,8 +21,9 @@ repository content.
 
 Option 1:
 
-- **Permissions**: repository `Contents: read` and `Metadata: read` only, with no webhooks in the
-  first feature.
+- **Permissions**: repository `Contents: read` and `Metadata: read` only. The first feature used no
+  webhooks. Since `specs/002-push-reindexing`, the webhook is active and subscribed to `push`,
+  with permissions unchanged (ADR 0007).
 - **Access check** (revised 2026-10-05): `GET /repositories/{id}` with the user's token, then
   `GET /repos/{owner}/{repo}/installation` with the App JWT. The covering installation must also
   appear in `GET /user/installations`, which runs concurrently with the other two calls. A user
@@ -45,6 +46,6 @@ Option 1:
     development and tests.
   - Write permissions added later require installation owners to approve the change. Any write
     must also be drafted first and run only after the user confirms it.
-- **Revisit when**: a feature needs webhooks or writes.
+- **Revisit when**: a feature needs writes. The webhook case was resolved by ADR 0007.
 
 Details: `specs/001-repository-qa/research.md` R5.
