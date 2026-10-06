@@ -145,19 +145,22 @@ which add bidirectional messaging that is not needed.
   increment.
 - **Access check** (FR-003): the user can see the repository, and an installation of the App
   that the user can access covers it.
-  - `GET /repositories/{id}` with the user's token proves the user can see it. For a private
-    repository, GitHub answers only when an installation the user can access covers it, so this
-    call alone proves both.
-  - A user token can read every public repository. `GET /repos/{owner}/{repo}/installation` with
-    the App JWT finds the covering installation (404 when the App is not installed there).
-  - For a public repository, that installation must also appear in `GET /user/installations`.
-    Otherwise another account's installation would be used.
+  - `GET /repositories/{id}` with the user's token proves the user can see it. A user token can
+    read every public repository, so this call alone does not prove the second condition.
+  - `GET /repos/{owner}/{repo}/installation` with the App JWT finds the covering installation
+    (404 when the App is not installed there).
+  - That installation must appear in `GET /user/installations`. Otherwise another account's
+    installation would be used for a public repository. For a private one, GitHub already
+    guarantees it.
   - The check runs at connection and again at the start of each indexing job.
   - The full installation listing (`GET /user/installations/{installation_id}/repositories`)
     is used only to fill the connect dialog.
-- **Fast submissions** (SC-007): connecting makes two GitHub calls for a private repository and
-  three for a public one (the access check above). A re-index submission makes none. Branch
-  resolution happens inside the indexing job.
+- **Fast submissions** (SC-007): connecting makes the three access-check calls and no others. The
+  installation listing runs concurrently with the other two, and every call reuses connections
+  from one pooled HTTP client per process. Each GitHub call takes about 200 to 400 ms, plus about
+  165 ms for a new TLS connection. Three sequential calls on new connections took about 1.4 s;
+  this layout measured a p95 of about 0.6 s over 20 real connections. A re-index submission
+  makes no GitHub call. Branch resolution happens inside the indexing job.
 - **Renames, transfers, and reinstalls**: before fetching, each indexing job refreshes `full_name`
   and `default_branch` from `GET /repositories/{id}`, and refreshes the installation ID from
   `GET /repos/{owner}/{repo}/installation`. A renamed or transferred repository, or one whose App

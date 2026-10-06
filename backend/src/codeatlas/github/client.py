@@ -2,6 +2,7 @@
 
 - Sign-in uses the App's user authorization (OAuth web flow) with expiring user tokens.
 - Repository reads use short-lived installation tokens, cached in memory and never stored.
+- Calls share one pooled HTTP client per process, so they reuse TLS connections (SC-007).
 - Every failure maps to a gateway error from `codeatlas.github.gateway`.
 """
 
@@ -36,6 +37,7 @@ GITHUB_API = "https://api.github.com"
 TARBALL_HOST = "codeload.github.com"
 USER_AGENT = "codeatlas"
 TIMEOUT = httpx.Timeout(10.0)
+KEEPALIVE_EXPIRY = 60.0
 API_HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 PAGE_SIZE = 100
 APP_JWT_BACKDATE = timedelta(seconds=60)
@@ -58,6 +60,29 @@ def clear_installation_token_cache() -> None:
     """Forget every cached installation token."""
     with _installation_tokens_lock:
         _installation_tokens.clear()
+
+
+def _new_http_client(transport: httpx.BaseTransport | None) -> httpx.Client:
+    return httpx.Client(
+        transport=transport,
+        timeout=TIMEOUT,
+        headers={"User-Agent": USER_AGENT},
+        follow_redirects=True,
+        limits=httpx.Limits(keepalive_expiry=KEEPALIVE_EXPIRY),
+    )
+
+
+_pooled_http_client: httpx.Client | None = None
+_pooled_http_client_lock = threading.Lock()
+
+
+def _pooled_client() -> httpx.Client:
+    """The process-wide client. A new TLS connection to GitHub costs about one extra call."""
+    global _pooled_http_client
+    with _pooled_http_client_lock:
+        if _pooled_http_client is None:
+            _pooled_http_client = _new_http_client(None)
+        return _pooled_http_client
 
 
 def _utcnow() -> datetime:
@@ -188,13 +213,14 @@ class GitHubClient:
 
     # Helpers
 
-    def _client(self) -> httpx.Client:
-        return httpx.Client(
-            transport=self._transport,
-            timeout=TIMEOUT,
-            headers={"User-Agent": USER_AGENT},
-            follow_redirects=True,
-        )
+    @contextmanager
+    def _client(self) -> Iterator[httpx.Client]:
+        """The pooled client, or a short-lived one around an injected (test) transport."""
+        if self._transport is None:
+            yield _pooled_client()
+            return
+        with _new_http_client(self._transport) as http:
+            yield http
 
     def _redirect_uri(self) -> str:
         return f"{self._settings.app_origin.rstrip('/')}/auth/github/callback"

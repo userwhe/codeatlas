@@ -57,17 +57,13 @@ def test_connect_queues_indexing_and_audits(
     assert audit.outcome == "success"
 
 
-def test_connect_makes_at_most_three_github_calls(signed_in: Callable[[str], TestClient]) -> None:
+def test_connect_makes_three_github_calls(signed_in: Callable[[str], TestClient]) -> None:
     client = signed_in("octocat")
     fake = get_fake_github()
     fake.calls.clear()
 
-    private = connect(client, SAMPLE_APP_PRIVATE_ID, accept_external_processing=True)
-    assert private.status_code == 202  # type: ignore[attr-defined]
-    assert dict(fake.calls) == {"get_repository": 1, "get_installation_id": 1}
-    fake.calls.clear()
-    # GitHub shows a public repository to every user, so its installation must also be checked.
     assert connect(client, SAMPLE_APP_ID).status_code == 202  # type: ignore[attr-defined]
+
     assert dict(fake.calls) == {
         "get_repository": 1,
         "get_installation_id": 1,

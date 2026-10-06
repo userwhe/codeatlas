@@ -1,5 +1,6 @@
 """The GitHub boundary (research R5, ADR 0005). Real and fake gateways follow this protocol."""
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
@@ -120,13 +121,16 @@ def verify_access(
     """The access check (FR-003): the user can see the repository, and an installation of the App
     that the user can access covers it. Returns the repository and that installation's ID.
 
-    Raises `GitHubNotFound` otherwise. A private repository needs two GitHub calls, because GitHub
-    already hides it from users outside the installation; a public one needs a third.
+    Raises `GitHubNotFound` otherwise. GitHub shows every public repository to every user, so the
+    covering installation must also be one of the user's. Three GitHub calls; the installation
+    listing runs alongside the other two, which keeps connecting under a second (SC-007).
     """
-    repository = gateway.get_repository(user_token, github_repository_id)
-    installation_id = gateway.get_installation_id(repository.full_name)
-    if not repository.private and installation_id not in gateway.list_installation_ids(user_token):
-        raise GitHubNotFound(
-            f"repository {github_repository_id} is outside the user's installations"
-        )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        user_installations = pool.submit(gateway.list_installation_ids, user_token)
+        repository = gateway.get_repository(user_token, github_repository_id)
+        installation_id = gateway.get_installation_id(repository.full_name)
+        if installation_id not in user_installations.result():
+            raise GitHubNotFound(
+                f"repository {github_repository_id} is outside the user's installations"
+            )
     return repository, installation_id

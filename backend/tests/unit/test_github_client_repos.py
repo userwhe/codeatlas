@@ -188,6 +188,12 @@ def test_list_accessible_repositories_paginates_across_installations(settings: S
     assert fake.requests[0].url.params["per_page"] == "100"
 
 
+def test_calls_without_a_test_transport_share_one_pooled_client(settings: Settings) -> None:
+    with GitHubClient(settings)._client() as first, GitHubClient(settings)._client() as second:
+        assert first is second
+    assert not first.is_closed
+
+
 def test_list_installation_ids_skips_suspended_installations(settings: Settings) -> None:
     fake = FakeGitHub(
         {

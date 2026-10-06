@@ -117,10 +117,9 @@ Request:
 
 - `branch` is optional and defaults to the default branch.
 - `accept_external_processing` must be `true` for a private repository.
-- The endpoint makes at most three GitHub calls, all for the access check (research R5): two for
-  a private repository, three for a public one. Branch resolution happens in the indexing job. An
-  unknown branch fails that job with `branch_not_found`, and a repository with no branches fails
-  it with `repository_empty`.
+- The endpoint makes three GitHub calls, all for the access check (research R5), two of them
+  concurrently. Branch resolution happens in the indexing job. An unknown branch fails that job
+  with `branch_not_found`, and a repository with no branches fails it with `repository_empty`.
 
 Response 202:
 

@@ -78,7 +78,7 @@ def connect(
     accept_external_processing: bool,
     request_id: str | None,
 ) -> tuple[Repository, Job]:
-    """Connect a repository and queue its first indexing job. At most three GitHub calls (SC-007).
+    """Connect a repository and queue its first indexing job. Three GitHub calls (SC-007).
 
     The caller commits.
     """
