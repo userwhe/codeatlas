@@ -37,7 +37,7 @@ Fill in `.env`. It is gitignored; never commit it.
 - `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`
 - `GITHUB_APP_PRIVATE_KEY_PATH`: the downloaded key, stored outside the repository
 - `TOKEN_ENCRYPTION_KEY`: generate with
-  `uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+  `cd backend && uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 - `GEMINI_API_KEY`: from a billing-enabled Google AI Studio project. Free-tier keys must not be
   used with real repositories, because free-tier content may be used to improve Google's products.
 - `VOYAGE_API_KEY`
@@ -82,7 +82,7 @@ cd frontend && npm run test:e2e                                               # 
 | 5 | Inaccessible repository | Call `POST /v1/repositories` with a repository ID outside your installations | 404 `not_found`; no fetch appears in the worker logs | US1-5, FR-003 |
 | 6 | Over-limit repository | In fake mode, connect the `oversized` fixture | Repository state `rejected` with `limit_exceeded` naming the limit | US1-4, FR-009 |
 | 7 | Ask with citations | Ask "Where are repository permissions checked?" on the `sample-app` fixture | The answer lists claims with citations; each citation opens the cited lines at the indexed commit | US2-1, FR-020 |
-| 8 | Insufficient evidence | Ask "Which payment provider does this use?" on `sample-app` | `quality_state: insufficient_evidence` with gaps listed | US2-2, FR-021 |
+| 8 | Insufficient evidence | Ask "Which payment provider does this use?" on `sample-app`. In fake mode, set `FAKE_ANSWER_MODEL_MODE=insufficient` first: the fake model answers whenever retrieval finds evidence | `quality_state: insufficient_evidence` with gaps listed | US2-2, FR-021 |
 | 9 | Provider outage | Set `FAKE_ANSWER_MODEL_MODE=unavailable` and ask | The run fails with `provider_unavailable`, `retryable: true`; search still works | US2-3, FR-024 |
 | 10 | Pinned answers | Re-index the fixture at a newer commit, then reopen the answer from scenario 7 | The answer still shows the old commit, and its citations show the old content | US2-4, FR-022 |
 | 11 | Daily allowance | Set `DAILY_QUESTION_LIMIT=2` and ask three questions | The third is refused with 429 and `resets_at` | US2-6, FR-028 |
