@@ -1,0 +1,78 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: codeatlas
+      POSTGRES_PASSWORD: codeatlas
+      POSTGRES_DB: codeatlas
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codeatlas -d codeatlas"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://codeatlas:codeatlas@db:5432/codeatlas
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://codeatlas:codeatlas@db:5432/codeatlas
+    command: ["uvicorn", "codeatlas.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/src:/app/src
+      # Fixture repositories served by the fake GitHub gateway in fake mode.
+      - ./backend/tests/fixtures:/app/tests/fixtures:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://codeatlas:codeatlas@db:5432/codeatlas
+    command: ["python", "-m", "codeatlas.jobs.worker"]
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/tests/fixtures:/app/tests/fixtures:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build: ./frontend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      API_ORIGIN: http://api:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - api
+
+volumes:
+  db-data:
