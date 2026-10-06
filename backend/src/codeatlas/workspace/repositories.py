@@ -33,6 +33,11 @@ def github_unavailable() -> ApiError:
     )
 
 
+def sign_in_again() -> ApiError:
+    """The stored GitHub authorization is missing, expired, or unreadable."""
+    return ApiError(401, "github_sign_in_required", "Sign in with GitHub again.")
+
+
 def index_dedupe_key(repository_id: uuid.UUID, branch: str) -> str:
     return f"index:{repository_id}:{branch}"
 
@@ -50,7 +55,7 @@ def list_connectable(db: Session, user: User, workspace: Workspace) -> list[Conn
         token = get_user_token(db, user, gateway)
         repositories = gateway.list_accessible_repositories(token)
     except GitHubAccessDenied as exc:
-        raise ApiError(401, "unauthenticated", "Sign in with GitHub again.") from exc
+        raise sign_in_again() from exc
     except GitHubUnavailable as exc:
         raise github_unavailable() from exc
     rows = db.execute(
@@ -89,6 +94,11 @@ def connect(
 
     try:
         token = get_user_token(db, user, gateway)
+    except GitHubAccessDenied as exc:
+        raise sign_in_again() from exc
+    except GitHubUnavailable as exc:
+        raise github_unavailable() from exc
+    try:
         github_repo = gateway.get_repository(token, github_repository_id)
     except (GitHubNotFound, GitHubAccessDenied) as exc:
         raise denied() from exc

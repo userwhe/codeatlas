@@ -166,3 +166,30 @@ def test_other_workspace_cannot_see_repository(signed_in: Callable[[str], TestCl
     assert other.get(f"/v1/repositories/{repository_id}").status_code == 404
     assert other.post(f"/v1/repositories/{repository_id}/index", json={}).status_code == 404
     assert other.get("/v1/repositories").json()["items"] == []
+
+
+def test_unreadable_github_credentials_ask_the_user_to_sign_in_again(
+    db: Session, signed_in: Callable[[str], TestClient]
+) -> None:
+    from cryptography.fernet import Fernet
+    from sqlalchemy import update
+
+    from codeatlas.models import GitHubCredential
+
+    client = signed_in("octocat")
+    # Simulate a credential stored under a different TOKEN_ENCRYPTION_KEY.
+    other_key = Fernet(Fernet.generate_key())
+    db.execute(update(GitHubCredential).values(access_token_enc=other_key.encrypt(b"old-token")))
+    db.commit()
+
+    listed = client.get("/v1/github/repositories")
+
+    assert listed.status_code == 401
+    assert listed.json()["error"]["code"] == "github_sign_in_required"
+    assert client.get("/v1/me").status_code == 401
+    assert db.scalar(select(GitHubCredential)) is None
+
+    again = signed_in("octocat")
+    assert again.get("/v1/github/repositories").status_code == 200
+    connected = again.post("/v1/repositories", json={"github_repository_id": SAMPLE_APP_ID})
+    assert connected.status_code == 202

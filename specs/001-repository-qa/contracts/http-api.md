@@ -37,7 +37,7 @@ refer to [data-model.md](../data-model.md).
 
 | Status | Used for |
 | --- | --- |
-| 401 | No valid session |
+| 401 | No valid session (`unauthenticated`), or GitHub sign-in needed again (`github_sign_in_required`) |
 | 403 | Origin check failed |
 | 404 | Missing or inaccessible resource |
 | 409 | Incompatible state, idempotency conflict, repository already connected, repository limit reached |
@@ -131,6 +131,7 @@ Errors:
 
 | Status | Code | Condition |
 | --- | --- | --- |
+| 401 | `github_sign_in_required` | The stored GitHub authorization is missing, expired, or unreadable. Unreadable credentials are deleted and the user's sessions end |
 | 404 | `not_found` | The repository is not accessible to the user through the App |
 | 409 | `already_connected` | The repository is already connected in this workspace |
 | 409 | `repository_limit_reached` | The workspace already has 10 connected repositories |

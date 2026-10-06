@@ -5,13 +5,14 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from codeatlas.auth.crypto import decrypt, encrypt
+from codeatlas.auth.crypto import DecryptionError, decrypt, encrypt
 from codeatlas.auth.sessions import create_session
+from codeatlas.db import session_scope
 from codeatlas.github.gateway import GitHubAccessDenied, GitHubGateway, UserTokens
-from codeatlas.models import GitHubCredential, Membership, User, Workspace
+from codeatlas.models import GitHubCredential, Membership, User, UserSession, Workspace
 from codeatlas.workspace.audit import record
 
 STATE_COOKIE = "oauth_state"
@@ -110,17 +111,42 @@ def complete_login(
     return token
 
 
+def _forget_credentials(user_id: uuid.UUID) -> None:
+    """Drop unreadable GitHub credentials and end the user's sessions, so they sign in again.
+
+    Runs in its own transaction so it holds even though the request then fails.
+    """
+    with session_scope() as forget_db:
+        forget_db.execute(delete(GitHubCredential).where(GitHubCredential.user_id == user_id))
+        forget_db.execute(
+            update(UserSession)
+            .where(UserSession.user_id == user_id, UserSession.revoked_at.is_(None))
+            .values(revoked_at=datetime.now(UTC))
+        )
+
+
 def get_user_token(db: Session, user: User, gateway: GitHubGateway) -> str:
-    """Return the user's GitHub token, refreshing it when it is about to expire."""
+    """Return the user's GitHub token, refreshing it when it is about to expire.
+
+    Raises `GitHubAccessDenied` when there is no usable credential. A credential that can no
+    longer be decrypted (for example after `TOKEN_ENCRYPTION_KEY` changed) is removed and the
+    user's sessions are revoked, so the next request leads them back to sign-in.
+    """
     credential = db.get(GitHubCredential, user.id)
     if credential is None:
         raise GitHubAccessDenied("no stored GitHub credentials")
-    expires_at = credential.access_token_expires_at
-    if expires_at is None or expires_at > datetime.now(UTC) + TOKEN_REFRESH_MARGIN:
-        return decrypt(credential.access_token_enc)
-    if credential.refresh_token_enc is None:
-        raise GitHubAccessDenied("the GitHub token expired and cannot be refreshed")
-    tokens = gateway.refresh_user_token(decrypt(credential.refresh_token_enc))
+    try:
+        expires_at = credential.access_token_expires_at
+        if expires_at is None or expires_at > datetime.now(UTC) + TOKEN_REFRESH_MARGIN:
+            return decrypt(credential.access_token_enc)
+        if credential.refresh_token_enc is None:
+            raise GitHubAccessDenied("the GitHub token expired and cannot be refreshed")
+        refresh_token = decrypt(credential.refresh_token_enc)
+    except DecryptionError as exc:
+        db.rollback()
+        _forget_credentials(user.id)
+        raise GitHubAccessDenied("stored GitHub credentials cannot be read") from exc
+    tokens = gateway.refresh_user_token(refresh_token)
     _store_tokens(db, user.id, tokens)
     db.flush()
     return tokens.access_token
