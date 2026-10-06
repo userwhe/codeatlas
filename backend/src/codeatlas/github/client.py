@@ -5,9 +5,10 @@
 - Every failure maps to a gateway error from `codeatlas.github.gateway`.
 """
 
+import io
 import threading
-from collections.abc import Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Buffer, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,20 +20,24 @@ import jwt
 
 from codeatlas.config import Settings
 from codeatlas.github.gateway import (
+    BranchNotFound,
     GitHubAccessDenied,
     GitHubError,
     GitHubNotFound,
     GitHubRepository,
     GitHubUnavailable,
     GitHubUser,
+    RepositoryEmpty,
     UserTokens,
 )
 
 GITHUB_WEB = "https://github.com"
 GITHUB_API = "https://api.github.com"
+TARBALL_HOST = "codeload.github.com"
 USER_AGENT = "codeatlas"
 TIMEOUT = httpx.Timeout(10.0)
 API_HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+PAGE_SIZE = 100
 APP_JWT_BACKDATE = timedelta(seconds=60)
 APP_JWT_LIFETIME = timedelta(minutes=9)
 TOKEN_REFRESH_MARGIN = timedelta(minutes=1)
@@ -100,6 +105,27 @@ class GitHubClient:
 
     # Repositories
 
+    def list_accessible_repositories(self, user_token: str) -> list[GitHubRepository]:
+        repositories: list[GitHubRepository] = []
+        with self._client() as http:
+            installations = self._paginate(http, "/user/installations", "installations", user_token)
+            for installation in installations:
+                if installation.get("suspended_at"):
+                    continue
+                installation_id = int(installation["id"])
+                path = f"/user/installations/{installation_id}/repositories"
+                for data in self._paginate(http, path, "repositories", user_token):
+                    repositories.append(_repository(data, installation_id))
+        return repositories
+
+    def get_repository(self, user_token: str, github_repository_id: int) -> GitHubRepository:
+        with self._client() as http:
+            response = self._api(http, "GET", f"/repositories/{github_repository_id}", user_token)
+        # A user token only reaches what both the user and the installation can access, so a
+        # plain 403 means the same as 404 here (FR-003).
+        _check(response, forbidden=GitHubNotFound)
+        return _repository(_json(response))
+
     def get_installation_id(self, full_name: str) -> int:
         with self._client() as http:
             response = self._api(
@@ -108,22 +134,51 @@ class GitHubClient:
         _check(response)
         return int(_json(response)["id"])
 
-    # Helpers
-
-    # Repository access (listing, access checks, commits, tarballs) comes with the indexing work.
-    def list_accessible_repositories(self, user_token: str) -> list[GitHubRepository]:
-        raise NotImplementedError
-
-    def get_repository(self, user_token: str, github_repository_id: int) -> GitHubRepository:
-        raise NotImplementedError
-
     def resolve_commit(self, installation_id: int, full_name: str, branch: str) -> str:
-        raise NotImplementedError
+        repo = _repo_path(full_name)
+        with self._client() as http:
+            token = self._installation_token(http, installation_id)
+            response = self._api(http, "GET", f"{repo}/branches/{quote(branch, safe='')}", token)
+            if response.status_code == 404:
+                branches = self._api(http, "GET", f"{repo}/branches", token, params={"per_page": 1})
+                _check(branches)
+                if not _json(branches):
+                    raise RepositoryEmpty(f"{full_name} has no branches")
+                raise BranchNotFound(f"branch {branch!r} not found in {full_name}")
+        _check(response)
+        return str(_json(response)["commit"]["sha"])
 
-    def open_tarball(
-        self, installation_id: int, full_name: str, sha: str
-    ) -> AbstractContextManager[IO[bytes]]:
-        raise NotImplementedError
+    @contextmanager
+    def open_tarball(self, installation_id: int, full_name: str, sha: str) -> Iterator[IO[bytes]]:
+        with self._client() as http:
+            token = self._installation_token(http, installation_id)
+            path = f"{_repo_path(full_name)}/tarball/{quote(sha, safe='')}"
+            response = self._api(http, "GET", path, token, follow_redirects=False)
+            if not response.is_redirect:
+                _check(response)
+                raise GitHubUnavailable(f"GitHub did not redirect the tarball request for {sha}")
+            # The redirect URL carries its own short-lived token, so no Authorization header is
+            # sent, and only GitHub's archive host is trusted.
+            location = httpx.URL(response.headers["location"])
+            if location.scheme != "https" or location.host != TARBALL_HOST:
+                target = (
+                    f"{location.scheme}://{location.host}" if location.host else "a relative URL"
+                )
+                raise GitHubUnavailable(
+                    f"refusing tarball redirect to {target}; only https://{TARBALL_HOST} is allowed"
+                )
+            download = _send(
+                http, http.build_request("GET", location), stream=True, follow_redirects=False
+            )
+            try:
+                if download.status_code != 200:
+                    _check(download)
+                    raise GitHubUnavailable(f"tarball download returned {download.status_code}")
+                yield io.BufferedReader(_ResponseStream(download.iter_bytes()))
+            finally:
+                download.close()
+
+    # Helpers
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -150,6 +205,20 @@ class GitHubClient:
         headers = {**API_HEADERS, "Authorization": f"Bearer {token}"}
         request = http.build_request(method, url, headers=headers, params=params)
         return _send(http, request, follow_redirects=follow_redirects)
+
+    def _paginate(
+        self, http: httpx.Client, path: str, key: str, token: str
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        url: str | None = path
+        params: Mapping[str, int] | None = {"per_page": PAGE_SIZE}
+        while url is not None:
+            response = self._api(http, "GET", url, token, params=params)
+            _check(response)
+            items.extend(_json(response)[key])
+            url = response.links.get("next", {}).get("url")
+            params = None  # The next-page URL already carries the query.
+        return items
 
     def _request_user_tokens(self, fields: dict[str, str]) -> UserTokens:
         form = {
@@ -192,6 +261,50 @@ class GitHubClient:
             "exp": int((now + APP_JWT_LIFETIME).timestamp()),
         }
         return jwt.encode(claims, Path(key_path).read_text(), algorithm="RS256")
+
+    def _installation_token(self, http: httpx.Client, installation_id: int) -> str:
+        with _installation_tokens_lock:
+            cached = _installation_tokens.get(installation_id)
+        if cached is not None and _utcnow() < cached.expires_at - TOKEN_REFRESH_MARGIN:
+            return cached.token
+        response = self._api(
+            http, "POST", f"/app/installations/{installation_id}/access_tokens", self._app_jwt()
+        )
+        _check(response)
+        data = _json(response)
+        fresh = _CachedToken(
+            token=str(data["token"]), expires_at=datetime.fromisoformat(data["expires_at"])
+        )
+        with _installation_tokens_lock:
+            _installation_tokens[installation_id] = fresh
+        return fresh.token
+
+
+class _ResponseStream(io.RawIOBase):
+    """A raw, read-only file over a streaming response body, for `tarfile` in `r|gz` mode."""
+
+    def __init__(self, chunks: Iterator[bytes]):
+        self._chunks = chunks
+        self._chunk = b""
+        self._offset = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Buffer, /) -> int:
+        while self._offset >= len(self._chunk):
+            try:
+                self._chunk = next(self._chunks)
+            except StopIteration:
+                return 0
+            except httpx.RequestError as exc:
+                raise GitHubUnavailable(f"tarball download failed: {type(exc).__name__}") from exc
+            self._offset = 0
+        view = memoryview(buffer).cast("B")
+        size = min(len(view), len(self._chunk) - self._offset)
+        view[:size] = self._chunk[self._offset : self._offset + size]
+        self._offset += size
+        return size
 
 
 def _send(
@@ -251,6 +364,16 @@ def _repo_path(full_name: str) -> str:
     if not owner or not name or "/" in name:
         raise ValueError(f"invalid repository full name: {full_name!r}")
     return f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+
+
+def _repository(data: Mapping[str, Any], installation_id: int | None = None) -> GitHubRepository:
+    return GitHubRepository(
+        id=int(data["id"]),
+        full_name=str(data["full_name"]),
+        default_branch=str(data["default_branch"]),
+        private=bool(data["private"]),
+        installation_id=installation_id,
+    )
 
 
 def _optional_str(value: Any) -> str | None:
