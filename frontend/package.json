@@ -1,0 +1,36 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "gen:api": "openapi-typescript http://localhost:8000/openapi.json -o src/lib/api/schema.d.ts",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.104.1",
+    "next": "16.3.8",
+    "openapi-fetch": "^0.17.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^24.19.1",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "openapi-typescript": "^7.13.0",
+    "tailwindcss": "^4",
+    "typescript": "~5.9"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
