@@ -282,9 +282,8 @@ def test_interrupted_answer_publishes_exactly_once(
     run_worker_once: Callable[[], bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from codeatlas.providers.answer_model import AnswerResult, FakeAnswerModel
-
     from codeatlas.config import get_settings
+    from codeatlas.providers.answer_model import AnswerResult, FakeAnswerModel
     from codeatlas.qa import answer
 
     repository_id = indexed_repository(octocat, run_worker_once)
