@@ -23,9 +23,11 @@ Option 1:
 
 - **Permissions**: repository `Contents: read` and `Metadata: read` only, with no webhooks in the
   first feature.
-- **Access check** (revised 2026-10-05): `GET /repositories/{id}` with the user's token. A
-  GitHub App user token only reaches repositories that both the user and the installation can
-  access. The check runs at connection and again at the start of each indexing job. The
+- **Access check** (revised 2026-10-05): `GET /repositories/{id}` with the user's token, then
+  `GET /repos/{owner}/{repo}/installation` with the App JWT. The covering installation must also
+  appear in `GET /user/installations`, which runs concurrently with the other two calls. A user
+  token reaches every public repository, so without this listing another account's installation
+  would be used. The check runs at connection and again at the start of each indexing job. The
   installation-scoped repository list is used only to fill the connect dialog.
 - **Source fetch**: a commit tarball, streamed with size limits and extracted with path and link
   checks. No git binary and no hooks.
