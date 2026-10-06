@@ -52,3 +52,49 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+
+  e2e:
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure fake mode
+        # Fixture repositories and fake model providers: no GitHub App or API keys needed.
+        run: |
+          {
+            echo "CODEATLAS_ENV=development"
+            echo "CODEATLAS_FAKE_EXTERNALS=1"
+            echo "TOKEN_ENCRYPTION_KEY=$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+          } > .env
+      - name: Start the stack
+        # The api and worker services start after the migrate service has run the migrations.
+        run: docker compose up -d --build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - name: Wait for the API and the web app
+        run: |
+          timeout 300 bash -c 'until curl -sf http://localhost:8000/healthz > /dev/null; do sleep 2; done'
+          timeout 300 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
+      - run: npm run test:e2e
+        working-directory: frontend
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
+      - name: Show service logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
