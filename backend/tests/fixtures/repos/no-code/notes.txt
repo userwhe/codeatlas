@@ -1,0 +1,5 @@
+Planning notes
+
+- Move the release day from Monday to Tuesday so fixes from the weekend can land first.
+- The on-call rotation changes every Wednesday at noon.
+- Retire the old wiki once the handbook covers onboarding.
