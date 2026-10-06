@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -193,6 +193,21 @@ def get_repository(
         db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
     )
     return repository_out(db, repository)
+
+
+@router.delete("/repositories/{repository_id}", status_code=204)
+def disconnect_repository(
+    repository_id: uuid.UUID,
+    db: DbSession,
+    user: CurrentUser,
+    workspace: CurrentWorkspace,
+    request_id: RequestId,
+) -> Response:
+    repos.disconnect(
+        db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
+    )
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/repositories/{repository_id}/index", status_code=202, response_model=IndexOut)
