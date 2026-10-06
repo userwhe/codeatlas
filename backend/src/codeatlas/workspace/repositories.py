@@ -18,7 +18,7 @@ from codeatlas.github.gateway import (
     GitHubUnavailable,
     get_gateway,
 )
-from codeatlas.jobs.queue import enqueue
+from codeatlas.jobs.queue import cancel_for_repository, enqueue
 from codeatlas.models import ACTIVE_JOB_STATUSES, Job, Repository, Snapshot, User, Workspace
 from codeatlas.workspace.audit import deny, record
 
@@ -188,6 +188,36 @@ def reindex(
         dedupe_key=index_dedupe_key(repository.id, selected_branch),
     )
     return job
+
+
+def disconnect(
+    db: Session,
+    *,
+    user: User,
+    workspace: Workspace,
+    repository_id: uuid.UUID,
+    request_id: str | None,
+) -> None:
+    """Tombstone a repository: reads stop at once, queued work is canceled, and running work
+    cannot publish (its fenced publish checks the tombstone). Data is purged by maintenance.
+    The caller commits (FR-034).
+    """
+    repository = get_scoped(
+        db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
+    )
+    db.execute(select(Repository.id).where(Repository.id == repository.id).with_for_update())
+    repository.deleted_at = datetime.now(UTC)
+    cancel_for_repository(db, repository.id)
+    record(
+        db,
+        action="repository_disconnect",
+        outcome="success",
+        workspace_id=workspace.id,
+        actor_user_id=user.id,
+        resource_type="repository",
+        resource_id=str(repository.id),
+        request_id=request_id,
+    )
 
 
 def get_scoped(
