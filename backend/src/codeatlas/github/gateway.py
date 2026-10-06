@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import IO, Protocol
+from typing import IO, Literal, Protocol
 
 from codeatlas.config import Settings, get_settings
 
@@ -17,8 +17,31 @@ class GitHubAccessDenied(GitHubError):
     """The token is invalid, revoked, or lacks access."""
 
 
+class UserAuthorizationInvalid(GitHubAccessDenied):
+    """The user's GitHub authorization is missing, expired, revoked, or rejected."""
+
+
+class AppCredentialsRejected(GitHubError):
+    """GitHub rejected the App's own credentials (JWT or installation token request)."""
+
+
 class GitHubNotFound(GitHubError):
     """The resource does not exist or is not visible to the caller."""
+
+
+AccessCheckReason = Literal[
+    "repository_not_visible", "app_not_installed", "installation_not_accessible"
+]
+
+
+class AccessCheckFailed(GitHubNotFound):
+    """GitHub answered the access check definitively: the user cannot reach the repository
+    through an installation of the App (research R4). `reason` says which step failed.
+    """
+
+    def __init__(self, reason: AccessCheckReason, message: str) -> None:
+        super().__init__(message)
+        self.reason: AccessCheckReason = reason
 
 
 class BranchNotFound(GitHubError):
@@ -121,16 +144,31 @@ def verify_access(
     """The access check (FR-003): the user can see the repository, and an installation of the App
     that the user can access covers it. Returns the repository and that installation's ID.
 
-    Raises `GitHubNotFound` otherwise. GitHub shows every public repository to every user, so the
-    covering installation must also be one of the user's. Three GitHub calls; the installation
-    listing runs alongside the other two, which keeps connecting under a second (SC-007).
+    Raises `AccessCheckFailed` otherwise, a `GitHubNotFound` whose reason names the failed step:
+    `repository_not_visible`, `app_not_installed`, or `installation_not_accessible`. GitHub shows
+    every public repository to every user, so the covering installation must also be one of the
+    user's. Other gateway errors (a rejected credential, an outage) pass through unchanged. Three
+    GitHub calls; the installation listing runs alongside the other two, which keeps connecting
+    under a second (SC-007).
     """
     with ThreadPoolExecutor(max_workers=1) as pool:
         user_installations = pool.submit(gateway.list_installation_ids, user_token)
-        repository = gateway.get_repository(user_token, github_repository_id)
-        installation_id = gateway.get_installation_id(repository.full_name)
+        try:
+            repository = gateway.get_repository(user_token, github_repository_id)
+        except GitHubNotFound as exc:
+            raise AccessCheckFailed(
+                "repository_not_visible",
+                f"repository {github_repository_id} is not visible to the user",
+            ) from exc
+        try:
+            installation_id = gateway.get_installation_id(repository.full_name)
+        except GitHubNotFound as exc:
+            raise AccessCheckFailed(
+                "app_not_installed", f"the App is not installed on {repository.full_name}"
+            ) from exc
         if installation_id not in user_installations.result():
-            raise GitHubNotFound(
-                f"repository {github_repository_id} is outside the user's installations"
+            raise AccessCheckFailed(
+                "installation_not_accessible",
+                f"repository {github_repository_id} is outside the user's installations",
             )
     return repository, installation_id

@@ -292,6 +292,25 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AccessOut
+         * @description Access to the repository on GitHub, as last checked.
+         */
+        AccessOut: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "verified" | "lost" | "unknown";
+            /** Reason */
+            reason: string | null;
+            /** Checked At */
+            checked_at: string | null;
+            /** Lost At */
+            lost_at: string | null;
+            /** Purge After */
+            purge_after: string | null;
+        };
         /** ActiveSnapshotOut */
         ActiveSnapshotOut: {
             /**
@@ -314,6 +333,19 @@ export interface components {
             claims: components["schemas"]["ClaimOut"][];
             /** Gaps */
             gaps: string[];
+        };
+        /**
+         * AutomaticUpdatesOut
+         * @description Whether pushes and daily checks start runs (research R8).
+         */
+        AutomaticUpdatesOut: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "on" | "paused";
+            /** Reason */
+            reason: string | null;
         };
         /** CitationOut */
         CitationOut: {
@@ -433,6 +465,11 @@ export interface components {
         IndexIn: {
             /** Branch */
             branch?: string | null;
+            /**
+             * Accept External Processing
+             * @default false
+             */
+            accept_external_processing: boolean;
         };
         /** IndexOut */
         IndexOut: {
@@ -509,6 +546,11 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "retry_wait" | "succeeded" | "failed" | "canceled";
+            /**
+             * Trigger
+             * @enum {string}
+             */
+            trigger: "user" | "push" | "check";
             /** Attempt */
             attempt: number;
             /** Queued Behind */
@@ -533,7 +575,26 @@ export interface components {
             id: string;
             /** Status */
             status: string;
+            /**
+             * Trigger
+             * @enum {string}
+             */
+            trigger: "user" | "push" | "check";
             error: components["schemas"]["JobError"] | null;
+        };
+        /**
+         * LatestPushOut
+         * @description The latest default-branch push received, and the job that covers it.
+         */
+        LatestPushOut: {
+            /** Commit Sha */
+            commit_sha: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            job: components["schemas"]["LatestJobOut"] | null;
         };
         /** MeOut */
         MeOut: {
@@ -559,9 +620,12 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "indexing" | "ready" | "rejected" | "failed";
+            state: "access_lost" | "indexing" | "ready" | "rejected" | "failed";
+            access: components["schemas"]["AccessOut"];
+            automatic_updates: components["schemas"]["AutomaticUpdatesOut"];
             active_snapshot: components["schemas"]["ActiveSnapshotOut"] | null;
             latest_indexing_job: components["schemas"]["LatestJobOut"] | null;
+            latest_push: components["schemas"]["LatestPushOut"] | null;
             /**
              * Created At
              * Format: date-time
@@ -768,6 +832,8 @@ export interface components {
             created_at: string;
             /** Ready At */
             ready_at: string | null;
+            /** Trigger */
+            trigger: ("user" | "push" | "check") | null;
         };
         /** SnapshotPage */
         SnapshotPage: {

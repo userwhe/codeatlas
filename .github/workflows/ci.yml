@@ -62,11 +62,16 @@ jobs:
       - name: Configure fake mode
         # Fixture repositories and fake model providers: no GitHub App or API keys needed.
         run: |
+          WEBHOOK_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::$WEBHOOK_SECRET"
           {
             echo "CODEATLAS_ENV=development"
             echo "CODEATLAS_FAKE_EXTERNALS=1"
             echo "TOKEN_ENCRYPTION_KEY=$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+            echo "GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET"
           } > .env
+          # Playwright signs its webhook deliveries with the same per-run secret.
+          echo "GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> "$GITHUB_ENV"
       - name: Start the stack
         # The api and worker services start after the migrate service has run the migrations.
         run: docker compose up -d --build

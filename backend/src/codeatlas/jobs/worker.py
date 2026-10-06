@@ -62,6 +62,8 @@ class JobContext:
     payload: dict[str, Any]
     created_by: uuid.UUID | None
     deadline_at: datetime
+    # What started the job: `user`, `push`, or `check` (specs/002-push-reindexing, research R3).
+    trigger: str = "user"
     lease_lost: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     published: bool = field(default=False, init=False)
 

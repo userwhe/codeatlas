@@ -6,30 +6,40 @@ import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 
 import { AnswerHistory } from "@/components/AnswerHistory";
 import { AskQuestionForm } from "@/components/AskQuestionForm";
+import { AutomaticUpdatesStatus } from "@/components/AutomaticUpdatesStatus";
 import { CoverageTable } from "@/components/CoverageTable";
 import { DisconnectRepositoryDialog } from "@/components/DisconnectRepositoryDialog";
+import { ExternalProcessingAcceptance } from "@/components/ExternalProcessingAcceptance";
 import { JobProgress } from "@/components/JobProgress";
+import { RepositoryAccessPanel } from "@/components/RepositoryAccessPanel";
 import { RepositoryStateBadge } from "@/components/RepositoryStateBadge";
 import { SnapshotSelector } from "@/components/SnapshotSelector";
 import { api, ApiError, errorMessage, unwrap } from "@/lib/api/client";
 import { useMe } from "@/lib/api/me";
 import {
   type ActiveSnapshot,
+  indexingStatusLabel,
   isActiveJob,
+  isPausedForDisclosure,
   type JobError,
+  type LatestJob,
   type Repository,
   type RepositoryState,
   shortSha,
+  triggerLabel,
   useRepository,
   useSnapshot,
 } from "@/lib/api/repositories";
 
 export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
   const queryClient = useQueryClient();
-  const { data: repository, error } = useRepository(repositoryId);
+  const { data: repository, error } = useRepository(repositoryId, { followAccessChecks: true });
   // The job whose progress stays on screen once it is no longer the active job: the last one
   // that finished while this page was open, or the one a re-index just started.
   const [followedJobId, setFollowedJobId] = useState<string | null>(null);
+  // The job of a re-index requested here while access was lost; its outcome is shown if it ends
+  // with access still lost.
+  const [accessCheckJobId, setAccessCheckJobId] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
 
   const follow = useCallback(
@@ -62,6 +72,14 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
   const progressJobId = latestJob && isActiveJob(latestJob.status) ? latestJob.id : followedJobId;
   const failure = latestJob?.status === "failed" ? latestJob.error : null;
   const snapshot = repository.active_snapshot;
+  // While access is lost, every read of the repository's content and of its jobs is denied
+  // (FR-014): only what the repository itself reports is shown.
+  const lost = repository.state === "access_lost";
+
+  function reindexStarted(jobId: string) {
+    if (lost) setAccessCheckJobId(jobId);
+    follow(jobId);
+  }
 
   return (
     <div className="flex flex-col gap-10">
@@ -78,33 +96,66 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
         </p>
       </header>
 
+      <Section title="GitHub access">
+        <RepositoryAccessPanel access={repository.access} />
+      </Section>
+
       <Section title="Indexing">
-        {progressJobId && (
-          <JobProgress
-            key={progressJobId}
-            jobId={progressJobId}
-            onFinished={() => follow(progressJobId)}
-          />
+        {latestJob && <LatestRun job={latestJob} />}
+        {lost ? (
+          <AccessCheck job={latestJob} requestedJobId={accessCheckJobId} />
+        ) : (
+          <>
+            {progressJobId && (
+              <JobProgress
+                key={progressJobId}
+                jobId={progressJobId}
+                onFinished={() => follow(progressJobId)}
+              />
+            )}
+            {failure && <IndexingFailure state={repository.state} error={failure} />}
+          </>
         )}
-        {failure && <IndexingFailure state={repository.state} error={failure} />}
-        <ReindexForm repository={repository} onStarted={follow} />
+        <ReindexForm repository={repository} onStarted={reindexStarted} />
+      </Section>
+
+      <Section title="Automatic updates">
+        <AutomaticUpdatesStatus
+          automaticUpdates={repository.automatic_updates}
+          latestPush={repository.latest_push}
+          defaultCommitSha={snapshot?.commit_sha ?? null}
+        />
       </Section>
 
       <Section title="Indexed version">
         {snapshot ? (
-          <SnapshotSummary snapshot={snapshot} />
+          lost ? (
+            <SnapshotFields snapshot={snapshot} />
+          ) : (
+            <SnapshotSummary snapshot={snapshot} />
+          )
         ) : (
           <p className="text-sm text-zinc-600 dark:text-zinc-400">No indexed version yet.</p>
         )}
-        <SnapshotSelector repositoryId={repository.id} />
+        {lost ? (
+          <HiddenWhileLost>Browsing and searching indexed versions</HiddenWhileLost>
+        ) : (
+          <SnapshotSelector repositoryId={repository.id} />
+        )}
       </Section>
 
       <Section title="Questions">
-        <AskQuestionForm repositoryId={repository.id} hasReadyVersion={snapshot !== null} />
-        <AnswerHistory repositoryId={repository.id} />
+        {lost ? (
+          <HiddenWhileLost>Asking questions and reading earlier answers</HiddenWhileLost>
+        ) : (
+          <>
+            <AskQuestionForm repositoryId={repository.id} hasReadyVersion={snapshot !== null} />
+            <AnswerHistory repositoryId={repository.id} />
+          </>
+        )}
       </Section>
 
-      {snapshot && (
+      {snapshot && !lost && (
         <Section title="Skipped entries">
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             Files and directories at this commit that were not indexed, or were indexed only as
@@ -157,12 +208,79 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+function HiddenWhileLost({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      {children} are unavailable while access to the repository is lost.
+    </p>
+  );
+}
+
+/**
+ * The indexing run of a repository whose access is lost. Its progress cannot be read (FR-014),
+ * so the page polls the repository instead: while the run is active, it is checking access. If
+ * it restores access, the page leaves this state and shows the run's progress. If a re-index
+ * requested here ends with access still lost, the run's error says why.
+ */
+function AccessCheck({
+  job,
+  requestedJobId,
+}: {
+  job: LatestJob | null;
+  requestedJobId: string | null;
+}) {
+  const active = job !== null && isActiveJob(job.status);
+  const failed = job !== null && job.id === requestedJobId && !active && job.status !== "succeeded";
+
+  return (
+    <>
+      {active && (
+        <p role="status" className="text-sm font-medium">
+          Checking access…
+        </p>
+      )}
+      {failed && (
+        <div className="flex flex-col gap-1 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100">
+          <p className="font-medium">Access is still lost.</p>
+          <p>{job.error?.message ?? "The run ended without restoring access."}</p>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** What started the latest indexing run, and its state. */
+function LatestRun({ job }: { job: LatestJob }) {
+  return (
+    <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      Latest run:{" "}
+      <span className="font-medium text-foreground">{triggerLabel(job.trigger)}</span> ·{" "}
+      {indexingStatusLabel(job.status)}
+    </p>
+  );
+}
+
 const COUNTS: [key: string, label: string][] = [
   ["indexed_files", "Indexed files"],
   ["source_lines", "Source lines"],
   ["symbols", "Symbols"],
   ["doc_chunks", "Documentation passages"],
 ];
+
+/** The commit, branch, and time of a version, as the repository reports them. */
+function SnapshotFields({ snapshot }: { snapshot: ActiveSnapshot }) {
+  return (
+    <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+      <Field label="Commit">
+        <code title={snapshot.commit_sha}>{shortSha(snapshot.commit_sha)}</code>
+      </Field>
+      <Field label="Branch">{snapshot.branch}</Field>
+      <Field label="Ready at">
+        {snapshot.ready_at ? new Date(snapshot.ready_at).toLocaleString() : "Unknown"}
+      </Field>
+    </dl>
+  );
+}
 
 function SnapshotSummary({ snapshot }: { snapshot: ActiveSnapshot }) {
   const detail = useSnapshot(snapshot.id);
@@ -174,15 +292,7 @@ function SnapshotSummary({ snapshot }: { snapshot: ActiveSnapshot }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
-        <Field label="Commit">
-          <code title={snapshot.commit_sha}>{shortSha(snapshot.commit_sha)}</code>
-        </Field>
-        <Field label="Branch">{snapshot.branch}</Field>
-        <Field label="Ready at">
-          {snapshot.ready_at ? new Date(snapshot.ready_at).toLocaleString() : "Unknown"}
-        </Field>
-      </dl>
+      <SnapshotFields snapshot={snapshot} />
       {detail.data ? (
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {COUNTS.map(([key, label]) => (
@@ -294,6 +404,11 @@ function IndexingFailure({ state, error }: { state: RepositoryState; error: JobE
   );
 }
 
+interface ReindexRequest {
+  branch?: string;
+  accept_external_processing: boolean;
+}
+
 function ReindexForm({
   repository,
   onStarted,
@@ -301,30 +416,55 @@ function ReindexForm({
   repository: Repository;
   onStarted: (jobId: string) => void;
 }) {
+  const queryClient = useQueryClient();
   const [branch, setBranch] = useState("");
+  const [accepted, setAccepted] = useState(false);
+  // A repository that became private on GitHub is re-indexed only once the disclosure is
+  // accepted; accepting also resumes its automatic updates (FR-017).
+  const needsAcceptance = isPausedForDisclosure(repository.automatic_updates);
   const reindex = useMutation({
-    mutationFn: ({ branch, idempotencyKey }: { branch: string; idempotencyKey: string }) =>
+    mutationFn: ({ body, idempotencyKey }: { body: ReindexRequest; idempotencyKey: string }) =>
       unwrap(
         api.POST("/v1/repositories/{repository_id}/index", {
           params: {
             path: { repository_id: repository.id },
             header: { "Idempotency-Key": idempotencyKey },
           },
-          body: branch ? { branch } : {},
+          body,
         }),
       ),
-    onSuccess: ({ job }) => onStarted(job.id),
+    onSuccess: ({ job }) => {
+      setAccepted(false);
+      onStarted(job.id);
+    },
+    onError: (error) => {
+      // The repository was paused after this page loaded: reload it to show the checkbox.
+      if (error instanceof ApiError && error.code === "external_processing_not_accepted") {
+        void queryClient.invalidateQueries({ queryKey: ["repositories", repository.id] });
+      }
+    },
   });
+  const blocked = needsAcceptance && !accepted;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (reindex.isPending) return;
-    // A new key for each submission attempt; a replay of the same request returns the same job.
-    reindex.mutate({ branch: branch.trim(), idempotencyKey: crypto.randomUUID() });
+    if (reindex.isPending || blocked) return;
+    const trimmedBranch = branch.trim();
+    reindex.mutate({
+      body: {
+        ...(trimmedBranch ? { branch: trimmedBranch } : {}),
+        accept_external_processing: needsAcceptance && accepted,
+      },
+      // A new key for each submission attempt; a replay of the same request returns the same job.
+      idempotencyKey: crypto.randomUUID(),
+    });
   }
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-2">
+      {needsAcceptance && (
+        <ExternalProcessingAcceptance checked={accepted} onChange={setAccepted} />
+      )}
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-col gap-1">
           <label htmlFor="reindex-branch" className="text-sm font-medium">
@@ -341,7 +481,7 @@ function ReindexForm({
         </div>
         <button
           type="submit"
-          disabled={reindex.isPending}
+          disabled={reindex.isPending || blocked}
           className="rounded-md border border-zinc-300 px-4 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
         >
           {reindex.isPending ? "Starting…" : "Re-index"}

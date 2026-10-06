@@ -4,12 +4,19 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { errorMessage } from "@/lib/api/client";
-import { type SnapshotListItem, shortSha, useSnapshots } from "@/lib/api/repositories";
+import {
+  type SnapshotListItem,
+  shortSha,
+  triggerLabel,
+  useSnapshots,
+} from "@/lib/api/repositories";
 
 function optionLabel(snapshot: SnapshotListItem) {
   const readyAt = snapshot.ready_at ? new Date(snapshot.ready_at).toLocaleString() : "unknown time";
+  const trigger = snapshot.trigger ? ` · ${triggerLabel(snapshot.trigger)}` : "";
   const active = snapshot.is_active ? " (active)" : "";
-  return `${shortSha(snapshot.commit_sha)} on ${snapshot.branch}, indexed ${readyAt}${active}`;
+  const version = `${shortSha(snapshot.commit_sha)} on ${snapshot.branch}`;
+  return `${version}${trigger} · indexed ${readyAt}${active}`;
 }
 
 const LINK_CLASS =

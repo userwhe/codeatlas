@@ -190,8 +190,14 @@ def list_runs(
     request_id: RequestId,
     page: Annotated[PageParams, Depends(page_params)],
 ) -> RunPage:
+    # Questions and answers are content: 403 while the repository's access is lost (FR-014).
     repository = repos.get_scoped(
-        db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
+        db,
+        user=user,
+        workspace=workspace,
+        repository_id=repository_id,
+        request_id=request_id,
+        content=True,
     )
     rows = runs.list_for_repository(db, repository.id, offset=page.offset, limit=page.limit + 1)
     window = rows[: page.limit]

@@ -1,9 +1,11 @@
 """The real GitHub gateway over httpx (research R5, ADR 0005).
 
 - Sign-in uses the App's user authorization (OAuth web flow) with expiring user tokens.
-- Repository reads use short-lived installation tokens, cached in memory and never stored.
+- Repository reads use short-lived installation tokens, cached in memory and never stored. A
+  token that GitHub refuses is dropped from the cache.
 - Calls share one pooled HTTP client per process, so they reuse TLS connections (SC-007).
-- Every failure maps to a gateway error from `codeatlas.github.gateway`.
+- Every failure maps to a gateway error from `codeatlas.github.gateway`. A rejected credential
+  maps by whose it is: the user's or the App's (research R4).
 """
 
 import io
@@ -21,6 +23,7 @@ import jwt
 
 from codeatlas.config import Settings
 from codeatlas.github.gateway import (
+    AppCredentialsRejected,
     BranchNotFound,
     GitHubAccessDenied,
     GitHubError,
@@ -29,6 +32,7 @@ from codeatlas.github.gateway import (
     GitHubUnavailable,
     GitHubUser,
     RepositoryEmpty,
+    UserAuthorizationInvalid,
     UserTokens,
 )
 
@@ -60,6 +64,14 @@ def clear_installation_token_cache() -> None:
     """Forget every cached installation token."""
     with _installation_tokens_lock:
         _installation_tokens.clear()
+
+
+def _forget_installation_token(installation_id: int, token: str) -> None:
+    """Drop a cached installation token that GitHub refused, unless a newer one replaced it."""
+    with _installation_tokens_lock:
+        cached = _installation_tokens.get(installation_id)
+        if cached is not None and cached.token == token:
+            del _installation_tokens[installation_id]
 
 
 def _new_http_client(transport: httpx.BaseTransport | None) -> httpx.Client:
@@ -119,7 +131,7 @@ class GitHubClient:
     def get_authenticated_user(self, user_token: str) -> GitHubUser:
         with self._client() as http:
             response = self._api(http, "GET", "/user", user_token)
-        _check(response)
+        _check(response, unauthorized=UserAuthorizationInvalid)
         data = _json(response)
         return GitHubUser(
             id=int(data["id"]),
@@ -147,7 +159,7 @@ class GitHubClient:
         with self._client() as http:
             response = self._api(http, "GET", f"/repositories/{github_repository_id}", user_token)
         # A plain 403 means the same as 404 here (FR-003).
-        _check(response, forbidden=GitHubNotFound)
+        _check(response, unauthorized=UserAuthorizationInvalid, forbidden=GitHubNotFound)
         return _repository(_json(response))
 
     def list_installation_ids(self, user_token: str) -> set[int]:
@@ -164,7 +176,7 @@ class GitHubClient:
             response = self._api(
                 http, "GET", f"{_repo_path(full_name)}/installation", self._app_jwt()
             )
-        _check(response)
+        _check(response, unauthorized=AppCredentialsRejected)
         return int(_json(response)["id"])
 
     def resolve_commit(self, installation_id: int, full_name: str, branch: str) -> str:
@@ -174,11 +186,11 @@ class GitHubClient:
             response = self._api(http, "GET", f"{repo}/branches/{quote(branch, safe='')}", token)
             if response.status_code == 404:
                 branches = self._api(http, "GET", f"{repo}/branches", token, params={"per_page": 1})
-                _check(branches)
+                _check_installation_read(branches, installation_id, token)
                 if not _json(branches):
                     raise RepositoryEmpty(f"{full_name} has no branches")
                 raise BranchNotFound(f"branch {branch!r} not found in {full_name}")
-        _check(response)
+        _check_installation_read(response, installation_id, token)
         return str(_json(response)["commit"]["sha"])
 
     @contextmanager
@@ -188,7 +200,7 @@ class GitHubClient:
             path = f"{_repo_path(full_name)}/tarball/{quote(sha, safe='')}"
             response = self._api(http, "GET", path, token, follow_redirects=False)
             if not response.is_redirect:
-                _check(response)
+                _check_installation_read(response, installation_id, token)
                 raise GitHubUnavailable(f"GitHub did not redirect the tarball request for {sha}")
             # The redirect URL carries its own short-lived token, so no Authorization header is
             # sent, and only GitHub's archive host is trusted.
@@ -205,7 +217,7 @@ class GitHubClient:
             )
             try:
                 if download.status_code != 200:
-                    _check(download)
+                    _check(download, unauthorized=GitHubAccessDenied)
                     raise GitHubUnavailable(f"tarball download returned {download.status_code}")
                 yield io.BufferedReader(_ResponseStream(download.iter_bytes()))
             finally:
@@ -241,14 +253,15 @@ class GitHubClient:
         return _send(http, request, follow_redirects=follow_redirects)
 
     def _paginate(
-        self, http: httpx.Client, path: str, key: str, token: str
+        self, http: httpx.Client, path: str, key: str, user_token: str
     ) -> list[dict[str, Any]]:
+        """Every item of a listing read with the user token."""
         items: list[dict[str, Any]] = []
         url: str | None = path
         params: Mapping[str, int] | None = {"per_page": PAGE_SIZE}
         while url is not None:
-            response = self._api(http, "GET", url, token, params=params)
-            _check(response)
+            response = self._api(http, "GET", url, user_token, params=params)
+            _check(response, unauthorized=UserAuthorizationInvalid)
             items.extend(_json(response)[key])
             url = response.links.get("next", {}).get("url")
             params = None  # The next-page URL already carries the query.
@@ -271,11 +284,18 @@ class GitHubClient:
         if _unavailable(response):
             raise GitHubUnavailable(f"GitHub returned {response.status_code} for the token request")
         if response.is_error:
-            raise GitHubAccessDenied(f"GitHub rejected the token request ({response.status_code})")
+            raise UserAuthorizationInvalid(
+                f"GitHub rejected the token request ({response.status_code})"
+            )
         body = _json(response)
+        error = body.get("error") if isinstance(body, dict) else None
+        if error == "incorrect_client_credentials":
+            # The App's client ID or secret is wrong; the user's authorization is not at fault.
+            raise AppCredentialsRejected("GitHub rejected the App's client credentials")
         if not isinstance(body, dict) or "error" in body or not body.get("access_token"):
-            error = body.get("error") if isinstance(body, dict) else None
-            raise GitHubAccessDenied(f"GitHub rejected the token request ({error or 'no token'})")
+            raise UserAuthorizationInvalid(
+                f"GitHub rejected the token request ({error or 'no token'})"
+            )
         now = _utcnow()
         return UserTokens(
             access_token=str(body["access_token"]),
@@ -304,7 +324,7 @@ class GitHubClient:
         response = self._api(
             http, "POST", f"/app/installations/{installation_id}/access_tokens", self._app_jwt()
         )
-        _check(response)
+        _check(response, unauthorized=AppCredentialsRejected)
         data = _json(response)
         fresh = _CachedToken(
             token=str(data["token"]), expires_at=datetime.fromisoformat(data["expires_at"])
@@ -367,8 +387,18 @@ def _unavailable(response: httpx.Response) -> bool:
     return status >= 500 or status == 429 or (status == 403 and rate_limited)
 
 
-def _check(response: httpx.Response, *, forbidden: type[GitHubError] = GitHubAccessDenied) -> None:
-    """Raise the gateway error for an error response; do nothing for success."""
+def _check(
+    response: httpx.Response,
+    *,
+    unauthorized: type[GitHubError],
+    forbidden: type[GitHubError] = GitHubAccessDenied,
+) -> None:
+    """Raise the gateway error for an error response; do nothing for success.
+
+    A 401 raises `unauthorized`, chosen by the credential the request carried (research R4):
+    `UserAuthorizationInvalid` for the user token, `AppCredentialsRejected` for the App JWT, and
+    `GitHubAccessDenied` for an installation token (the installation can no longer read).
+    """
     status = response.status_code
     if status < 400:
         return
@@ -376,12 +406,26 @@ def _check(response: httpx.Response, *, forbidden: type[GitHubError] = GitHubAcc
     if _unavailable(response):
         raise GitHubUnavailable(f"GitHub returned {status} for {where}")
     if status == 401:
-        raise GitHubAccessDenied(f"GitHub rejected the credentials for {where}")
+        raise unauthorized(f"GitHub rejected the credentials for {where}")
     if status == 403:
         raise forbidden(f"GitHub denied {where}")
     if status == 404:
         raise GitHubNotFound(f"GitHub found nothing for {where}")
     raise GitHubError(f"GitHub returned {status} for {where}")
+
+
+def _check_installation_read(response: httpx.Response, installation_id: int, token: str) -> None:
+    """`_check` for a read made with an installation token.
+
+    A 401 or a plain 403 means the installation can no longer read (`GitHubAccessDenied`). The
+    cached token is dropped first, so a later access check mints a fresh one instead of reusing
+    a token that GitHub refused.
+    """
+    try:
+        _check(response, unauthorized=GitHubAccessDenied)
+    except GitHubAccessDenied:
+        _forget_installation_token(installation_id, token)
+        raise
 
 
 def _json(response: httpx.Response) -> Any:

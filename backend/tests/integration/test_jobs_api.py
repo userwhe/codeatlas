@@ -80,6 +80,7 @@ def test_a_queued_job_reports_how_many_jobs_are_ahead(db: Session, client: TestC
         "id": str(waiting.id),
         "kind": "index_repository",
         "status": "queued",
+        "trigger": "user",
         "attempt": 0,
         "queued_behind": 1,
         "error": None,

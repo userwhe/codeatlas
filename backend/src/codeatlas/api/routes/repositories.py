@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Header, Response
 from fastapi.responses import JSONResponse
@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session
 
 from codeatlas.api.deps import CurrentUser, CurrentWorkspace, DbSession, RequestId
 from codeatlas.api.pagination import PageParams, next_cursor, page_params
-from codeatlas.api.routes.jobs import JobError, job_error
+from codeatlas.api.routes.jobs import JobError, JobTrigger, job_error
 from codeatlas.models import Job, Repository, Snapshot
+from codeatlas.workspace import access
 from codeatlas.workspace import repositories as repos
 from codeatlas.workspace.idempotency import run_idempotent
 
@@ -32,7 +33,43 @@ class ActiveSnapshotOut(BaseModel):
 class LatestJobOut(BaseModel):
     id: uuid.UUID
     status: str
+    trigger: JobTrigger
     error: JobError | None
+
+
+class LatestPushOut(BaseModel):
+    """The latest default-branch push received, and the job that covers it."""
+
+    commit_sha: str
+    received_at: datetime
+    # Null when the repository was paused at the time of the push.
+    job: LatestJobOut | None
+
+
+AccessState = Literal["verified", "lost", "unknown"]
+
+
+class AccessOut(BaseModel):
+    """Access to the repository on GitHub, as last checked."""
+
+    # `unknown` until an access check finishes; `lost` from the first detection of loss.
+    state: AccessState
+    # The loss reason; null unless `state` is `lost`. A pause is not a loss of access.
+    reason: str | None
+    # The latest definitive access result, verified or lost.
+    checked_at: datetime | None
+    lost_at: datetime | None
+    # When the data of a lost repository is purged, unless access returns first.
+    purge_after: datetime | None
+
+
+class AutomaticUpdatesOut(BaseModel):
+    """Whether pushes and daily checks start runs (research R8)."""
+
+    # `on` for a lost repository too: pushes still start access checks.
+    state: Literal["on", "paused"]
+    # `sign_in_required` or `external_processing_not_accepted` when paused; null otherwise.
+    reason: str | None
 
 
 class RepositoryOut(BaseModel):
@@ -41,8 +78,11 @@ class RepositoryOut(BaseModel):
     private: bool
     default_branch: str
     state: repos.RepositoryState
+    access: AccessOut
+    automatic_updates: AutomaticUpdatesOut
     active_snapshot: ActiveSnapshotOut | None
     latest_indexing_job: LatestJobOut | None
+    latest_push: LatestPushOut | None
     created_at: datetime
 
 
@@ -69,6 +109,8 @@ class ConnectOut(BaseModel):
 
 class IndexIn(BaseModel):
     branch: str | None = Field(default=None, min_length=1, max_length=255)
+    # Required while automatic updates are paused with `external_processing_not_accepted`.
+    accept_external_processing: bool = False
 
 
 class IndexOut(BaseModel):
@@ -85,11 +127,61 @@ class SnapshotOut(BaseModel):
     coverage: dict[str, Any]
     created_at: datetime
     ready_at: datetime | None
+    # What started the job that built this version; null if that job no longer exists.
+    trigger: JobTrigger | None
 
 
 class SnapshotPage(BaseModel):
     items: list[SnapshotOut]
     next_cursor: str | None
+
+
+def _latest_job_out(job: Job) -> LatestJobOut:
+    return LatestJobOut(
+        id=job.id,
+        status=job.status,
+        trigger=cast(JobTrigger, job.trigger),
+        error=job_error(job),
+    )
+
+
+def _latest_push_out(db: Session, repository: Repository) -> LatestPushOut | None:
+    if repository.latest_push_sha is None or repository.latest_push_at is None:
+        return None
+    job = (
+        db.get(Job, repository.latest_push_job_id)
+        if repository.latest_push_job_id is not None
+        else None
+    )
+    return LatestPushOut(
+        commit_sha=repository.latest_push_sha,
+        received_at=repository.latest_push_at,
+        job=_latest_job_out(job) if job is not None else None,
+    )
+
+
+def _access_out(repository: Repository) -> AccessOut:
+    if repository.access_state == "access_lost":
+        return AccessOut(
+            state="lost",
+            reason=repository.access_reason,
+            checked_at=repository.access_checked_at,
+            lost_at=repository.access_lost_at,
+            purge_after=access.purge_after(repository),
+        )
+    return AccessOut(
+        state="unknown" if repository.access_checked_at is None else "verified",
+        reason=None,
+        checked_at=repository.access_checked_at,
+        lost_at=None,
+        purge_after=None,
+    )
+
+
+def _automatic_updates_out(repository: Repository) -> AutomaticUpdatesOut:
+    if repository.access_state == "paused":
+        return AutomaticUpdatesOut(state="paused", reason=repository.access_reason)
+    return AutomaticUpdatesOut(state="on", reason=None)
 
 
 def repository_out(db: Session, repository: Repository) -> RepositoryOut:
@@ -102,7 +194,15 @@ def repository_out(db: Session, repository: Repository) -> RepositoryOut:
         full_name=repository.full_name,
         private=repository.is_private,
         default_branch=repository.default_branch,
-        state=repos.derive_state(repository, latest),
+        state=repos.derive_state(
+            repository,
+            latest,
+            repos.latest_failed_indexing_job(db, repository.id)
+            if repository.active_snapshot_id is None
+            else None,
+        ),
+        access=_access_out(repository),
+        automatic_updates=_automatic_updates_out(repository),
         active_snapshot=(
             ActiveSnapshotOut(
                 id=active.id,
@@ -113,11 +213,8 @@ def repository_out(db: Session, repository: Repository) -> RepositoryOut:
             if active is not None
             else None
         ),
-        latest_indexing_job=(
-            LatestJobOut(id=latest.id, status=latest.status, error=job_error(latest))
-            if latest is not None
-            else None
-        ),
+        latest_indexing_job=_latest_job_out(latest) if latest is not None else None,
+        latest_push=_latest_push_out(db, repository),
         created_at=repository.created_at,
     )
 
@@ -189,8 +286,14 @@ def get_repository(
     workspace: CurrentWorkspace,
     request_id: RequestId,
 ) -> RepositoryOut:
+    # The repository stays visible after access is lost, so the owner sees why (research R7).
     repository = repos.get_scoped(
-        db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
+        db,
+        user=user,
+        workspace=workspace,
+        repository_id=repository_id,
+        request_id=request_id,
+        content=False,
     )
     return repository_out(db, repository)
 
@@ -220,7 +323,7 @@ def index_repository(
     body: IndexIn | None = None,
     idempotency_key: IdempotencyKey = None,
 ) -> JSONResponse:
-    branch = body.branch if body is not None else None
+    request = body if body is not None else IndexIn()
 
     def operation() -> tuple[int, dict[str, Any]]:
         job = repos.reindex(
@@ -228,7 +331,8 @@ def index_repository(
             user=user,
             workspace=workspace,
             repository_id=repository_id,
-            branch=branch,
+            branch=request.branch,
+            accept_external_processing=request.accept_external_processing,
             request_id=request_id,
         )
         db.flush()
@@ -239,7 +343,7 @@ def index_repository(
         workspace_id=workspace.id,
         route=f"POST /v1/repositories/{repository_id}/index",
         key=idempotency_key,
-        payload={"branch": branch},
+        payload=request.model_dump(mode="json"),
         operation=operation,
     )
     db.commit()
@@ -258,8 +362,10 @@ def list_snapshots(
     repository = repos.get_scoped(
         db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
     )
-    rows = db.scalars(
-        select(Snapshot)
+    # The trigger comes from the job that built each version, read in the same query.
+    rows = db.execute(
+        select(Snapshot, Job.trigger)
+        .outerjoin(Job, Job.id == Snapshot.job_id)
         .where(Snapshot.repository_id == repository.id, Snapshot.status == "ready")
         .order_by(Snapshot.ready_at.desc(), Snapshot.id)
         .offset(page.offset)
@@ -278,8 +384,9 @@ def list_snapshots(
                 coverage=snapshot.coverage,
                 created_at=snapshot.created_at,
                 ready_at=snapshot.ready_at,
+                trigger=cast(JobTrigger | None, trigger),
             )
-            for snapshot in window
+            for snapshot, trigger in window
         ],
         next_cursor=next_cursor(page, len(window), len(rows) > page.limit),
     )

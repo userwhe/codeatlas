@@ -11,62 +11,15 @@
  */
 import { expect, type Page, test } from "@playwright/test";
 
+import { connectOrOpen, expectReady, signIn, UUID } from "./helpers";
+
 const SAMPLE_APP = "octo-org/sample-app";
 const NO_CODE = "octo-org/no-code";
 const QUESTION = "Where are repository permissions checked?";
 const SYMBOL = "check_repository_access";
 const SYMBOL_PATH = "app/auth/access.py";
 
-// Indexing and answering run in the worker; on a cold stack the first job can take a while.
-const INDEXING_TIMEOUT = 120_000;
 const ANSWER_TIMEOUT = 60_000;
-
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const REPOSITORY_URL = new RegExp(`/repositories/${UUID}$`);
-
-/** Signs in through the fake GitHub, which approves `octocat` at once. */
-async function signIn(page: Page) {
-  await page.goto("/");
-  await page.getByRole("link", { name: "Sign in with GitHub" }).click();
-  await expect(page).toHaveURL(/\/repositories$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Repositories" })).toBeVisible();
-  await expect(page.getByText("octocat", { exact: true })).toBeVisible();
-}
-
-/**
- * Connects a repository through the connect dialog and lands on its page. A repository that is
- * still connected from an earlier run is opened from the dialog instead.
- */
-async function connectOrOpen(page: Page, fullName: string) {
-  await page.goto("/repositories");
-  await page.getByRole("button", { name: "Connect repository" }).click();
-  const dialog = page.getByRole("dialog", { name: "Connect a repository" });
-  await expect(dialog).toBeVisible();
-
-  const row = dialog
-    .getByRole("listitem")
-    .filter({ has: page.getByText(fullName, { exact: true }) });
-  await expect(row).toBeVisible();
-  // The row is rendered from the loaded list, so whether it is connected is settled here.
-  if (await row.getByText("Connected", { exact: true }).isVisible()) {
-    await row.getByRole("link", { name: "Open" }).click();
-  } else {
-    await row.getByRole("radio").check();
-    await dialog.getByRole("button", { name: "Connect", exact: true }).click();
-  }
-
-  await expect(page).toHaveURL(REPOSITORY_URL);
-  await expect(page.getByRole("heading", { level: 1, name: fullName })).toBeVisible();
-}
-
-/** Waits until the open repository page shows the `Ready` state. */
-async function expectReady(page: Page) {
-  await expect(page.getByRole("main").getByText("Ready", { exact: true })).toBeVisible({
-    timeout: INDEXING_TIMEOUT,
-  });
-  const indexedVersion = page.getByRole("region", { name: "Indexed version" });
-  await expect(indexedVersion.getByText("Commit", { exact: true })).toBeVisible();
-}
 
 /** Checks, once the repository list has loaded, that it does not list `fullName`. */
 async function expectNotListed(page: Page, fullName: string) {

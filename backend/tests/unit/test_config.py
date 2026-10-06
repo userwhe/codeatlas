@@ -33,3 +33,17 @@ def test_spec_limit_defaults() -> None:
     assert settings.max_file_bytes == 1024 * 1024
     assert settings.daily_question_limit == 20
     assert settings.answer_model == "gemini-3.8-flash"
+
+
+def test_webhook_secret_required_in_production() -> None:
+    with pytest.raises(ValidationError, match="GITHUB_WEBHOOK_SECRET"):
+        make(CODEATLAS_ENV="production", CODEATLAS_FAKE_EXTERNALS=False, GITHUB_WEBHOOK_SECRET="")
+
+
+def test_webhook_secret_optional_in_development() -> None:
+    settings = make(CODEATLAS_ENV="development", GITHUB_WEBHOOK_SECRET="")
+    assert settings.github_webhook_secret == ""
+    production = make(
+        CODEATLAS_ENV="production", CODEATLAS_FAKE_EXTERNALS=False, GITHUB_WEBHOOK_SECRET="s3cret"
+    )
+    assert production.github_webhook_secret == "s3cret"

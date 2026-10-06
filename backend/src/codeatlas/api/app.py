@@ -20,6 +20,7 @@ from codeatlas.api.routes import (
     search,
     snapshots,
     usage,
+    webhooks,
 )
 from codeatlas.config import get_settings
 from codeatlas.logging import configure_logging, request_id_var
@@ -27,6 +28,9 @@ from codeatlas.logging import configure_logging, request_id_var
 logger = logging.getLogger(__name__)
 
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# GitHub calls these paths, and their signature check replaces the Origin check
+# (specs/002-push-reindexing, research R2).
+WEBHOOK_PATH_PREFIX = "/webhooks/"
 
 
 def _request_id(request: Request) -> str | None:
@@ -54,7 +58,8 @@ def create_app() -> FastAPI:
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         # CSRF protection for state-changing requests (research R6).
-        if request.method in STATE_CHANGING_METHODS:
+        exempt = request.url.path.startswith(WEBHOOK_PATH_PREFIX)
+        if request.method in STATE_CHANGING_METHODS and not exempt:
             if request.headers.get("origin") != get_settings().app_origin:
                 return _error_response(
                     request, 403, "origin_mismatch", "The request origin is not allowed."
@@ -121,6 +126,7 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(auth.router)
+    app.include_router(webhooks.router)
     for module in (me, usage, jobs, github, repositories, snapshots, search, analysis_runs):
         app.include_router(module.router, prefix="/v1")
     return app

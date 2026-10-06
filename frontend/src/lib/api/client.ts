@@ -49,6 +49,16 @@ const redirectOnUnauthenticated: Middleware = {
 export const api = createClient<paths>({ baseUrl: "", credentials: "same-origin" });
 api.use(redirectOnUnauthenticated);
 
+/**
+ * Whether a request failed because GitHub access to the repository was lost: the API then denies
+ * every read of the repository's versions, files, search results, answers, and progress.
+ */
+export function isAccessLost(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError && error.status === 403 && error.code === "repository_access_lost"
+  );
+}
+
 /** A message to show for a failed request: the API's message, or a generic network message. */
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;

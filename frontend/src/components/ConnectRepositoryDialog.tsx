@@ -5,13 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
+import { ExternalProcessingAcceptance } from "@/components/ExternalProcessingAcceptance";
 import { api, errorMessage, unwrap } from "@/lib/api/client";
 import { useMe } from "@/lib/api/me";
 import { type GitHubRepository, useGitHubRepositories } from "@/lib/api/repositories";
-
-/** The processing disclosure for private repositories (FR-006). */
-export const EXTERNAL_PROCESSING_DISCLOSURE =
-  "Selected source excerpts may be sent to an external model provider";
 
 interface ConnectRequest {
   github_repository_id: number;
@@ -171,16 +168,7 @@ export function ConnectRepositoryDialog({ onClose }: { onClose: () => void }) {
         </div>
 
         {selected?.private && (
-          <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-            <input
-              type="checkbox"
-              required
-              checked={accepted}
-              onChange={(event) => setAccepted(event.target.checked)}
-              className="mt-0.5"
-            />
-            <span>{EXTERNAL_PROCESSING_DISCLOSURE}. I accept this for this private repository.</span>
-          </label>
+          <ExternalProcessingAcceptance checked={accepted} onChange={setAccepted} />
         )}
 
         {connect.error && (

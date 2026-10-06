@@ -31,13 +31,17 @@ the regenerated `src/lib/api/schema.d.ts`.
 
 The Playwright tests in `tests/e2e/` drive the whole stack through Chromium: sign in, connect
 `octo-org/sample-app` and wait for indexing, ask a question and open a citation in the file
-browser, run a symbol search, and connect and disconnect `octo-org/no-code`. They expect the stack
+browser, run a symbol search, and connect and disconnect `octo-org/no-code`. They also send
+signed webhook deliveries straight to the API: a push, which shows up as a push-started run, and
+the repository's removal from the App installation, which hides its content until a re-index
+restores access. They expect the stack
 to be running already in fake mode, which serves the fixture repositories in
 `backend/tests/fixtures/repos` and uses fake model providers. `playwright.config.ts` does not
 start any servers, and the run stops early if the web app is unreachable or not in fake mode.
 
 1. In the repository root, create `.env` from `.env.example` and set `CODEATLAS_ENV=development`,
-   `CODEATLAS_FAKE_EXTERNALS=1`, and `TOKEN_ENCRYPTION_KEY` to a new key printed by:
+   `CODEATLAS_FAKE_EXTERNALS=1`, `GITHUB_WEBHOOK_SECRET` to any random string (for example from
+   `openssl rand -hex 32`), and `TOKEN_ENCRYPTION_KEY` to a new key printed by:
 
    ```bash
    python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
@@ -54,8 +58,11 @@ start any servers, and the run stops early if the web app is unreachable or not 
 
    ```bash
    npx playwright install chromium
-   npm run test:e2e
+   GITHUB_WEBHOOK_SECRET=<the value from .env> npm run test:e2e
    ```
+
+   The tests post webhook deliveries to the API at `E2E_API_URL` (default
+   `http://localhost:8000`).
 
 4. Stop the app containers when done: `docker compose stop api worker web` (from the repository
    root).

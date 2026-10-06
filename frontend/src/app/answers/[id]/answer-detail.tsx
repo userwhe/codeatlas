@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 
+import { AccessLostNotice } from "@/components/AccessLostNotice";
 import { CodeLines } from "@/components/CodeView";
 import { JobProgress } from "@/components/JobProgress";
 import { RunStatusBadge } from "@/components/RunStatusBadge";
-import { ApiError, errorMessage } from "@/lib/api/client";
+import { ApiError, errorMessage, isAccessLost } from "@/lib/api/client";
 import {
   type Citation,
   type Claim,
@@ -30,6 +31,9 @@ export function AnswerDetail({ runId }: { runId: string }) {
     void queryClient.invalidateQueries({ queryKey: ["analysis-runs"] });
     void queryClient.invalidateQueries({ queryKey: ["usage"] });
   }, [queryClient]);
+
+  // Checked before the cached answer, which stays in the cache after access is lost (FR-014).
+  if (isAccessLost(error)) return <AccessLostNotice error={error} subject="This answer" />;
 
   if (!run) {
     if (error) {

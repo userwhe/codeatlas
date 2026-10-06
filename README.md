@@ -9,13 +9,17 @@ not answer gets an "insufficient evidence" result instead of a guess.
 - **Connect repositories** through a read-only GitHub App. Indexing runs in the background with
   visible progress and reports every skipped file with its reason (generated, binary, credential
   file, too large, and so on).
+- **Stay current**: a push to a connected repository's default branch is indexed automatically,
+  and a daily check catches pushes whose notification was missed.
 - **Ask questions** about an indexed commit. Answers separate facts from inferences, and each
   citation opens the cited lines in the file browser.
 - **Browse and search** the indexed commit: a file tree, file views, and text, path, symbol, and
   documentation search.
 - **Stay contained**: each user has a private workspace, questions have a daily allowance, and
-  disconnecting a repository hides its data at once and purges it within 24 hours. CodeAtlas never
-  writes to GitHub and never executes repository code.
+  disconnecting a repository hides its data at once and purges it within 24 hours. When the owner
+  loses access on GitHub, CodeAtlas stops serving the repository at once, and purges it unless
+  access returns within 7 days. CodeAtlas never writes to GitHub and never executes repository
+  code.
 
 ## Architecture
 
@@ -29,7 +33,8 @@ not answer gets an "insufficient evidence" result instead of a guess.
 - **PostgreSQL** with pgvector and pg_trgm is the only data store. It holds records, file
   contents, trigram and full-text search, documentation embeddings, and the job queue (claimed
   with `FOR UPDATE SKIP LOCKED`, with leases and fencing tokens).
-- **GitHub App**: one App provides both sign-in and read-only repository access.
+- **GitHub App**: one App provides sign-in, read-only repository access, and webhook
+  notifications of pushes and installation changes, verified by their HMAC signature.
 - **Model providers**: Gemini 3.8 Flash generates answers in the worker from a bounded set of
   evidence as structured JSON, and the server validates every citation. Voyage AI embeds
   documentation during indexing and search queries in the API.
@@ -38,6 +43,8 @@ not answer gets an "insufficient evidence" result instead of a guess.
 
 [specs/001-repository-qa/quickstart.md](specs/001-repository-qa/quickstart.md) covers
 prerequisites, registering a development GitHub App, configuration, and the validation scenarios.
+[specs/002-push-reindexing/quickstart.md](specs/002-push-reindexing/quickstart.md) adds the
+webhook setup for automatic re-indexing.
 
 To try it without a GitHub App or API keys, use fake mode. It serves fixture repositories from
 `backend/tests/fixtures/repos` and uses fake model providers.
@@ -73,15 +80,24 @@ docstring for the required settings).
 
 ## Documentation
 
-- [Specification](specs/001-repository-qa/spec.md), with the
+- Repository Q&A: [specification](specs/001-repository-qa/spec.md), with the
   [plan](specs/001-repository-qa/plan.md),
   [research notes](specs/001-repository-qa/research.md),
   [data model](specs/001-repository-qa/data-model.md), and
   [HTTP API contract](specs/001-repository-qa/contracts/http-api.md)
+- Automatic re-indexing and access revocation:
+  [specification](specs/002-push-reindexing/spec.md), with the
+  [plan](specs/002-push-reindexing/plan.md),
+  [research notes](specs/002-push-reindexing/research.md),
+  [data model](specs/002-push-reindexing/data-model.md),
+  [webhook contract](specs/002-push-reindexing/contracts/github-webhooks.md),
+  [HTTP API changes](specs/002-push-reindexing/contracts/http-api.md), and
+  [quickstart](specs/002-push-reindexing/quickstart.md)
 - [Architecture decision records](docs/decisions/):
   [application stack](docs/decisions/0001-application-stack.md),
   [PostgreSQL as the only data store](docs/decisions/0002-postgresql-as-the-only-data-store.md),
   [PostgreSQL job queue](docs/decisions/0003-postgresql-job-queue.md),
   [model providers](docs/decisions/0004-model-providers.md),
-  [GitHub App](docs/decisions/0005-github-app-for-identity-and-access.md), and
-  [Gemini for answers](docs/decisions/0006-gemini-for-answer-generation.md)
+  [GitHub App](docs/decisions/0005-github-app-for-identity-and-access.md),
+  [Gemini for answers](docs/decisions/0006-gemini-for-answer-generation.md), and
+  [GitHub webhooks](docs/decisions/0007-github-webhooks-for-change-notifications.md)
