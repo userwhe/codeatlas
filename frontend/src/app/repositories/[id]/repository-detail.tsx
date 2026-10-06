@@ -4,6 +4,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { type FormEvent, type ReactNode, useCallback, useState } from "react";
 
+import { AnswerHistory } from "@/components/AnswerHistory";
+import { AskQuestionForm } from "@/components/AskQuestionForm";
 import { CoverageTable } from "@/components/CoverageTable";
 import { JobProgress } from "@/components/JobProgress";
 import { RepositoryStateBadge } from "@/components/RepositoryStateBadge";
@@ -94,7 +96,10 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
         {/* Snapshot selector: added with browsing and search. */}
       </Section>
 
-      {/* Questions: the ask form and answer history are added with repository Q&A. */}
+      <Section title="Questions">
+        <AskQuestionForm repositoryId={repository.id} hasReadyVersion={snapshot !== null} />
+        <AnswerHistory repositoryId={repository.id} />
+      </Section>
 
       {snapshot && (
         <Section title="Skipped entries">

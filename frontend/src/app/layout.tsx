@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { HeaderNav } from "@/components/HeaderNav";
+import { UsageIndicator } from "@/components/UsageIndicator";
 import { UserMenu } from "@/components/UserMenu";
 
 import { Providers } from "./providers";
@@ -27,7 +28,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 </Link>
                 <HeaderNav />
               </div>
-              <UserMenu />
+              <div className="flex items-center gap-4">
+                <UsageIndicator />
+                <UserMenu />
+              </div>
             </div>
           </header>
           <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-8">
