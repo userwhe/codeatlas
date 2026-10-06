@@ -49,6 +49,12 @@ const redirectOnUnauthenticated: Middleware = {
 export const api = createClient<paths>({ baseUrl: "", credentials: "same-origin" });
 api.use(redirectOnUnauthenticated);
 
+/** A message to show for a failed request: the API's message, or a generic network message. */
+export function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  return "Could not reach CodeAtlas. Check your connection and try again.";
+}
+
 /**
  * Returns the response data, or throws an `ApiError` for an error response.
  * Use it in TanStack Query functions: `queryFn: () => unwrap(api.GET("/v1/me"))`.

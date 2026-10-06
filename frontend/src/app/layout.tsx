@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { HeaderNav } from "@/components/HeaderNav";
 import { UserMenu } from "@/components/UserMenu";
 
 import { Providers } from "./providers";
@@ -20,9 +21,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <Providers>
           <header className="border-b border-zinc-200 dark:border-zinc-800">
             <div className="mx-auto flex h-14 w-full max-w-5xl items-center justify-between px-4">
-              <Link href="/" className="text-lg font-semibold">
-                CodeAtlas
-              </Link>
+              <div className="flex items-center gap-6">
+                <Link href="/" className="text-lg font-semibold">
+                  CodeAtlas
+                </Link>
+                <HeaderNav />
+              </div>
               <UserMenu />
             </div>
           </header>
