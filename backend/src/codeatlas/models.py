@@ -307,3 +307,75 @@ class DocChunk(Base):
     text: Mapped[str] = mapped_column(Text)
     search_vector: Mapped[Any] = mapped_column(TSVECTOR)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSIONS))
+
+
+# --- Jobs and progress --------------------------------------------------------------------------
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "repository_id"],
+            ["repositories.workspace_id", "repositories.id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(_in("kind", JOB_KINDS), name="kind"),
+        CheckConstraint(_in("status", JOB_STATUSES), name="status"),
+        Index(
+            "uq_jobs_one_running_per_kind",
+            "workspace_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+        ),
+        Index(
+            "uq_jobs_active_dedupe_key",
+            "workspace_id",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text(_in("status", ACTIVE_JOB_STATUSES)),
+        ),
+        Index("ix_jobs_claim", "status", "run_after"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(Text)
+    repository_id: Mapped[uuid.UUID]
+    analysis_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE", use_alter=True)
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    dedupe_key: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default="queued")
+    attempt: Mapped[int] = mapped_column(default=0)
+    max_attempts: Mapped[int] = mapped_column(default=3)
+    fencing_token: Mapped[int] = mapped_column(BigInteger, default=0)
+    lease_expires_at: Mapped[datetime | None]
+    run_after: Mapped[datetime] = mapped_column(server_default=func.now())
+    deadline_at: Mapped[datetime | None]
+    error_code: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    error_retryable: Mapped[bool | None]
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    started_at: Mapped[datetime | None]
+    finished_at: Mapped[datetime | None]
+
+
+class JobEvent(Base):
+    __tablename__ = "job_events"
+    __table_args__ = (CheckConstraint(_in("event_type", JOB_EVENT_TYPES), name="event_type"),)
+
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    seq: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(Text)
+    stage: Mapped[str | None] = mapped_column(Text)
+    message: Mapped[str] = mapped_column(Text, default="")
+    data: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
