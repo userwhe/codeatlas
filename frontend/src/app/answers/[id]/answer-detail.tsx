@@ -305,6 +305,9 @@ function CitationItem({
           >
             {open ? "Hide excerpt" : "Show excerpt"}
           </button>
+          <Link href={citation.view_url} className="font-medium underline">
+            Open in file browser
+          </Link>
         </span>
       </div>
       <div

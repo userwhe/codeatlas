@@ -87,3 +87,23 @@ export function useCoverage(snapshotId: string) {
     getNextPageParam: (page) => page.next_cursor,
   });
 }
+
+export type SnapshotListItem = components["schemas"]["SnapshotOut"];
+
+/** The ready indexed versions of a repository, newest first, one page per "Load more". */
+export function useSnapshots(repositoryId: string) {
+  return useInfiniteQuery({
+    queryKey: ["repositories", repositoryId, "snapshots"],
+    queryFn: ({ pageParam }) =>
+      unwrap(
+        api.GET("/v1/repositories/{repository_id}/snapshots", {
+          params: {
+            path: { repository_id: repositoryId },
+            query: { cursor: pageParam, limit: 100 },
+          },
+        }),
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.next_cursor,
+  });
+}

@@ -9,6 +9,7 @@ import { AskQuestionForm } from "@/components/AskQuestionForm";
 import { CoverageTable } from "@/components/CoverageTable";
 import { JobProgress } from "@/components/JobProgress";
 import { RepositoryStateBadge } from "@/components/RepositoryStateBadge";
+import { SnapshotSelector } from "@/components/SnapshotSelector";
 import { api, ApiError, errorMessage, unwrap } from "@/lib/api/client";
 import { useMe } from "@/lib/api/me";
 import {
@@ -93,7 +94,7 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
         ) : (
           <p className="text-sm text-zinc-600 dark:text-zinc-400">No indexed version yet.</p>
         )}
-        {/* Snapshot selector: added with browsing and search. */}
+        <SnapshotSelector repositoryId={repository.id} />
       </Section>
 
       <Section title="Questions">
