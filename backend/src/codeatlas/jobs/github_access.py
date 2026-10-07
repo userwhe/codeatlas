@@ -118,8 +118,9 @@ def disclosure_not_accepted() -> JobFailure:
     # Retrying cannot help until the owner accepts the disclosure (FR-017, research R8).
     return JobFailure(
         "external_processing_not_accepted",
-        "The repository became private. Accept that selected source excerpts may be sent to an "
-        "external model provider, then re-index it.",
+        "The repository became private. Accept that selected source excerpts, pull request "
+        "descriptions, and pull request changes may be sent to an external model provider, then "
+        "re-index it.",
         permanent=True,
     )
 

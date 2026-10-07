@@ -18,6 +18,7 @@ from codeatlas.github.gateway import GitHubGateway, PullRequest
 from codeatlas.jobs.queue import enqueue
 from codeatlas.models import AnalysisRun, EvidenceItem, Job, Repository, User, Workspace
 from codeatlas.review import pulls
+from codeatlas.review.prompt import PROMPT_VERSION
 from codeatlas.workspace import repositories as repos
 from codeatlas.workspace.access import ensure_readable
 from codeatlas.workspace.audit import record
@@ -25,8 +26,6 @@ from codeatlas.workspace.quotas import reserve_review
 
 ANALYSIS_KIND = pulls.ANALYSIS_KIND
 JOB_KIND = "review_pull_request"
-# The review prompt's version (research R7).
-PROMPT_VERSION = "review-v1"
 RUN_TTL = timedelta(days=30)
 MAX_BODY_CHARS = 8000
 # The pull request fields returned with a review; the stored description is for the prompt only.

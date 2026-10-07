@@ -43,6 +43,7 @@ POLL_INTERVAL = timedelta(seconds=1)
 HANDLER_MODULES = (
     "codeatlas.ingestion.pipeline",
     "codeatlas.qa.answer",
+    "codeatlas.review.review",
     "codeatlas.jobs.maintenance",
 )
 INTERNAL_ERROR_MESSAGE = "Something went wrong while running this job."
