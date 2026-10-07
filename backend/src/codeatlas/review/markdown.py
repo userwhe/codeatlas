@@ -8,9 +8,10 @@ labeled as candidates (FR-012).
 
 Review text can repeat words from an untrusted pull request, and the copy is meant to be pasted
 into GitHub by hand, so text that would act there is neutralized: `@name` mentions and `#123`
-references are wrapped in inline code, and raw HTML is escaped. Inline code in the text is kept
-as it is, since GitHub shows it literally. Each text becomes one line, so it cannot start a new
-block such as a heading.
+references are wrapped in inline code, raw HTML is escaped, and link and image brackets are
+escaped, so a link or image in the text shows as written. Only the server's citation links stay
+links. Inline code in the text is kept as it is, since GitHub shows it literally. Each text
+becomes one line, so it cannot start a new block such as a heading or a code fence.
 """
 
 import html
@@ -44,8 +45,12 @@ _CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 # What GitHub turns into a notification or a cross-reference: `@user` and `@org/team` mentions
 # (not the `@` of an email address), and `#123` and `GH-123` references, also after `owner/repo`.
 _ACTIVE = re.compile(r"(?<![\w@])@[A-Za-z0-9][\w-]*(?:/[\w.-]+)?|#\d+\b|\bGH-\d+\b", re.IGNORECASE)
-# Text that would open a block if it began a line: a heading, quote, list item, rule, or table.
-_BLOCK_START = re.compile(r"^(?:[#>+*=|-]|\d+[.)])")
+# Text that would open a block if it began a line: a heading, quote, list item, rule, table, or
+# a `~~~` code fence. A backtick fence cannot start, as stray backticks are escaped.
+_BLOCK_START = re.compile(r"^(?:[#>+*=|~-]|\d+[.)])")
+# Characters escaped with a backslash outside inline code: a backslash, a backtick, which could
+# open or close a code span, and the brackets of links, images, and link reference definitions.
+_ESCAPED = re.compile(r"[\\`\[\]]")
 
 
 def render(
@@ -273,8 +278,9 @@ def _text(value: str) -> str:
 
 def _plain(text: str) -> str:
     """Text outside inline code: HTML escaped, backslashes and stray backticks escaped so they
-    cannot open or close a code span, then mentions and references wrapped in inline code."""
-    escaped = html.escape(text, quote=False).replace("\\", "\\\\").replace("`", "\\`")
+    cannot open or close a code span, brackets escaped so no link or image is live, then
+    mentions and references wrapped in inline code."""
+    escaped = _ESCAPED.sub(lambda match: f"\\{match.group(0)}", html.escape(text, quote=False))
     return _ACTIVE.sub(lambda match: f"`{match.group(0)}`", escaped)
 
 

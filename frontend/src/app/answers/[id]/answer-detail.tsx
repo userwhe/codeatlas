@@ -283,9 +283,11 @@ function lineText({ start_line, end_line }: Citation) {
 }
 
 /** The excerpt's lines, without the empty line after a final line break. */
-function excerptLines(excerpt: string) {
+function excerptLines({ excerpt, start_line, end_line }: Citation) {
+  // Excerpts are the cited lines joined by line breaks, so a final empty element is a blank last
+  // line of the range, not a trailing break; drop it only when there is one element too many.
   const lines = excerpt.split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length > end_line - start_line + 1 && lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
 
@@ -334,7 +336,7 @@ function CitationItem({
         hidden={!open}
         className="border-t border-zinc-200 py-2 dark:border-zinc-800"
       >
-        <CodeLines lines={excerptLines(citation.excerpt)} firstLine={citation.start_line} />
+        <CodeLines lines={excerptLines(citation)} firstLine={citation.start_line} />
       </div>
     </li>
   );

@@ -23,6 +23,7 @@ from codeatlas.review.diff import (
 TOP = "octo-org-review-app-abc1234"
 LIMITS = {"max_files": 100, "max_changed_lines": 2000, "max_hunks": 80, "max_diff_tokens": 40_000}
 TEXT = b'"""Text helpers."""\n\n\ndef slug(name: str) -> str:\n    return name.lower()\n'
+SECRET = b"API_TOKEN=review-diff-not-a-secret\n"
 
 
 def _settings(**overrides: int) -> Settings:
@@ -173,6 +174,37 @@ def test_hint_whose_paths_do_not_match_the_trees_is_ignored() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("base", "head", "hints"),
+    [
+        ({".env": SECRET}, {"notes.txt": SECRET}, {}),
+        ({".env": SECRET}, {"notes.txt": SECRET + b"MORE=1\n"}, {"notes.txt": ".env"}),
+        ({"notes.txt": SECRET}, {".env": SECRET}, {}),
+        ({"notes.txt": SECRET}, {".env": SECRET + b"MORE=1\n"}, {".env": "notes.txt"}),
+    ],
+    ids=["moved-away", "renamed-away-and-edited", "moved-in", "renamed-in-and-edited"],
+)
+def test_a_credential_file_is_never_paired_as_a_rename(
+    base: dict[str, bytes], head: dict[str, bytes], hints: dict[str, str]
+) -> None:
+    changes = _diff(base, head, hints)
+
+    # A removal and an addition, so the credential file keeps its own coverage entry. The file
+    # with the ordinary name holds the credential file's content, so it is withheld too.
+    assert {path: (file.change, file.previous_path) for path, file in changes.items()} == {
+        path: ("removed" if path in base else "added", None) for path in (".env", "notes.txt")
+    }
+    for file in changes.values():
+        assert (file.reason, file.reviewable) == ("credential_file", False)
+        assert (file.before, file.after, file.hunks) == (None, None, ())
+    selection = select_for_review(list(changes.values()), **LIMITS)
+    assert selection.reviewed == ()
+    assert [(entry.path, entry.reason) for entry in selection.coverage] == [
+        (".env", "credential_file"),
+        ("notes.txt", "credential_file"),
+    ]
+
+
 # Classification ------------------------------------------------------------------------------
 
 
@@ -278,6 +310,23 @@ def test_pure_removal_has_no_after_range() -> None:
 
     assert (hunk.before_start, hunk.before_end) == (1, 3)
     assert (hunk.after_start, hunk.after_end) == (None, None)
+
+
+def test_an_empty_file_and_a_final_newline_change_are_reviewable_without_hunks() -> None:
+    base = {"app/main.py": b"x = 1", "app/legacy.py": b""}
+    head = {"app/main.py": b"x = 1\n", "pkg/__init__.py": b""}
+
+    changes = _diff(base, head)
+
+    assert {path: (file.change, file.before, file.after) for path, file in changes.items()} == {
+        "app/legacy.py": ("removed", "", None),
+        "app/main.py": ("modified", "x = 1", "x = 1\n"),
+        "pkg/__init__.py": ("added", None, ""),
+    }
+    for file in changes.values():
+        assert file.reviewable and file.hunks == ()
+    selection = select_for_review(list(changes.values()), **LIMITS)
+    assert [file.path for file in selection.reviewed] == sorted(changes)
 
 
 # Test paths ----------------------------------------------------------------------------------
@@ -440,6 +489,22 @@ def test_a_file_renamed_without_changes_is_reviewed_with_no_hunks() -> None:
         "renamed",
     )
     assert (entry.reviewed, entry.reason, entry.additions, entry.deletions) == (True, None, 0, 0)
+
+
+def test_a_directory_entry_is_not_reviewed_with_a_file_of_the_same_path() -> None:
+    # The merge base has a file under the excluded `build/`; the head has a file named `build`.
+    head = _tree({"build": b"make all\n"})
+    base = _tree(
+        {"build/out.js": b"x = 1;\n"}, skip=lambda path, digest: head.hashes.get(path) == digest
+    )
+
+    selection = select_for_review(changed_files(head, base, {}), **LIMITS)
+
+    assert [(file.path, file.entry_type) for file in selection.reviewed] == [("build", "file")]
+    assert [(e.path, e.entry_type, e.reviewed, e.reason) for e in selection.coverage] == [
+        ("build", "file", True, None),
+        ("build", "directory", False, "excluded_directory"),
+    ]
 
 
 def test_coverage_lists_excluded_files_with_their_reasons() -> None:

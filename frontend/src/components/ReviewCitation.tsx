@@ -24,10 +24,14 @@ const SOURCE_LABELS: Partial<Record<Citation["source_type"], string>> = {
   test: "Candidate test (not run by CodeAtlas)",
 };
 
-/** The excerpt's lines, without the empty line after a final line break. */
-function excerptLines(excerpt: string) {
+/**
+ * The excerpt's lines, one per cited line. Review excerpts join the cited lines with "\n" and
+ * have no final line break, so a last cited line that is blank is kept. Only an empty element
+ * beyond the cited range, after a final line break, is dropped.
+ */
+function excerptLines({ excerpt, start_line, end_line }: Citation) {
   const lines = excerpt.split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length > end_line - start_line + 1 && lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
 
@@ -98,7 +102,7 @@ export function ReviewCitation({
         className="border-t border-zinc-200 py-2 dark:border-zinc-800"
       >
         <p className="px-3 pb-2 text-xs text-zinc-500">{sideLabel(citation)}</p>
-        <CodeLines lines={excerptLines(citation.excerpt)} firstLine={citation.start_line} />
+        <CodeLines lines={excerptLines(citation)} firstLine={citation.start_line} />
       </div>
     </li>
   );

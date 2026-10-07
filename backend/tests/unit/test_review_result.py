@@ -285,6 +285,64 @@ def test_a_renamed_file_with_edits_gets_no_rule_point() -> None:
     assert rule_summary_points(_select([edited])) == []
 
 
+def test_each_reviewed_file_without_changed_lines_gets_a_rule_summary_point() -> None:
+    def no_lines(
+        path: str, change: str, before: str | None, after: str | None, previous: str | None = None
+    ) -> ChangedFile:
+        return ChangedFile(
+            path=path,
+            previous_path=previous,
+            change=change,  # type: ignore[arg-type]
+            language="python",
+            before=before,
+            after=after,
+        )
+
+    files = [
+        no_lines("pkg/__init__.py", "added", None, ""),
+        no_lines("app/legacy.py", "removed", "", None),
+        no_lines("app/main.py", "modified", "x = 1", "x = 1\n"),
+        no_lines("app/strings.py", "renamed", "x = 1\n", "x = 1", "app/text.py"),
+        # The merge-base side was binary, so it had no lines.
+        no_lines("app/data.py", "modified", None, ""),
+    ]
+
+    points = rule_summary_points(_select(files))
+
+    assert [(point_area, point["change"], point["text"]) for point_area, point in points] == [
+        ("app", "modified", "Changed `app/data.py`, which is now empty"),
+        ("app", "removed", "Removed `app/legacy.py`, which was empty"),
+        ("app", "modified", "Changed only the final newline of `app/main.py`"),
+        (
+            "app",
+            "renamed",
+            "Renamed `app/text.py` to `app/strings.py`, changing only the final newline",
+        ),
+        ("pkg", "added", "Added `pkg/__init__.py`, which is empty"),
+    ]
+    assert all((point["evidence_ids"], point["origin"]) == ([], "rule") for _, point in points)
+
+
+def test_checklist_paths_escaped_as_in_the_prompt_name_the_reviewed_file() -> None:
+    selection = _select([_file("docs/Q&A.md")])
+    output = ReviewOutput(
+        overview="o",
+        summary_points=[_point("p", "E1")],
+        checklist=[
+            _check("Escaped.", paths=["docs/Q&amp;A.md"]),
+            _check("As is.", paths=["docs/Q&A.md", "docs/Q&amp;A.md"]),
+        ],
+    )
+
+    result = _result(output, selection)
+
+    assert result["checklist"] == [
+        {"text": "Escaped.", "paths": ["docs/Q&A.md"], "risk_ids": []},
+        {"text": "As is.", "paths": ["docs/Q&A.md"], "risk_ids": []},
+    ]
+    assert result["omitted_items"] == 0
+
+
 def test_result_shape_and_coverage() -> None:
     selection = _select(
         [

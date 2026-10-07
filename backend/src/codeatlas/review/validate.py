@@ -32,7 +32,8 @@ def validate(
 ) -> list[str]:
     """Return the problems with `output`; an empty list means it can be published as is.
 
-    `reviewed_paths` are the paths of the reviewed files, at both sides of a rename.
+    `reviewed_paths` are the names a checklist item may give the reviewed files, at both sides
+    of a rename: each path as it is and as the prompt escapes it.
     """
     if output is None:
         return [f"The output did not match the response schema ({parse_error or 'invalid'})."]

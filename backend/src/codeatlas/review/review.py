@@ -52,7 +52,12 @@ from codeatlas.review.context import (
 )
 from codeatlas.review.diff import Skip, Tree, changed_files, read_tree, select_for_review
 from codeatlas.review.evidence import ReviewEvidence, ReviewEvidenceSet, build_evidence
-from codeatlas.review.prompt import SYSTEM_PROMPT, build_repair_content, build_user_content
+from codeatlas.review.prompt import (
+    SYSTEM_PROMPT,
+    build_repair_content,
+    build_user_content,
+    reviewed_path_names,
+)
 from codeatlas.review.result import build_result, nothing_to_review_result, rule_risks
 from codeatlas.review.schema import ReviewOutput
 from codeatlas.review.validate import drop_invalid, usable, validate
@@ -235,9 +240,12 @@ def analyze(
     `validating_citations` stages. Provider errors and a review that fails validation raise
     `JobFailure`.
 
-    The model is not called when nothing can be reviewed (`nothing_to_review`), or when every
-    reviewed file was renamed without changes: no line changed, so there is nothing to cite, and
-    the rule points and risks, with the changed and candidate tests, are the whole review.
+    The model is not called when nothing can be reviewed (`nothing_to_review`), or when no
+    reviewed file has a changed line: each was renamed without changes, is empty, or changed
+    only its final newline. There is nothing to cite, so the rule points and risks, with the
+    changed and candidate tests, are the whole review. Files were reviewed, so its state is
+    `reviewed` and, unlike `nothing_to_review`, it keeps its place in the daily allowance
+    (FR-020 covers only a pull request with nothing reviewable).
     """
     report = progress or _no_progress
     report(
@@ -276,7 +284,8 @@ def analyze(
     modules = module_names(selection.reviewed)
     candidates = candidate_tests(head, changed, names, modules)
     if not any(file.hunks for file in selection.reviewed):
-        # The overview is model text, so it stays empty; the server writes the rule points.
+        # The overview is model text, so it stays empty; the server writes a rule point per
+        # reviewed file.
         rules_only = ReviewOutput.model_construct(overview="", summary_points=[], risks=[])
         return Analysis(
             result=build_result(
@@ -309,9 +318,8 @@ def analyze(
         evidence=evidence,
         candidate_tests=candidates,
     )
-    reviewed_paths = frozenset(
-        path for file in selection.reviewed for path in (file.path, file.previous_path) if path
-    )
+    # The paths as they are and as the prompt's tags escape them; the result keeps the paths.
+    reviewed_paths = frozenset(reviewed_path_names(selection))
     output = _generate(model, content, evidence, reviewed_paths, usage, report)
     result = build_result(
         output,

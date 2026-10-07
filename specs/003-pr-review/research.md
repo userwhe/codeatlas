@@ -228,8 +228,13 @@ persist. GitHub's own pull request diff is the change from the merge base to the
   - A file is taken whole while the totals stay within 100 files, 2,000 changed lines (added plus
     removed), 80 hunks, and 40,000 estimated tokens of diff text, at 3.5 characters per token as
     in 001 R10. The hunk limit keeps the evidence within 200 labels (R6).
-  - A file renamed without changes has no hunks. It is reviewed, and the server writes its summary
-    point (R8).
+  - A file with no changed lines has no hunks: a rename without changes, an empty added or
+    removed file, or a change to the final newline only. It is reviewed, and the server writes its
+    summary point (R8).
+  - A credential file is never paired as a rename, by content or by GitHub's hint. If its content
+    matches another changed file, that file is also recorded as `credential_file` and its content
+    is never read. A move of `.env` to `notes.txt` therefore gives two credential risks, and
+    neither file reaches the model (found in code review).
   - A file that does not fit is recorded with the reason `review_limit`. Later, smaller files may
     still fit.
   - The review is partial when any file has the reason `review_limit`.
@@ -434,9 +439,11 @@ without discarding a whole review for one bad citation.
   numbered `R1` to `Rn`. Checklist risk indexes are mapped to these identifiers.
 - **Summary areas** (FR-006): each point is grouped by the first two directory segments of its
   first cited path, for example `backend/src`, or `(root)` for top-level files.
-- **Rename points** (FR-006): for each file renamed without changes, the server adds a summary
-  point with `change` `renamed`, the text "Renamed `old` to `new` without changes", no citations,
-  and `origin` `rule`. Model points keep `origin` `model`.
+- **Rule summary points** (FR-006): for each reviewed file without changed lines, the server adds
+  a summary point with no citations and `origin` `rule`, for example "Renamed `old` to `new`
+  without changes", "Added `x`, which is empty", or "Changed only the final newline of `x`".
+  Model points keep `origin` `model`. A review whose files all lack changed lines makes no model
+  call, stays `reviewed`, and is not refunded, because its files were reviewed.
 - **Credential-file risks** (FR-019): one per changed credential file, with severity `high`,
   category `security`, basis `observed`, a fixed explanation and check, and the path but no
   citation.

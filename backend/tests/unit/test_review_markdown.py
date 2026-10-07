@@ -247,6 +247,42 @@ def test_text_that_would_start_a_block_stays_a_paragraph() -> None:
     assert "\n\\# Not a heading &gt; nor a quote\n" in markdown
 
 
+def test_links_and_images_in_review_text_stay_literal() -> None:
+    result = _result(
+        overview="[Approve here](https://evil.example) ![x](https://tracker.example/p.png) "
+        "and `[kept](as code)`."
+    )
+    result["risks"][0]["title"] = "See [the docs][1]"
+    result["checklist"][0]["text"] = "[1]: https://evil.example"
+
+    markdown = render(_run(), result, CITATIONS)
+
+    assert (
+        "\\[Approve here\\](https://evil.example) !\\[x\\](https://tracker.example/p.png) "
+        "and `[kept](as code)`."
+    ) in markdown
+    assert "#### R1: See \\[the docs\\]\\[1\\]" in markdown
+    assert "- [ ] \\[1\\]: https://evil.example (" in markdown
+    for live in ("[Approve here](", "![x](", "[the docs][1]", "[1]:"):
+        assert live not in markdown
+    # Citation links are built by the server from stored evidence, so they stay links.
+    for citation in CITATIONS:
+        assert f"[{citation['label']}]({citation['github_url']})" in markdown
+
+
+def test_text_that_would_open_a_tilde_fence_stays_a_paragraph() -> None:
+    result = _result(overview="~~~ python")
+    result["risks"][0]["explanation"] = "~~~"
+    result["tests"]["new_cases"][0]["behavior"] = "~~~ok"
+
+    markdown = render(_run(), result, CITATIONS)
+
+    assert "\n\\~~~ python\n" in markdown
+    assert "\n\\~~~\n" in markdown
+    assert "\n- \\~~~ok Where:" in markdown
+    assert not any(line.startswith(("~~~", "- ~~~")) for line in markdown.splitlines())
+
+
 def test_nothing_to_review_names_rule_risks_and_coverage() -> None:
     files = [
         {

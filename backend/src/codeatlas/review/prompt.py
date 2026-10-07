@@ -110,6 +110,22 @@ def _attribute(value: str) -> str:
     return escape_attribute(value, quote=True)
 
 
+def reviewed_path_names(selection: Selection) -> dict[str, str]:
+    """Each name a checklist item may give a reviewed file, at either side of a rename, to its
+    path.
+
+    A `<change>` tag escapes its paths as attribute values, and the model is told to name a file
+    as the tag gives its path, so `docs/Q&A.md` may come back as `docs/Q&amp;A.md`. Both names
+    are accepted, and a path as it is wins over another path's escaped form.
+    """
+    paths = [
+        path for file in selection.reviewed for path in (file.path, file.previous_path) if path
+    ]
+    names = {_attribute(path): path for path in paths}
+    names.update((path, path) for path in paths)
+    return names
+
+
 def build_user_content(
     *,
     title: str,

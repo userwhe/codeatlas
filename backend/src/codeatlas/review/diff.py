@@ -214,6 +214,10 @@ def changed_files(head: Tree, base: Tree, rename_hints: Mapping[str, str]) -> li
     hint counts only when the new path was added and the old one removed. Remaining added and
     removed paths with identical content are paired as renames too. Changes under an excluded
     directory become one entry per directory.
+
+    A credential file is never paired, so it keeps its own entry and rule risk (FR-019). The
+    file that a hint or identical content pairs with it holds its content, so that file is
+    withheld as a credential file too: its content is never read.
     """
     added = sorted(head.hashes.keys() - base.hashes.keys())
     removed = sorted(base.hashes.keys() - head.hashes.keys())
@@ -222,7 +226,14 @@ def changed_files(head: Tree, base: Tree, rename_hints: Mapping[str, str]) -> li
         for path in head.hashes.keys() & base.hashes.keys()
         if _differs(head.hashes[path], base.hashes[path])
     )
-    renames = _renames(added, removed, head, base, rename_hints)
+    withheld = _credential_moves(added, removed, head, base, rename_hints)
+    renames = _renames(
+        [path for path in added if path not in withheld],
+        [path for path in removed if path not in withheld],
+        head,
+        base,
+        rename_hints,
+    )
     previous = set(renames.values())
 
     changes: list[tuple[str, str | None, ChangeKind]] = [
@@ -242,6 +253,10 @@ def changed_files(head: Tree, base: Tree, rename_hints: Mapping[str, str]) -> li
         directory = _excluded_directory(tree, path)
         if directory is not None:
             directories.setdefault(directory, []).append(change)
+        elif path in withheld:
+            entries.append(
+                ChangedFile(path=path, previous_path=None, change=change, reason="credential_file")
+            )
         else:
             entries.append(_changed_file(head, base, path, previous_path, change))
     for directory, kinds in directories.items():
@@ -296,22 +311,28 @@ def select_for_review(
             hunks += len(file.hunks)
             tokens += diff_tokens(file)
 
-    taken = {file.path for file in reviewed}
+    # By path and entry type: an excluded directory at one commit can share its path with a
+    # reviewed file at the other.
+    taken = {(file.path, file.entry_type) for file in reviewed}
     coverage = tuple(
-        CoverageEntry(
-            path=file.path,
-            previous_path=file.previous_path,
-            change=file.change,
-            entry_type=file.entry_type,
-            count=file.count,
-            additions=file.additions,
-            deletions=file.deletions,
-            reviewed=file.path in taken,
-            reason=None if file.path in taken else (file.reason or "review_limit"),
-        )
+        _coverage_entry(file, reviewed=(file.path, file.entry_type) in taken)
         for file in sorted(files, key=lambda file: file.path)
     )
     return Selection(reviewed=tuple(reviewed), coverage=coverage)
+
+
+def _coverage_entry(file: ChangedFile, *, reviewed: bool) -> CoverageEntry:
+    return CoverageEntry(
+        path=file.path,
+        previous_path=file.previous_path,
+        change=file.change,
+        entry_type=file.entry_type,
+        count=file.count,
+        additions=file.additions,
+        deletions=file.deletions,
+        reviewed=reviewed,
+        reason=None if reviewed else (file.reason or "review_limit"),
+    )
 
 
 def _differs(head: bytes | None, base: bytes | None) -> bool:
@@ -319,6 +340,37 @@ def _differs(head: bytes | None, base: bytes | None) -> bool:
     if head is None and base is None:
         return False
     return head != base
+
+
+def _credential_moves(
+    added: Sequence[str],
+    removed: Sequence[str],
+    head: Tree,
+    base: Tree,
+    hints: Mapping[str, str],
+) -> set[str]:
+    """Added and removed credential files, and the paths a hint or identical content pairs
+    with one of them."""
+    credentials = {path for path in added if _is_credential(head, path)}
+    credentials.update(path for path in removed if _is_credential(base, path))
+    if not credentials:
+        return set()
+    added_paths, removed_paths = set(added), set(removed)
+    moves = set(credentials)
+    for new, old in hints.items():
+        if new in added_paths and old in removed_paths and {new, old} & credentials:
+            moves.update((new, old))
+    digests = {
+        head.hashes[path] if path in added_paths else base.hashes[path] for path in credentials
+    } - {None, _EMPTY_SHA256}
+    moves.update(path for path in added if head.hashes[path] in digests)
+    moves.update(path for path in removed if base.hashes[path] in digests)
+    return moves
+
+
+def _is_credential(tree: Tree, path: str) -> bool:
+    entry = tree.skipped.get(path)
+    return entry is not None and entry.reason == "credential_file"
 
 
 def _renames(

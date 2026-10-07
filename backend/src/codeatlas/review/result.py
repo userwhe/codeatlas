@@ -6,13 +6,15 @@ severity shown, or `none`, and the review is partial when any changed file hit t
 Summary points are grouped by area, the first two directories of their first cited path.
 
 Two kinds of item come from rules, not the model: a `high` `security` risk per changed
-credential file, which names the file but never cites its content, and a summary point per file
-renamed without changes, which has no changed lines to cite.
+credential file, which names the file but never cites its content, and a summary point per
+reviewed file without changed lines to cite: renamed without changes, empty, or changed only in
+its final newline.
 
-Checklist items keep only the reviewed files they name, and their risk indexes, positions in the
-model's risk list, become the numbered risk identifiers. An item left with neither is dropped and
-counted in `omitted_items`. The changed and candidate tests come from the change and the head
-tree (research R5), never from the model; a candidate cites its test excerpt when it has one.
+Checklist items keep only the reviewed files they name, as the paths themselves even when named
+as the prompt escapes them, and their risk indexes, positions in the model's risk list, become
+the numbered risk identifiers. An item left with neither is dropped and counted in
+`omitted_items`. The changed and candidate tests come from the change and the head tree
+(research R5), never from the model; a candidate cites its test excerpt when it has one.
 
 The result is the JSON stored in `analysis_runs.result` (data-model.md, "Review result shape").
 """
@@ -22,8 +24,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from codeatlas.review.context import CandidateTest, ChangedTest
-from codeatlas.review.diff import Selection
+from codeatlas.review.diff import ChangedFile, Selection
 from codeatlas.review.evidence import ReviewEvidence
+from codeatlas.review.prompt import reviewed_path_names
 from codeatlas.review.schema import ChangeKind, ChecklistItem, NewTestCase, ReviewOutput, RiskOut
 
 ROOT_AREA = "(root)"
@@ -36,9 +39,10 @@ CREDENTIAL_TITLES: dict[ChangeKind, str] = {
     "removed": "Credential file removed",
 }
 CREDENTIAL_EXPLANATION = (
-    "The pull request changes a file whose name marks it as holding credentials. Its content "
-    "was not read, sent to the model, or shown, so this review cannot tell what it holds. A "
-    "secret committed to a repository stays in its history even after the file is removed."
+    "The pull request changes a file whose name marks it as holding credentials, or a file "
+    "moved to or from such a name. Its content was not read, sent to the model, or shown, so "
+    "this review cannot tell what it holds. A secret committed to a repository stays in its "
+    "history even after the file is removed."
 )
 CREDENTIAL_CHECK = (
     "Confirm that the file holds no real secret and should be in the repository. Rotate any "
@@ -74,20 +78,42 @@ def rule_risks(selection: Selection) -> list[dict[str, Any]]:
 
 
 def rule_summary_points(selection: Selection) -> list[AreaPoint]:
-    """A point, with its area, per reviewed file renamed without changes (FR-006)."""
+    """A point, with its area, per reviewed file without changed lines (FR-006): renamed
+    without changes, empty, or changed only in its final newline. There are no lines to cite."""
     return [
         (
             area(file.path),
             {
-                "change": "renamed",
-                "text": f"Renamed `{file.previous_path}` to `{file.path}` without changes",
+                "change": file.change,
+                "text": _no_lines_text(file),
                 "evidence_ids": [],
                 "origin": "rule",
             },
         )
         for file in selection.reviewed
-        if file.change == "renamed" and not file.hunks
+        if not file.hunks
     ]
+
+
+def _no_lines_text(file: ChangedFile) -> str:
+    """The rule text for a reviewed file whose two sides have the same lines: it was renamed
+    without changes, only its final newline changed, or it has no lines and its other side is
+    absent or not text."""
+    content = file.before if file.change == "removed" else file.after
+    if file.change == "renamed":
+        renamed = f"Renamed `{file.previous_path}` to `{file.path}`"
+        if file.before == file.after:
+            return f"{renamed} without changes"
+        if content:
+            return f"{renamed}, changing only the final newline"
+        return f"{renamed}, which is now empty"
+    if file.change == "added":
+        return f"Added `{file.path}`, which is empty"
+    if file.change == "removed":
+        return f"Removed `{file.path}`, which was empty"
+    if content:
+        return f"Changed only the final newline of `{file.path}`"
+    return f"Changed `{file.path}`, which is now empty"
 
 
 def build_result(
@@ -125,9 +151,7 @@ def build_result(
     risk_ids = {
         position: f"R{number}" for number, position in order if position < len(output.risks)
     }
-    reviewed = {
-        path for file in selection.reviewed for path in (file.path, file.previous_path) if path
-    }
+    reviewed = reviewed_path_names(selection)
     checklist = [
         item
         for item in (_checklist_item(item, reviewed, risk_ids) for item in output.checklist)
@@ -199,11 +223,12 @@ def _severity_order(risks: Sequence[Mapping[str, Any]]) -> list[tuple[int, int]]
 
 
 def _checklist_item(
-    item: ChecklistItem, reviewed: set[str], risk_ids: Mapping[int, str]
+    item: ChecklistItem, reviewed: Mapping[str, str], risk_ids: Mapping[int, str]
 ) -> dict[str, Any]:
-    """The item with only the reviewed paths it names and the identifiers of its risks, each
-    once, in the model's order."""
-    paths = [path for path in dict.fromkeys(item.paths) if path in reviewed]
+    """The item with only the reviewed paths it names, as the paths themselves, and the
+    identifiers of its risks, each once, in the model's order. `reviewed` maps each name of a
+    reviewed file to its path."""
+    paths = list(dict.fromkeys(reviewed[path] for path in item.paths if path in reviewed))
     ids = dict.fromkeys(risk_ids[index] for index in item.risk_indexes if index in risk_ids)
     return {"text": item.text, "paths": paths, "risk_ids": list(ids)}
 

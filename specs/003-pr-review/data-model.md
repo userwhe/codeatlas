@@ -102,7 +102,8 @@ Rules:
 - `risks` are ordered by severity and numbered `R1` to `Rn`. `origin` is `model` or `rule`. A
   `rule` risk names a credential file in `path` and has no `evidence_ids` (FR-019).
 - `summary[].area` is derived by the server from the first cited path (research R8). A summary
-  point's `origin` is `model`, or `rule` for a file renamed without changes. A `rule` point has no
+  point's `origin` is `model`, or `rule` for a reviewed file without changed lines (a rename
+  without changes, an empty file, or a final-newline change). A `rule` point has no
   `evidence_ids`, and its area comes from the new path.
 - Every `evidence_ids` entry names a stored evidence item of the run. Model summary points and
   new test cases cite at least one `change` item.

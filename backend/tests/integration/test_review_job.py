@@ -5,6 +5,8 @@ tests/fixtures/pull-requests/README.md), and runs the worker against the fake Gi
 the fake model, in `ok` mode unless a test sets `fake_review_model_mode`.
 """
 
+import dataclasses
+import html
 import io
 import re
 import tarfile
@@ -451,6 +453,129 @@ def test_files_renamed_without_changes_need_no_model_call(
     ]
     assert result["coverage"]["reviewed_files"] == 1
     assert result["omitted_items"] == 0
+
+
+def _analyze(
+    settings: Settings,
+    model: FakeAnswerModel,
+    base: Mapping[str, bytes],
+    head: Mapping[str, bytes],
+    hints: Mapping[str, str] | None = None,
+) -> review.Analysis:
+    head_tree = _tree(head)
+    base_tree = _tree(base, skip=lambda path, digest: head_tree.hashes.get(path) == digest)
+    return review.analyze(
+        {"title": "A small change", "body": ""},
+        head_tree,
+        base_tree,
+        hints or {},
+        head_sha=commit_sha(REVIEW_APP_ID, "pr-1"),
+        merge_base_sha=MERGE_BASE,
+        settings=settings,
+        model=model,
+    )
+
+
+@pytest.mark.parametrize(
+    ("base", "head", "point"),
+    [
+        (
+            {},
+            {"pkg/__init__.py": b""},
+            {"change": "added", "text": "Added `pkg/__init__.py`, which is empty"},
+        ),
+        (
+            {"app/main.py": b"x = 1"},
+            {"app/main.py": b"x = 1\n"},
+            {"change": "modified", "text": "Changed only the final newline of `app/main.py`"},
+        ),
+    ],
+    ids=["empty-file", "final-newline"],
+)
+def test_files_without_changed_lines_need_no_model_call_and_get_a_summary(
+    settings: Settings, base: dict[str, bytes], head: dict[str, bytes], point: dict[str, str]
+) -> None:
+    model = FakeAnswerModel(settings)
+
+    analysis = _analyze(settings, model, base, head)
+
+    # The file was reviewed, but no line changed, so the server writes the summary point.
+    assert model.calls == 0
+    assert analysis.quality_state == "reviewed"
+    assert analysis.result["coverage"]["reviewed_files"] == 1
+    [path] = head
+    assert analysis.result["summary"] == [
+        {
+            "area": path.split("/")[0],
+            "points": [{**point, "evidence_ids": [], "origin": "rule"}],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("hints", "edit"),
+    [({}, b""), ({"notes.txt": ".env"}, b"MORE=review-fixture-not-a-secret\n")],
+    ids=["moved", "renamed-and-edited"],
+)
+def test_a_credential_file_moved_to_an_ordinary_name_is_reported_and_never_sent(
+    settings: Settings, hints: dict[str, str], edit: bytes
+) -> None:
+    secret = b"API_TOKEN=review-fixture-not-a-secret\n"
+    main = b"def main() -> int:\n    return 0\n"
+    model = FakeAnswerModel(settings)
+
+    analysis = _analyze(
+        settings,
+        model,
+        {".env": secret, "app/main.py": main},
+        {"notes.txt": secret + edit, "app/main.py": main.replace(b"0", b"1")},
+        hints,
+    )
+
+    assert model.calls == 1
+    rule_risks = [risk for risk in analysis.result["risks"] if risk["origin"] == "rule"]
+    assert [(risk["path"], risk["title"], risk["severity"]) for risk in rule_risks] == [
+        (".env", "Credential file removed", "high"),
+        ("notes.txt", "Credential file added", "high"),
+    ]
+    coverage = {entry["path"]: entry for entry in analysis.result["coverage"]["files"]}
+    assert {path: (entry["change"], entry["reason"]) for path, entry in coverage.items()} == {
+        ".env": ("removed", "credential_file"),
+        "notes.txt": ("added", "credential_file"),
+        "app/main.py": ("modified", None),
+    }
+    assert "not-a-secret" not in model.prompts[0]
+    assert all("not-a-secret" not in item.excerpt for item in analysis.evidence)
+
+
+class _EscapedPathModel(FakeAnswerModel):
+    """Names checklist paths as the `<change>` tags spell them, escaped, as a real model may."""
+
+    def review(self, *, system: str, user_content: str) -> ReviewResult:
+        result = super().review(system=system, user_content=user_content)
+        assert result.output is not None
+        checklist = [
+            item.model_copy(update={"paths": [html.escape(path) for path in item.paths]})
+            for item in result.output.checklist
+        ]
+        output = result.output.model_copy(update={"checklist": checklist})
+        return dataclasses.replace(result, output=output)
+
+
+def test_a_checklist_path_named_as_its_escaped_change_tag_is_kept(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without a risk, the checklist item refers only to the path.
+    monkeypatch.setattr(settings, "fake_review_model_mode", "no_risks")
+    model = _EscapedPathModel(settings)
+
+    analysis = _analyze(settings, model, {}, {"docs/Q&A.md": b"# Questions\n\nAsk away.\n"})
+
+    assert 'path="docs/Q&amp;A.md"' in model.prompts[0]
+    assert model.calls == 1  # the escaped path is valid, so no repair is needed
+    [item] = analysis.result["checklist"]
+    assert item["paths"] == ["docs/Q&A.md"]
+    assert analysis.result["omitted_items"] == 0
 
 
 # Model outcomes -----------------------------------------------------------------------------
