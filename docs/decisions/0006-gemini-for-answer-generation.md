@@ -4,7 +4,8 @@
 - **Date**: 2026-10-05
 - **Supersedes**: The generation decision in ADR 0004. The embedding and citation decisions in
   ADR 0004 still apply.
-- **Scope**: `specs/001-repository-qa`
+- **Scope**: `specs/001-repository-qa`, and pull request reviews in `specs/003-pr-review`, which use
+  the same model and settings with their own prompt and output schema
 
 ## Context
 
