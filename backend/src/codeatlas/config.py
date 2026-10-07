@@ -15,6 +15,9 @@ Environment = Literal["development", "test", "production"]
 ThinkingLevel = Literal["low", "medium", "high"]
 FakeAnswerModelMode = Literal["ok", "unavailable", "insufficient", "invalid_citations", "refusal"]
 FakeEmbedderMode = Literal["ok", "unavailable"]
+FakeReviewModelMode = Literal[
+    "ok", "no_risks", "partly_invalid", "unavailable", "invalid_citations", "refusal"
+]
 
 
 class Settings(BaseSettings):
@@ -51,6 +54,8 @@ class Settings(BaseSettings):
     daily_question_limit: int = 20
     fake_answer_model_mode: FakeAnswerModelMode = "ok"
     fake_embedder_mode: FakeEmbedderMode = "ok"
+    daily_review_limit: int = 10
+    fake_review_model_mode: FakeReviewModelMode = "ok"
 
     # Spec limits (FR-009), counted over eligible files after filtering (research R7).
     max_repositories_per_workspace: int = 10
@@ -61,9 +66,16 @@ class Settings(BaseSettings):
     # Extraction safety caps against archive bombs (research R7); not user-facing.
     max_archive_members: int = 100_000
     max_archive_bytes: int = 1 * GIB
+    # Pull request review limits (specs/003-pr-review FR-018, research R4 and R6).
+    review_max_files: int = 100
+    review_max_changed_lines: int = 2000
+    review_max_hunks: int = 80
+    review_max_diff_tokens: int = 40_000
+    review_max_input_tokens: int = 48_000
 
     indexing_deadline: timedelta = timedelta(minutes=15)
     question_deadline: timedelta = timedelta(minutes=3)
+    review_deadline: timedelta = timedelta(minutes=5)
     session_ttl: timedelta = timedelta(days=7)
 
     @model_validator(mode="after")

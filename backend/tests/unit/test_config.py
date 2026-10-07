@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 from pydantic import ValidationError
 
@@ -47,3 +49,20 @@ def test_webhook_secret_optional_in_development() -> None:
         CODEATLAS_ENV="production", CODEATLAS_FAKE_EXTERNALS=False, GITHUB_WEBHOOK_SECRET="s3cret"
     )
     assert production.github_webhook_secret == "s3cret"
+
+
+def test_review_defaults() -> None:
+    settings = make()
+    assert settings.daily_review_limit == 10
+    assert settings.review_deadline == timedelta(minutes=5)
+    assert settings.review_max_files == 100
+    assert settings.review_max_changed_lines == 2000
+    assert settings.review_max_hunks == 80
+    assert settings.review_max_diff_tokens == 40_000
+    assert settings.review_max_input_tokens == 48_000
+    assert settings.fake_review_model_mode == "ok"
+
+
+def test_unknown_fake_review_mode_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        make(fake_review_model_mode="sometimes")
