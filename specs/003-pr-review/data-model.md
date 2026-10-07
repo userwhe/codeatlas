@@ -31,7 +31,7 @@ changes below. No table is added.
 | pull_request | New. jsonb, copied at submission: `title`, `body` (at most 8,000 characters), `author`, `base_ref`, `head_ref`, `head_repository`, `is_fork`, `draft`, `html_url`, `additions`, `deletions`, `changed_files` |
 | quality_state | Adds `reviewed` and `nothing_to_review` |
 | result | For reviews, the validated review (shape below) |
-| prompt_version | `review-v1` for reviews |
+| prompt_version | The review prompt's version, for example `review-v2` |
 
 Constraints:
 

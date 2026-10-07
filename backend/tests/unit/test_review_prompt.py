@@ -1,4 +1,4 @@
-"""The review-v1 prompt: delimited, escaped, labeled user content (research R7)."""
+"""The review prompt: delimited, escaped, labeled user content (research R7)."""
 
 import io
 import re
@@ -92,7 +92,7 @@ def _seeded_defect(**extra_head: bytes) -> tuple[Selection, ReviewEvidenceSet]:
 
 
 def test_prompt_version() -> None:
-    assert PROMPT_VERSION == "review-v1"
+    assert PROMPT_VERSION == "review-v2"
 
 
 def test_system_prompt_states_the_rules() -> None:
@@ -116,6 +116,11 @@ def test_system_prompt_states_the_rules() -> None:
     assert '"possible"' in SYSTEM_PROMPT
     for field in ('"checklist"', '"risk_indexes"', '"new_test_cases"', "<candidate_tests>"):
         assert field in SYSTEM_PROMPT
+    flat = " ".join(SYSTEM_PROMPT.split())
+    # A risk in removed lines cites the merge-base side, where those lines are shown.
+    assert 'When a risk comes from lines the change removes, cite the hunk\'s "before" id' in flat
+    # Unchanged lines outside the hunks, such as imports, exist but are not shown.
+    assert "Do not report a risk that rests only on code you cannot see" in flat
     # The response schema leaves list lengths out (research R7), so the prompt states them.
     assert (
         "at most 15 summary points, 12 risks, 12 checklist items, and 8 new test cases"

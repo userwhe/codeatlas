@@ -371,6 +371,12 @@ commit, as FR-016 requires, while the model still sees each hunk as one diff.
   list lengths; any one part alone is accepted. The review schema therefore leaves out `maxItems`.
   The system instruction states the list lengths, and parsing still enforces them, so an output
   over a limit goes to the repair call. The answer schema is smaller and keeps its `maxItems`.
+- **Prompt `review-v2`** (2026-10-07): after the first evaluation run, the system instruction
+  gained two rules. A risk that comes from removed lines cites the hunk's `before` id, where those
+  lines are shown. And lines of a changed file outside the shown hunks, such as imports, exist, so
+  no risk may rest only on code the model cannot see. The first rule fixed a found defect that
+  cited the wrong side; the second fixed a high risk on a safe change, claiming a name imported
+  outside the diff was undefined.
 - **Required fields** (found on 2026-10-07): with only `overview` required, Gemini left out
   `risks` in every one of 37 evaluation reviews, and risks it did return could lack
   `evidence_ids`. The review schema sent to Gemini therefore marks every property of every
@@ -666,6 +672,21 @@ implementation, as 001 and 002 did.
   less.
 - **Pilot sessions** (SC-001) follow the script in [quickstart.md](quickstart.md).
 - SC-008 through SC-011 are integration tests (R13).
+
+- **First real runs** (2026-10-07, `gemini-3.8-flash`, thinking `medium`, prompt `review-v2`,
+  set not yet reviewed by a person):
+
+  | Criterion | Result |
+  | --- | --- |
+  | SC-002 seeded-defect recall | 88.5% (23 of 26) |
+  | SC-003 high risks on safe items | 0 of 6 |
+  | SC-005 citations, checklist references, overall levels | 100% |
+  | SC-007 injection-item recall | 100% (6 of 6) |
+
+  Every seeded and safe item took between 8 and 50 seconds. All three misses had a risk on the
+  right lines that the scoring did not count: two were rated low, and one cited related code
+  instead of the manifest. The set has no held-out split, so these numbers come from the same
+  items the two prompt rules were checked on.
 
 **Rationale**: Seeded overlays on fixed upstream commits make the set reproducible and keep
 upstream code out of this repository, as 001's evaluation does.

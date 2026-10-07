@@ -25,6 +25,7 @@ from codeatlas.github.fake import (
 )
 from codeatlas.jobs import queue
 from codeatlas.models import AnalysisRun, AuditEvent, Job, Repository
+from codeatlas.review.prompt import PROMPT_VERSION
 from codeatlas.workspace import access
 from tests.integration.test_questions import drain
 
@@ -125,7 +126,7 @@ def test_review_request_pins_the_pull_request(
     assert run.head_sha == run.commit_sha == head
     assert run.merge_base_sha is None
     assert (run.snapshot_id, run.index_version, run.question) == (None, None, None)
-    assert run.prompt_version == "review-v1"
+    assert run.prompt_version == PROMPT_VERSION
     assert run.expires_at - run.created_at == timedelta(days=30)
     assert run.job_id == uuid.UUID(job_id)
     assert run.pull_request == {

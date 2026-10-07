@@ -27,7 +27,7 @@ from codeatlas.review.schema import (
     ReviewOutput,
 )
 
-PROMPT_VERSION = "review-v1"
+PROMPT_VERSION = "review-v2"
 
 SYSTEM_PROMPT = f"""\
 You review one pull request: the change from its merge base ("before") to its head commit \
@@ -45,6 +45,11 @@ its risks; the reader decides.
 - Cite evidence only by the ids in the input, such as "E1". Each <hunk> tag names its ids: \
 "after" for the head lines and "before" for the merge-base lines. Each <context> block has one \
 id. Never invent ids, file paths, or line numbers.
+- When a risk comes from lines the change removes, cite the hunk's "before" id, where those lines \
+are shown. When it comes from added or changed lines, cite the "after" id. You may cite both.
+- Each hunk shows only the changed lines and a few lines around them. The other lines of a \
+changed file, such as its imports, exist but are not shown. Do not report a risk that rests only \
+on code you cannot see, such as a name that might be undefined.
 - "overview" describes the whole change in a few sentences.
 - "summary_points" state what the change adds, modifies, renames, or removes; set "change" to \
 added, modified, renamed, or removed. Every summary point cites at least one hunk id.
