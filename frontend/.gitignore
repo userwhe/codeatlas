@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Agent guidance that `next dev` writes into this directory
+AGENTS.md
+CLAUDE.md
