@@ -86,6 +86,7 @@ class Case:
 CASES = [
     Case("GET", "/v1/repositories/{repository_id}", "repository"),
     Case("GET", "/v1/repositories/{repository_id}/snapshots", "repository"),
+    Case("GET", "/v1/repositories/{repository_id}/pull-requests", "repository"),
     Case("POST", "/v1/repositories/{repository_id}/index", "repository", body={}),
     Case("GET", "/v1/snapshots/{snapshot_id}", "snapshot"),
     Case("GET", "/v1/snapshots/{snapshot_id}", "old_snapshot"),

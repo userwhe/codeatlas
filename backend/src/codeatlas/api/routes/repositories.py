@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from codeatlas.api.deps import CurrentUser, CurrentWorkspace, DbSession, RequestId
 from codeatlas.api.pagination import PageParams, next_cursor, page_params
 from codeatlas.api.routes.jobs import JobError, JobTrigger, job_error
+from codeatlas.github.gateway import get_gateway
 from codeatlas.models import Job, Repository, Snapshot
+from codeatlas.review import pulls
 from codeatlas.workspace import access
 from codeatlas.workspace import repositories as repos
 from codeatlas.workspace.idempotency import run_idempotent
@@ -134,6 +136,64 @@ class SnapshotOut(BaseModel):
 class SnapshotPage(BaseModel):
     items: list[SnapshotOut]
     next_cursor: str | None
+
+
+class PullRequestReviewOut(BaseModel):
+    """The newest review of a pull request (specs/003-pr-review/data-model.md)."""
+
+    run_id: uuid.UUID
+    # `current` or `outdated` compare the reviewed head with the pull request's current head.
+    state: pulls.ReviewState
+    head_sha: str
+    created_at: datetime
+
+
+class PullRequestOut(BaseModel):
+    """An open pull request, read live from GitHub. `title` and `author` are untrusted text."""
+
+    number: int
+    title: str
+    author: str
+    draft: bool
+    base_ref: str
+    head_ref: str
+    head_sha: str
+    is_fork: bool
+    updated_at: datetime
+    html_url: str
+    # Null when the pull request has never been reviewed.
+    review: PullRequestReviewOut | None
+
+
+class PullRequestPage(BaseModel):
+    items: list[PullRequestOut]
+    next_cursor: str | None
+
+
+def _pull_request_out(item: pulls.OpenPullRequest) -> PullRequestOut:
+    pull, review = item.pull_request, item.review
+    return PullRequestOut(
+        number=pull.number,
+        title=pull.title,
+        author=pull.author,
+        draft=pull.draft,
+        base_ref=pull.base_ref,
+        head_ref=pull.head_ref,
+        head_sha=pull.head_sha,
+        is_fork=pull.is_fork,
+        updated_at=pull.updated_at,
+        html_url=pull.html_url,
+        review=(
+            PullRequestReviewOut(
+                run_id=review.run_id,
+                state=review.state,
+                head_sha=review.head_sha,
+                created_at=review.created_at,
+            )
+            if review is not None
+            else None
+        ),
+    )
 
 
 def _latest_job_out(job: Job) -> LatestJobOut:
@@ -389,4 +449,31 @@ def list_snapshots(
             for snapshot, trigger in window
         ],
         next_cursor=next_cursor(page, len(window), len(rows) > page.limit),
+    )
+
+
+@router.get("/repositories/{repository_id}/pull-requests")
+def list_pull_requests(
+    repository_id: uuid.UUID,
+    db: DbSession,
+    user: CurrentUser,
+    workspace: CurrentWorkspace,
+    request_id: RequestId,
+    cursor: Annotated[str | None, Query()] = None,
+) -> PullRequestPage:
+    # Open pull requests, live from GitHub with the user's token (specs/003-pr-review, R1).
+    listed = pulls.list_open(
+        db,
+        user=user,
+        workspace=workspace,
+        repository_id=repository_id,
+        cursor=cursor,
+        gateway=get_gateway(),
+        request_id=request_id,
+    )
+    # Keeps a user token that was refreshed for the call.
+    db.commit()
+    return PullRequestPage(
+        items=[_pull_request_out(item) for item in listed.items],
+        next_cursor=listed.next_cursor,
     )

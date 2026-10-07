@@ -363,7 +363,7 @@ fixture lines.
 
 ### Tests for User Story 1 ⚠️ (write first, confirm they fail)
 
-- [ ] T020 [P] [US1] Unit tests for diffs and selection in backend/tests/unit/test_review_diff.py.
+- [X] T020 [P] [US1] Unit tests for diffs and selection in backend/tests/unit/test_review_diff.py.
   Build trees from in-memory archives:
   - **`read_tree`**:
     - keeps every member's hash and filter outcome;
@@ -392,7 +392,7 @@ fixture lines.
     - a file that does not fit gets `review_limit`, and a later smaller file still fits;
     - `partial` is set;
     - with no eligible change, nothing is selected.
-- [ ] T021 [P] [US1] Unit tests for related code in backend/tests/unit/test_review_context.py:
+- [X] T021 [P] [US1] Unit tests for related code in backend/tests/unit/test_review_context.py:
   - **`changed_declarations`**:
     - a function containing an added line (head side) is changed;
     - a removed function (merge-base side) is changed;
@@ -406,7 +406,7 @@ fixture lines.
     - skips files the pull request changed;
     - ranks files by the number of distinct names, then by path, keeping the top 8;
     - each excerpt covers 6 lines around the first two matches, merged, at most 40 lines.
-- [ ] T022 [P] [US1] Unit tests for evidence in backend/tests/unit/test_review_evidence.py:
+- [X] T022 [P] [US1] Unit tests for evidence in backend/tests/unit/test_review_evidence.py:
   - Labels run `E1..En`: change hunks first (by file, then hunk; the after item before the before
     item), then related code.
   - A hunk with additions gets an `after` item at the head commit; a hunk with removals gets a
@@ -417,7 +417,7 @@ fixture lines.
     items are never dropped.
   - At most 200 labels: with 80 two-sided hunks, 8 related-code items, and 5 test items, the
     count is 173.
-- [ ] T023 [P] [US1] Unit tests for the prompt in backend/tests/unit/test_review_prompt.py:
+- [X] T023 [P] [US1] Unit tests for the prompt in backend/tests/unit/test_review_prompt.py:
   - The user content has, in order:
     - `<pull_request>` with the title and description;
     - one `<change path=... change=...>` block per reviewed file, each hunk annotated with its
@@ -430,7 +430,7 @@ fixture lines.
     defines the severities, the categories, and observed versus possible.
   - The repair content appends the previous output and the errors.
   - `PROMPT_VERSION == "review-v1"`.
-- [ ] T024 [P] [US1] Unit tests for validation in backend/tests/unit/test_review_validation.py,
+- [X] T024 [P] [US1] Unit tests for validation in backend/tests/unit/test_review_validation.py,
   and for the result in backend/tests/unit/test_review_result.py:
   - **Validation**:
     - unknown labels are reported;
@@ -451,7 +451,7 @@ fixture lines.
       without changes", `change` `renamed`, `origin` `rule`, no evidence IDs), grouped by its new
       path;
     - the `nothing_to_review` result has empty text sections and the rule risks only.
-- [ ] T025 [P] [US1] Integration tests for the pull request list in
+- [X] T025 [P] [US1] Integration tests for the pull request list in
   backend/tests/integration/test_pull_request_list.py, with octocat connected to 2011:
   - `GET /v1/repositories/{id}/pull-requests` returns #1 to #8 with the contract fields. #8 has
     `draft: true`, and `review` is null.
@@ -471,7 +471,7 @@ fixture lines.
     - revoked authorization returns 401 `github_sign_in_required`;
     - `set_unavailable(True)` returns 502 `github_unavailable`.
   - hubot receives 404 for octocat's repository ID.
-- [ ] T026 [P] [US1] Integration tests for submission in
+- [X] T026 [P] [US1] Integration tests for submission in
   backend/tests/integration/test_review_submit.py:
   - `POST /v1/analysis-runs` with `{"kind": "pull_request_review", "target": {"pull_request_number": 1}}`
     returns 202, with `run_id`, `job_id`, and `head_sha`.
@@ -534,7 +534,7 @@ fixture lines.
   - **Disconnect**: disconnecting while the job runs cancels it, and nothing is published.
   - **Fencing**: an attempt interrupted after `generating_review` publishes exactly once, as in
     `test_interrupted_answer_publishes_exactly_once`.
-- [ ] T028 [P] [US1] Integration tests for access and retention in
+- [X] T028 [P] [US1] Integration tests for access and retention in
   backend/tests/integration/test_review_access.py:
   - **Access lost**:
     - `GET /v1/analysis-runs/{id}` and the review list return 403 `repository_access_lost`
@@ -547,7 +547,7 @@ fixture lines.
 
 ### Implementation for User Story 1
 
-- [ ] T029 [US1] Implement backend/src/codeatlas/review/diff.py, a pure module (research R4):
+- [X] T029 [US1] Implement backend/src/codeatlas/review/diff.py, a pure module (research R4):
   - `Tree`, `read_tree(stream, settings, *, skip=None) -> Tree`: `skip(path, sha256)` drops a
     member before `filter_members`, except the root `.gitattributes`. The tree keeps every
     member's hash and every filter outcome.
@@ -558,21 +558,21 @@ fixture lines.
     `select_for_review(files, *, max_files, max_changed_lines, max_hunks, max_diff_tokens) -> Selection`.
     A file renamed without changes is selected with no hunks.
   - Make T020 pass.
-- [ ] T030 [US1] Implement backend/src/codeatlas/review/context.py, a pure module (research R5),
+- [X] T030 [US1] Implement backend/src/codeatlas/review/context.py, a pure module (research R5),
   after T029, whose `ChangedFile` and `Tree` it takes: `changed_declarations`, `module_names`, and
   `related_code`, using 001's `parse_declarations` from
   backend/src/codeatlas/ingestion/parse.py. Make T021 pass.
-- [ ] T031 [US1] Implement backend/src/codeatlas/review/evidence.py, a pure module (research R6),
+- [X] T031 [US1] Implement backend/src/codeatlas/review/evidence.py, a pure module (research R6),
   after T029 and T030:
   - `ReviewEvidence(label, source_type, side, path, commit_sha, start_line, end_line, excerpt, excerpt_sha256, rank)`.
   - `build_evidence(selection, related, *, head_sha, merge_base_sha, max_input_tokens)`. It
     returns the items and, for each hunk, its labels.
   - Make T022 pass.
-- [ ] T032 [P] [US1] After T031, whose hunk labels it renders, implement
+- [X] T032 [P] [US1] After T031, whose hunk labels it renders, implement
   backend/src/codeatlas/review/prompt.py: `PROMPT_VERSION`,
   `SYSTEM_PROMPT`, `build_user_content(...)`, and `build_repair_content(...)`, reusing the
   escaping helper from backend/src/codeatlas/qa/prompt.py. Make T023 pass.
-- [ ] T033 [P] [US1] After T031, whose `Selection` and `ReviewEvidence` types they take,
+- [X] T033 [P] [US1] After T031, whose `Selection` and `ReviewEvidence` types they take,
   implement the two pure modules for the model output (research R7, R8). Make T024 pass.
   - backend/src/codeatlas/review/validate.py:
     `validate(output, *, labels, change_labels, parse_error) -> list[str]`, plus
@@ -582,7 +582,7 @@ fixture lines.
     - `build_result(output, *, evidence, selection, rule_risks, omitted_items) -> dict`, with the
       shape in data-model.md;
     - `nothing_to_review_result(selection, rule_risks) -> dict`.
-- [ ] T034 [P] [US1] Implement the pull request list in backend/src/codeatlas/review/pulls.py. It
+- [X] T034 [P] [US1] Implement the pull request list in backend/src/codeatlas/review/pulls.py. It
   does not depend on T029 to T033:
   - `list_open(db, *, user, workspace, repository_id, cursor, gateway, request_id)`:
     - scope and readability through `repos.get_scoped(..., content=True)`;
@@ -597,7 +597,7 @@ fixture lines.
       query over `ix_analysis_runs_pull_request`, and derives `state` as in data-model.md.
   - The cursor is the next GitHub page number, encoded opaquely.
   - Make T025 pass, together with T037.
-- [ ] T035 [P] [US1] Implement submission and reads in backend/src/codeatlas/review/runs.py
+- [X] T035 [P] [US1] Implement submission and reads in backend/src/codeatlas/review/runs.py
   (research R9, steps 1 to 3, 4, 6, and 7; reuse comes in US3). It does not depend on T029 to
   T034:
   - `submit(db, *, user, workspace, repository_id, pull_request_number, request_id, gateway) -> tuple[AnalysisRun, Job]`:
