@@ -343,8 +343,7 @@ new review covers the new head commit.
   GitHub. Owners of existing installations must approve this added read-only access.
 - An owner's earlier acceptance of the external processing disclosure covers reviews, because pull
   request changes are repository content.
-- Each review is independent. Follow-up questions about a review are out of scope; a later
-  conversational assistant handles them.
+- Each review is independent. Follow-up questions about a review are out of scope.
 - Reviews are written in English.
 - Posting a review to GitHub is out of scope. A later feature adds GitHub write actions, each shown
   as a draft and run only after the user explicitly confirms it.
