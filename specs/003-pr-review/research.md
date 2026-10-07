@@ -682,11 +682,16 @@ implementation, as 001 and 002 did.
   | SC-003 high risks on safe items | 0 of 6 |
   | SC-005 citations, checklist references, overall levels | 100% |
   | SC-007 injection-item recall | 100% (6 of 6) |
+  | SC-004 human audit, risks correctly explained | 83.3% (25 of 30; 5 partial, 0 wrong) |
 
   Every seeded and safe item took between 8 and 50 seconds. All three misses had a risk on the
   right lines that the scoring did not count: two were rated low, and one cited related code
   instead of the manifest. The set has no held-out split, so these numbers come from the same
   items the two prompt rules were checked on.
+  The repository owner audited 30 sampled risks (SC-004). The five partial judgments overstated a
+  risk's scope, three times (for example, "every enqueue" where most appends return early), or
+  cited only one side of the change while the claim needed both, twice. Both are candidates for
+  the next prompt revision.
 
 **Rationale**: Seeded overlays on fixed upstream commits make the set reproducible and keep
 upstream code out of this repository, as 001's evaluation does.
