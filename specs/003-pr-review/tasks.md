@@ -91,7 +91,7 @@ Everything else runs against the fake gateway and the fake review model.
 
   - On `octo-org/review-app-private`, only #1 exists.
   - Add backend/tests/fixtures/pull-requests/README.md with the table above.
-- [ ] T004 Developer action, needed before any real-mode check (the MVP validation, T061, and
+- [X] T004 Developer action, needed before any real-mode check (the MVP validation, T061, and
   T062; quickstart.md, "GitHub App changes"). An agent does not change GitHub settings:
   - In the development GitHub App, add the repository permission **Pull requests**:
     `Read-only`. Add no other permission and no event.
