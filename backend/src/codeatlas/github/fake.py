@@ -1,42 +1,58 @@
 """In-memory GitHub gateway for tests and local development (research R13).
 
-Serves the fixture repositories in `backend/tests/fixtures/repos/` plus a few generated ones.
-Tests change its state through the switch methods and read `calls`; `reset_fake_github()` undoes
-all of that. The switches:
+Serves the fixture repositories in `backend/tests/fixtures/repos/` plus a few generated ones, and
+the pull requests in `backend/tests/fixtures/pull-requests/` on the review fixtures. Tests change
+its state through the switch methods and read `calls`; `reset_fake_github()` undoes all of that.
+The switches:
 
-- commits: `push` (also named `advance`) and `rename_default_branch`;
+- commits: `push` (also named `advance`), `rename_default_branch`, and `drop_commit`;
+- pull requests: `push_to_pull_request`, `close_pull_request`, `merge_pull_request`,
+  `set_pull_request_body`, and `unrelated_history`;
 - repositories: `rename` and `make_private`;
-- installations: `uninstall`, `reinstall`, `suspend`, and `remove_from_installation`;
+- installations: `uninstall`, `reinstall`, `suspend`, `remove_from_installation`, and
+  `withhold_permission`;
 - users: `revoke_access` and `revoke_authorization`;
 - GitHub itself: `set_unavailable`.
 """
 
+import difflib
 import hashlib
 import io
+import json
 import tarfile
 from collections import Counter
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import IO
+from functools import partial
+from pathlib import Path, PurePosixPath
+from typing import IO, Literal
 from urllib.parse import quote
 
 from codeatlas.config import get_settings
 from codeatlas.github.gateway import (
+    PULL_REQUEST_PAGE_SIZE,
     BranchNotFound,
+    CommitUnavailable,
+    Comparison,
     GitHubAccessDenied,
     GitHubNotFound,
     GitHubRepository,
     GitHubUnavailable,
     GitHubUser,
+    InstallationPermissions,
+    NoCommonHistory,
+    PullRequest,
+    PullRequestPage,
+    PullRequestState,
     RepositoryEmpty,
     UserAuthorizationInvalid,
     UserTokens,
 )
 
 FIXTURE_REPOS_DIR = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "repos"
+FIXTURE_PULL_REQUESTS_DIR = FIXTURE_REPOS_DIR.parent / "pull-requests"
 
 SAMPLE_APP_ID = 2001
 SAMPLE_APP_PRIVATE_ID = 2002
@@ -48,12 +64,17 @@ EMPTY_ID = 2007
 SOLO_ID = 2008
 HUBOT_TOOLS_ID = 2009
 PUBLIC_UNINSTALLED_ID = 2010
+REVIEW_APP_ID = 2011
+REVIEW_APP_PRIVATE_ID = 2012
 
 # The second sample-app commit renames one Python file and deletes another.
 SAMPLE_APP_RENAMED = ("app/utils/strings.py", "app/utils/text.py")
 SAMPLE_APP_DELETED = "app/reports.py"
 
 VENDORED_FILE_COUNT = 6000
+# The pull requests on the private review fixture, by overlay directory; the public one has all.
+REVIEW_APP_PRIVATE_PULL_REQUESTS = ("seeded-defect",)
+LARGE_PULL_REQUEST_FILES = 120
 ACCESS_PREFIX = "fake-token-"
 REFRESH_PREFIX = "fake-refresh-"
 CODE_PREFIX = "fake:"
@@ -73,10 +94,15 @@ _USERS = {
     ),
 }
 _INITIAL_INSTALLATIONS = {"octo-org": 5001, "octocat": 5002, "hubot": 5003}
+_ORGANIZATIONS = frozenset({"octo-org"})
 _INITIAL_ACCESS = {
-    "octocat": {2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008},
-    "hubot": {SAMPLE_APP_ID, HUBOT_TOOLS_ID},
+    "octocat": {2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2011, 2012},
+    "hubot": {SAMPLE_APP_ID, HUBOT_TOOLS_ID, REVIEW_APP_ID},
 }
+# The App's repository permissions. An installation has them all unless one is withheld.
+_PERMISSIONS = ("contents", "metadata", "pull_requests")
+_COMPARE_FILE_LIMIT = 300
+_COMMENT_PREFIXES = {".py": "# ", ".ts": "// ", ".tsx": "// "}
 _FIRST_REINSTALL_ID = 5101
 _FIXED_MTIME = 1_700_000_000
 
@@ -93,13 +119,16 @@ def commit_sha(github_repository_id: int, commit_name: str) -> str:
 # Archive contents ---------------------------------------------------------------------------
 
 
-def _fixture_tree(name: str) -> dict[str, bytes]:
-    root = FIXTURE_REPOS_DIR / name
+def _read_tree(root: Path) -> dict[str, bytes]:
     return {
         path.relative_to(root).as_posix(): path.read_bytes()
         for path in sorted(root.rglob("*"))
         if path.is_file() and path.name != ".DS_Store" and "__pycache__" not in path.parts
     }
+
+
+def _fixture_tree(name: str) -> dict[str, bytes]:
+    return _read_tree(FIXTURE_REPOS_DIR / name)
 
 
 def _sample_app_initial() -> dict[str, bytes]:
@@ -204,6 +233,158 @@ def _unsafe_paths_archive(top: str) -> bytes:
     return buffer.getvalue()
 
 
+# Pull requests ------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Overlay:
+    """A pull request fixture: `pull-request.json`, plus `files/` written over the base tree."""
+
+    directory: Path
+    number: int
+    title: str
+    body: str
+    author: str
+    draft: bool
+    state: Literal["open", "closed"]
+    base_ref: str
+    head_ref: str
+    head_owner: str | None
+    remove: tuple[str, ...]
+    rename: dict[str, str]
+    """Old path to new path."""
+    updated_at: datetime
+
+    @classmethod
+    def load(cls, name: str) -> "_Overlay":
+        directory = FIXTURE_PULL_REQUESTS_DIR / name
+        data = json.loads((directory / "pull-request.json").read_text())
+        if data["state"] not in ("open", "closed"):
+            raise ValueError(f"{name}: state must be open or closed")
+        return cls(
+            directory=directory,
+            number=int(data["number"]),
+            title=str(data["title"]),
+            body=str(data["body"]),
+            author=str(data["author"]),
+            draft=bool(data["draft"]),
+            state=data["state"],
+            base_ref=str(data["base_ref"]),
+            head_ref=str(data["head_ref"]),
+            head_owner=data["head_owner"],
+            remove=tuple(data["remove"]),
+            rename=dict(data["rename"]),
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+        )
+
+    def files(self) -> dict[str, bytes]:
+        """What the pull request writes over the base tree: `files/` plus injected files."""
+        files_dir = self.directory / "files"
+        files = _read_tree(files_dir) if files_dir.is_dir() else {}
+        files.update(_injected_overlay_files(self.directory.name))
+        return files
+
+
+def _injected_overlay_files(name: str) -> dict[str, bytes]:
+    # Kept out of the fixture directory, as for sample-app: credential names are git-ignored and
+    # flagged by secret scanners, and 120 generated files would only add bulk.
+    if name == "credential-and-binary":
+        return {".env": b"API_TOKEN=review-fixture-not-a-secret\n"}
+    if name == "large":
+        return {
+            f"data/generated_{index:03d}.py": _data_module(index)
+            for index in range(1, LARGE_PULL_REQUEST_FILES + 1)
+        }
+    return {}
+
+
+def _data_module(index: int) -> bytes:
+    """25 lines of Python."""
+    lines = [f'"""Data module {index} for the load tests."""', ""]
+    lines += [f"VALUE_{line:02d} = {index * 100 + line}" for line in range(23)]
+    return "".join(f"{line}\n" for line in lines).encode()
+
+
+def _pull_request_tree(
+    base: Mapping[str, bytes], overlay: _Overlay, revision: int
+) -> dict[str, bytes]:
+    """The head tree: `rename` applied, the overlay written over it, then `remove` deleted.
+
+    Each revision after the first appends one line to the overlay's first text file.
+    """
+    files = dict(base)
+    for old, new in overlay.rename.items():
+        files[new] = files.pop(old)
+    written = overlay.files()
+    files.update(written)
+    for path in overlay.remove:
+        del files[path]
+    if revision > 1:
+        text_paths = [path for path in sorted(written) if b"\0" not in written[path]]
+        path = text_paths[0] if text_paths else "README.md"
+        content = files.get(path, b"")
+        if content and not content.endswith(b"\n"):
+            content += b"\n"
+        prefix = _COMMENT_PREFIXES.get(PurePosixPath(path).suffix, "")
+        lines = "".join(f"{prefix}Revision {number}.\n" for number in range(2, revision + 1))
+        files[path] = content + lines.encode()
+    return files
+
+
+def _diff_stats(
+    base: Mapping[str, bytes], head: Mapping[str, bytes], renamed: Mapping[str, str]
+) -> tuple[int, int, int]:
+    """Lines added, lines removed, and files changed, as GitHub counts them: a renamed file
+    (`renamed` maps new paths to old ones) counts once, and a binary file adds no lines.
+    """
+    pairs = [(old, new) for new, old in renamed.items()]
+    moved = {path for pair in pairs for path in pair}
+    pairs += [
+        (path, path)
+        for path in sorted(base.keys() | head.keys())
+        if path not in moved and base.get(path) != head.get(path)
+    ]
+    additions = deletions = 0
+    for old, new in pairs:
+        before, after = base.get(old, b""), head.get(new, b"")
+        if b"\0" in before or b"\0" in after:
+            continue
+        matcher = difflib.SequenceMatcher(
+            a=before.splitlines(), b=after.splitlines(), autojunk=False
+        )
+        for tag, before_start, before_end, after_start, after_end in matcher.get_opcodes():
+            if tag != "equal":
+                deletions += before_end - before_start
+                additions += after_end - after_start
+    return additions, deletions, len(pairs)
+
+
+@dataclass
+class _PullRequest:
+    overlay: _Overlay
+    base_tree: Callable[[], dict[str, bytes]]
+    """The tree of `initial`, the commit every pull request branches from."""
+    state: PullRequestState
+    body: str
+    updated_at: datetime
+    revision: int = 1
+    """1 for the overlay's head commit `pr-<number>`; each push adds `pr-<number>-<revision>`."""
+    unrelated: bool = False
+    """Set by `unrelated_history`: the head shares no ancestor with the base."""
+
+    @property
+    def renamed(self) -> dict[str, str]:
+        """The rename hint as GitHub's comparison gives it: new path to previous path."""
+        return {new: old for old, new in self.overlay.rename.items()}
+
+    def commit_name(self, revision: int) -> str:
+        number = self.overlay.number
+        return f"pr-{number}" if revision == 1 else f"pr-{number}-{revision}"
+
+    def tree(self, revision: int) -> dict[str, bytes]:
+        return _pull_request_tree(self.base_tree(), self.overlay, revision)
+
+
 # Repository state ---------------------------------------------------------------------------
 
 
@@ -217,6 +398,9 @@ class _Repository:
     branches: dict[str, str] = field(default_factory=dict)
     """Branch name to commit name. Empty means the repository has no commits."""
     default_branch: str = "main"
+    pull_requests: dict[int, _PullRequest] = field(default_factory=dict)
+    """By number. Their head commits are kept here, off the branches, so `push` never reaches
+    them."""
 
     @property
     def owner(self) -> str:
@@ -226,7 +410,24 @@ class _Repository:
         for name, builder in self.commits:
             if commit_sha(self.id, name) == sha:
                 return builder
+        found = self.pull_request_commit(sha)
+        if found is not None:
+            pull, revision = found
+            return _from_tree(partial(pull.tree, revision))
         return None
+
+    def pull_request_commit(self, sha: str) -> tuple[_PullRequest, int] | None:
+        """The pull request and revision whose head commit is `sha`, if any."""
+        for pull in self.pull_requests.values():
+            for revision in range(1, pull.revision + 1):
+                if commit_sha(self.id, pull.commit_name(revision)) == sha:
+                    return pull, revision
+        return None
+
+    def touch(self, pull: _PullRequest) -> None:
+        """Make the pull request the most recently updated, deterministically."""
+        latest = max(other.updated_at for other in self.pull_requests.values())
+        pull.updated_at = latest + timedelta(minutes=1)
 
 
 def _single_commit(
@@ -241,8 +442,38 @@ def _single_commit(
     )
 
 
+def _review_app(
+    repository_id: int, full_name: str, overlays: list[str], *, private: bool = False
+) -> _Repository:
+    """A review fixture: `review-app/` as `initial`, with `main` and `release` on it, and the
+    pull requests of `overlays` (directory names).
+    """
+    tree = partial(_fixture_tree, "review-app")
+    pull_requests: dict[int, _PullRequest] = {}
+    for name in overlays:
+        overlay = _Overlay.load(name)
+        pull_requests[overlay.number] = _PullRequest(
+            overlay=overlay,
+            base_tree=tree,
+            state=overlay.state,
+            body=overlay.body,
+            updated_at=overlay.updated_at,
+        )
+    return _Repository(
+        id=repository_id,
+        full_name=full_name,
+        private=private,
+        commits=[("initial", _from_tree(tree))],
+        branches={"main": "initial", "release": "initial"},
+        pull_requests=pull_requests,
+    )
+
+
 def _initial_repositories() -> dict[int, _Repository]:
     no_code = _from_tree(lambda: _fixture_tree("no-code"))
+    overlays = sorted(
+        path.parent.name for path in FIXTURE_PULL_REQUESTS_DIR.glob("*/pull-request.json")
+    )
     repositories = [
         _Repository(
             id=SAMPLE_APP_ID,
@@ -270,6 +501,13 @@ def _initial_repositories() -> dict[int, _Repository]:
         _single_commit(SOLO_ID, "octocat/solo", no_code),
         _single_commit(HUBOT_TOOLS_ID, "hubot/tools", no_code),
         _single_commit(PUBLIC_UNINSTALLED_ID, "monalisa/public-lib", no_code),
+        _review_app(REVIEW_APP_ID, "octo-org/review-app", overlays),
+        _review_app(
+            REVIEW_APP_PRIVATE_ID,
+            "octo-org/review-app-private",
+            list(REVIEW_APP_PRIVATE_PULL_REQUESTS),
+            private=True,
+        ),
     ]
     return {repository.id: repository for repository in repositories}
 
@@ -291,6 +529,8 @@ class FakeGitHub:
         self._suspended: set[int] = set()  # installation IDs
         self._removed: set[int] = set()  # repositories taken out of their owner's installation
         self._revoked: set[str] = set()  # logins that revoked their authorization of the App
+        self._withheld: set[tuple[int, str]] = set()  # (installation ID, permission)
+        self._dropped: set[str] = set()  # commit SHAs that GitHub no longer serves
         self._unavailable = False
 
     # Test switches -----------------------------------------------------------------------
@@ -382,6 +622,56 @@ class FakeGitHub:
             repository.branches[new_name] = repository.branches.pop(repository.default_branch)
         repository.default_branch = new_name
 
+    def drop_commit(self, sha: str) -> None:
+        """GitHub no longer serves the commit, as after a force push and garbage collection.
+
+        `compare_commits` raises `CommitUnavailable` and `open_tarball` raises `GitHubNotFound`.
+        """
+        self._dropped.add(sha)
+
+    def push_to_pull_request(self, github_repository_id: int, number: int) -> str:
+        """Push to the pull request's head branch and return the new head SHA.
+
+        The new head, `pr-<number>-2` and so on, appends one line to the overlay's first text
+        file. The pull request becomes the most recently updated.
+        """
+        repository = self._repositories[github_repository_id]
+        pull = repository.pull_requests[number]
+        pull.revision += 1
+        repository.touch(pull)
+        return commit_sha(github_repository_id, pull.commit_name(pull.revision))
+
+    def close_pull_request(self, github_repository_id: int, number: int) -> None:
+        self._set_pull_request_state(github_repository_id, number, "closed")
+
+    def merge_pull_request(self, github_repository_id: int, number: int) -> None:
+        self._set_pull_request_state(github_repository_id, number, "merged")
+
+    def set_pull_request_body(self, github_repository_id: int, number: int, body: str) -> None:
+        repository = self._repositories[github_repository_id]
+        pull = repository.pull_requests[number]
+        pull.body = body
+        repository.touch(pull)
+
+    def unrelated_history(self, github_repository_id: int, number: int) -> None:
+        """The pull request's head shares no ancestor with its base: `compare_commits` raises
+        `NoCommonHistory`.
+        """
+        self._repositories[github_repository_id].pull_requests[number].unrelated = True
+
+    def withhold_permission(self, github_repository_id: int, permission: str) -> None:
+        """The installation covering the repository lacks `permission`, as when the account owner
+        has not approved an update of the App's permissions.
+
+        For `pull_requests`: listing the pull requests of a private repository that the
+        installation covers raises `GitHubAccessDenied`, while public ones stay listable and
+        `get_pull_request` still works. `get_installation_permissions` omits the permission.
+        """
+        if permission not in _PERMISSIONS:
+            raise ValueError(f"unknown permission {permission!r}")
+        owner = self._repositories[github_repository_id].owner
+        self._withheld.add((self._installations[owner], permission))
+
     # GitHubGateway -----------------------------------------------------------------------
 
     def authorize_url(self, state: str) -> str:
@@ -430,10 +720,7 @@ class FakeGitHub:
 
     def get_installation_id(self, full_name: str) -> int:
         self._call("get_installation_id")
-        repository = self._by_name(full_name)
-        if repository.owner not in self._installations or repository.id in self._removed:
-            raise GitHubNotFound(f"the App is not installed on {full_name}")
-        return self._installations[repository.owner]
+        return self._installation_for(full_name)[1]
 
     def resolve_commit(self, installation_id: int, full_name: str, branch: str) -> str:
         self._call("resolve_commit")
@@ -449,11 +736,91 @@ class FakeGitHub:
     ) -> AbstractContextManager[IO[bytes]]:
         self._call("open_tarball")
         repository = self._installed(installation_id, full_name)
-        builder = repository.archive_builder(sha)
+        builder = None if sha in self._dropped else repository.archive_builder(sha)
         if builder is None:
             raise GitHubNotFound(f"{full_name} has no commit {sha}")
         owner, name = repository.full_name.split("/", 1)
         return closing(io.BytesIO(builder(f"{owner}-{name}-{sha[:7]}")))
+
+    def list_pull_requests(self, user_token: str, full_name: str, page: int) -> PullRequestPage:
+        self._call("list_pull_requests")
+        repository = self._visible(user_token, full_name)
+        # Public pull requests are readable by every user; private ones need the permission.
+        if repository.private and "pull_requests" not in self._granted(repository):
+            raise GitHubAccessDenied(f"Resource not accessible by integration ({full_name})")
+        pulls = sorted(
+            (pull for pull in repository.pull_requests.values() if pull.state == "open"),
+            key=lambda pull: pull.updated_at,
+            reverse=True,
+        )
+        start = (max(page, 1) - 1) * PULL_REQUEST_PAGE_SIZE
+        end = start + PULL_REQUEST_PAGE_SIZE
+        return PullRequestPage(
+            items=[self._describe_pull_request(repository, pull) for pull in pulls[start:end]],
+            next_page=max(page, 1) + 1 if len(pulls) > end else None,
+        )
+
+    def get_pull_request(self, user_token: str, full_name: str, number: int) -> PullRequest:
+        self._call("get_pull_request")
+        repository = self._visible(user_token, full_name)
+        pull = repository.pull_requests.get(number)
+        if pull is None:
+            raise GitHubNotFound(f"{full_name} has no pull request {number}")
+        additions, deletions, changed_files = _diff_stats(
+            pull.base_tree(), pull.tree(pull.revision), pull.renamed
+        )
+        return self._describe_pull_request(
+            repository,
+            pull,
+            additions=additions,
+            deletions=deletions,
+            changed_files=changed_files,
+        )
+
+    def compare_commits(
+        self,
+        installation_id: int,
+        full_name: str,
+        base_sha: str,
+        head_sha: str,
+        *,
+        head_owner: str | None,
+    ) -> Comparison:
+        """Every pull request branches from `initial`, its merge base with any base commit.
+
+        Only pull request heads can be compared. `head_owner` is accepted and not needed: the
+        fake serves a fork's head commits from the base repository, as GitHub keeps them.
+        """
+        self._call("compare_commits")
+        repository = self._installed(installation_id, full_name)
+        for sha in (base_sha, head_sha):
+            if sha in self._dropped or repository.archive_builder(sha) is None:
+                raise CommitUnavailable(f"{full_name} has no commit {sha}")
+        found = repository.pull_request_commit(head_sha)
+        if found is None:
+            raise ValueError(f"the fake compares only pull request heads, not {head_sha}")
+        pull, revision = found
+        if pull.unrelated:
+            raise NoCommonHistory(f"no common ancestor between {base_sha} and {head_sha}")
+        _, _, changed_files = _diff_stats(pull.base_tree(), pull.tree(revision), pull.renamed)
+        return Comparison(
+            merge_base_sha=commit_sha(repository.id, "initial"),
+            renamed=pull.renamed,
+            listed_files=min(changed_files, _COMPARE_FILE_LIMIT),
+        )
+
+    def get_installation_permissions(self, full_name: str) -> InstallationPermissions:
+        self._call("get_installation_permissions")
+        repository, installation_id = self._installation_for(full_name)
+        if repository.owner in _ORGANIZATIONS:
+            settings_path = f"organizations/{repository.owner}/settings"
+        else:
+            settings_path = "settings"
+        return InstallationPermissions(
+            installation_id=installation_id,
+            permissions=dict.fromkeys(sorted(self._granted(repository)), "read"),
+            html_url=f"https://github.com/{settings_path}/installations/{installation_id}",
+        )
 
     # Helpers -----------------------------------------------------------------------------
 
@@ -508,6 +875,70 @@ class FakeGitHub:
         if self._covering(repository) != installation_id:
             raise GitHubAccessDenied(f"installation {installation_id} cannot access {full_name}")
         return repository
+
+    def _installation_for(self, full_name: str) -> tuple[_Repository, int]:
+        """The repository and the installation that GitHub reports for it, even if suspended."""
+        repository = self._by_name(full_name)
+        if repository.owner not in self._installations or repository.id in self._removed:
+            raise GitHubNotFound(f"the App is not installed on {full_name}")
+        return repository, self._installations[repository.owner]
+
+    def _granted(self, repository: _Repository) -> set[str]:
+        """The permissions of the installation on the repository's owner."""
+        installation_id = self._installations.get(repository.owner)
+        return {name for name in _PERMISSIONS if (installation_id, name) not in self._withheld}
+
+    def _visible(self, user_token: str, full_name: str) -> _Repository:
+        """The repository, as `get_repository` shows it to the user: public ones to everyone,
+        private ones only with access through the App.
+        """
+        login = self._login_for(user_token)
+        repository = self._by_name(full_name)
+        if repository.private and repository.id not in self._access[login]:
+            raise GitHubNotFound(f"repository {full_name} not found")
+        return repository
+
+    def _set_pull_request_state(
+        self, github_repository_id: int, number: int, state: PullRequestState
+    ) -> None:
+        repository = self._repositories[github_repository_id]
+        pull = repository.pull_requests[number]
+        pull.state = state
+        repository.touch(pull)
+
+    def _describe_pull_request(
+        self,
+        repository: _Repository,
+        pull: _PullRequest,
+        *,
+        additions: int | None = None,
+        deletions: int | None = None,
+        changed_files: int | None = None,
+    ) -> PullRequest:
+        overlay = pull.overlay
+        name = repository.full_name.split("/", 1)[1]
+        head_owner = overlay.head_owner
+        return PullRequest(
+            number=overlay.number,
+            title=overlay.title,
+            body=pull.body,
+            author=overlay.author,
+            state=pull.state,
+            draft=overlay.draft,
+            base_ref=overlay.base_ref,
+            base_sha=commit_sha(
+                repository.id, repository.branches.get(overlay.base_ref, "initial")
+            ),
+            head_ref=overlay.head_ref,
+            head_sha=commit_sha(repository.id, pull.commit_name(pull.revision)),
+            head_repository=f"{head_owner}/{name}" if head_owner else repository.full_name,
+            is_fork=head_owner is not None,
+            html_url=f"https://github.com/{repository.full_name}/pull/{overlay.number}",
+            updated_at=pull.updated_at,
+            additions=additions,
+            deletions=deletions,
+            changed_files=changed_files,
+        )
 
 
 def _tokens_for(login: str) -> UserTokens:

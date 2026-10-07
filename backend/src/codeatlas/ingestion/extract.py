@@ -5,14 +5,16 @@ executed. Unsafe members are reported instead of yielded as files, and only the 
 caps are enforced here; the filters decide every other coverage reason.
 """
 
+import hashlib
 import tarfile
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import IO, Literal
 
 from codeatlas.config import Settings
 
 _HEADER_TYPES = frozenset({tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE})
+_HASH_CHUNK_BYTES = 1024 * 1024
 
 
 class LimitExceeded(Exception):
@@ -26,11 +28,16 @@ class LimitExceeded(Exception):
 
 @dataclass(frozen=True)
 class ArchiveMember:
-    """A regular file. `content` is None when the file is over `max_file_bytes`."""
+    """A regular file. `content` is None when the file is over `max_file_bytes`.
+
+    `sha256` is the digest of the file's bytes, kept or not (specs/003-pr-review, research R3). It
+    is left out of equality, and members built by hand may omit it.
+    """
 
     path: str
     size: int
     content: bytes | None
+    sha256: bytes = field(default=b"", compare=False)
 
 
 @dataclass(frozen=True)
@@ -87,13 +94,20 @@ def iter_archive(stream: IO[bytes], settings: Settings) -> Iterator[ArchiveMembe
                 continue
 
             seen.add(path)
+            fileobj = tar.extractfile(info)
+            if fileobj is None:
+                raise tarfile.ReadError(f"cannot read member {path}")
             content = None
             if info.size <= settings.max_file_bytes:
-                fileobj = tar.extractfile(info)
-                if fileobj is None:
-                    raise tarfile.ReadError(f"cannot read member {path}")
                 content = fileobj.read()
-            yield ArchiveMember(path=path, size=info.size, content=content)
+                digest = hashlib.sha256(content).digest()
+            else:
+                # Hash a file too large to keep without holding it in memory.
+                hasher = hashlib.sha256()
+                while chunk := fileobj.read(_HASH_CHUNK_BYTES):
+                    hasher.update(chunk)
+                digest = hasher.digest()
+            yield ArchiveMember(path=path, size=info.size, content=content, sha256=digest)
 
 
 def _unsafe_name(name: str) -> str | None:

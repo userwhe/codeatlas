@@ -3,6 +3,8 @@
 - Sign-in uses the App's user authorization (OAuth web flow) with expiring user tokens.
 - Repository reads use short-lived installation tokens, cached in memory and never stored. A
   token that GitHub refuses is dropped from the cache.
+- Pull requests are listed and read with the user token; the review job compares commits with an
+  installation token (specs/003-pr-review, research R1 and R2).
 - Calls share one pooled HTTP client per process, so they reuse TLS connections (SC-007).
 - Every failure maps to a gateway error from `codeatlas.github.gateway`. A rejected credential
   maps by whose it is: the user's or the App's (research R4).
@@ -23,14 +25,22 @@ import jwt
 
 from codeatlas.config import Settings
 from codeatlas.github.gateway import (
+    PULL_REQUEST_PAGE_SIZE,
     AppCredentialsRejected,
     BranchNotFound,
+    CommitUnavailable,
+    Comparison,
     GitHubAccessDenied,
     GitHubError,
     GitHubNotFound,
     GitHubRepository,
     GitHubUnavailable,
     GitHubUser,
+    InstallationPermissions,
+    NoCommonHistory,
+    PullRequest,
+    PullRequestPage,
+    PullRequestState,
     RepositoryEmpty,
     UserAuthorizationInvalid,
     UserTokens,
@@ -172,12 +182,7 @@ class GitHubClient:
         }
 
     def get_installation_id(self, full_name: str) -> int:
-        with self._client() as http:
-            response = self._api(
-                http, "GET", f"{_repo_path(full_name)}/installation", self._app_jwt()
-            )
-        _check(response, unauthorized=AppCredentialsRejected)
-        return int(_json(response)["id"])
+        return int(self._installation(full_name)["id"])
 
     def resolve_commit(self, installation_id: int, full_name: str, branch: str) -> str:
         repo = _repo_path(full_name)
@@ -223,6 +228,75 @@ class GitHubClient:
             finally:
                 download.close()
 
+    # Pull requests
+
+    def list_pull_requests(self, user_token: str, full_name: str, page: int) -> PullRequestPage:
+        params: dict[str, str | int] = {
+            "state": "open",
+            "sort": "updated",
+            "direction": "desc",
+            "per_page": PULL_REQUEST_PAGE_SIZE,
+            "page": page,
+        }
+        with self._client() as http:
+            response = self._api(
+                http, "GET", f"{_repo_path(full_name)}/pulls", user_token, params=params
+            )
+        _check(response, unauthorized=UserAuthorizationInvalid)
+        return PullRequestPage(
+            items=[_pull_request(data) for data in _json(response)],
+            next_page=_next_page(response),
+        )
+
+    def get_pull_request(self, user_token: str, full_name: str, number: int) -> PullRequest:
+        with self._client() as http:
+            path = f"{_repo_path(full_name)}/pulls/{int(number)}"
+            response = self._api(http, "GET", path, user_token)
+        _check(response, unauthorized=UserAuthorizationInvalid)
+        return _pull_request(_json(response))
+
+    def compare_commits(
+        self,
+        installation_id: int,
+        full_name: str,
+        base_sha: str,
+        head_sha: str,
+        *,
+        head_owner: str | None,
+    ) -> Comparison:
+        compare = f"{_repo_path(full_name)}/compare"
+        with self._client() as http:
+            token = self._installation_token(http, installation_id)
+            response = self._api(
+                http, "GET", f"{compare}/{_ref(base_sha)}...{_ref(head_sha)}", token
+            )
+            if response.status_code == 404 and head_owner is not None:
+                # GitHub documents an owner-qualified form for commits in another repository of
+                # the same network; it is tried once for a fork's head (research R2).
+                base = f"{_ref(full_name.partition('/')[0])}:{_ref(base_sha)}"
+                head = f"{_ref(head_owner)}:{_ref(head_sha)}"
+                response = self._api(http, "GET", f"{compare}/{base}...{head}", token)
+        _check_comparison(response, installation_id, token)
+        data = _json(response)
+        files = data.get("files") or []
+        return Comparison(
+            merge_base_sha=str(data["merge_base_commit"]["sha"]),
+            renamed={
+                str(file["filename"]): str(file["previous_filename"])
+                for file in files
+                if file.get("status") == "renamed" and file.get("previous_filename")
+            },
+            listed_files=len(files),
+        )
+
+    def get_installation_permissions(self, full_name: str) -> InstallationPermissions:
+        data = self._installation(full_name)
+        return InstallationPermissions(
+            installation_id=int(data["id"]),
+            permissions={str(name): str(level) for name, level in data["permissions"].items()},
+            html_url=str(data["html_url"]),
+        )
+
     # Helpers
 
     @contextmanager
@@ -244,7 +318,7 @@ class GitHubClient:
         path: str,
         token: str,
         *,
-        params: Mapping[str, int] | None = None,
+        params: Mapping[str, str | int] | None = None,
         follow_redirects: bool = True,
     ) -> httpx.Response:
         url = path if path.startswith("https://") else f"{GITHUB_API}{path}"
@@ -266,6 +340,15 @@ class GitHubClient:
             url = response.links.get("next", {}).get("url")
             params = None  # The next-page URL already carries the query.
         return items
+
+    def _installation(self, full_name: str) -> Any:
+        """The installation covering the repository, read with the App JWT."""
+        with self._client() as http:
+            response = self._api(
+                http, "GET", f"{_repo_path(full_name)}/installation", self._app_jwt()
+            )
+        _check(response, unauthorized=AppCredentialsRejected)
+        return _json(response)
 
     def _request_user_tokens(self, fields: dict[str, str]) -> UserTokens:
         form = {
@@ -428,6 +511,30 @@ def _check_installation_read(response: httpx.Response, installation_id: int, tok
         raise
 
 
+def _check_comparison(response: httpx.Response, installation_id: int, token: str) -> None:
+    """`_check_installation_read` for a comparison. It runs after the access check passed, so a
+    404 or 422 means that a pinned commit is gone, or that the commits share no ancestor
+    (research R2).
+    """
+    status = response.status_code
+    if status in (404, 422):
+        where = f"{response.request.method} {response.request.url.path}"
+        if status == 404 and "no common ancestor" in _message(response).lower():
+            raise NoCommonHistory(f"GitHub found no common ancestor for {where}")
+        raise CommitUnavailable(f"GitHub returned {status} for {where}")
+    _check_installation_read(response, installation_id, token)
+
+
+def _message(response: httpx.Response) -> str:
+    """The `message` of a GitHub error body, or an empty string."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    message = body.get("message") if isinstance(body, dict) else None
+    return message if isinstance(message, str) else ""
+
+
 def _json(response: httpx.Response) -> Any:
     try:
         return response.json()
@@ -454,8 +561,53 @@ def _repository(data: Mapping[str, Any], installation_id: int | None = None) -> 
     )
 
 
+def _pull_request(data: Mapping[str, Any]) -> PullRequest:
+    base, head = data["base"], data["head"]
+    # A deleted head repository (usually a fork) is reported as null.
+    head_repository = str(head["repo"]["full_name"]) if head.get("repo") else None
+    state: PullRequestState = "open"
+    if data["state"] != "open":
+        # Listings carry only `merged_at`; "Get a pull request" also carries `merged`.
+        state = "merged" if data.get("merged") or data.get("merged_at") else "closed"
+    return PullRequest(
+        number=int(data["number"]),
+        title=str(data["title"]),
+        body=_optional_str(data.get("body")) or "",
+        # GitHub reports a deleted account as the user "ghost".
+        author=str((data.get("user") or {}).get("login") or "ghost"),
+        state=state,
+        draft=bool(data.get("draft")),
+        base_ref=str(base["ref"]),
+        base_sha=str(base["sha"]),
+        head_ref=str(head["ref"]),
+        head_sha=str(head["sha"]),
+        head_repository=head_repository,
+        is_fork=head_repository != str(base["repo"]["full_name"]),
+        html_url=str(data["html_url"]),
+        updated_at=datetime.fromisoformat(str(data["updated_at"])),
+        additions=_optional_int(data.get("additions")),
+        deletions=_optional_int(data.get("deletions")),
+        changed_files=_optional_int(data.get("changed_files")),
+    )
+
+
+def _next_page(response: httpx.Response) -> int | None:
+    """The page number of the `Link` header's `rel="next"` URL, or None on the last page."""
+    url = response.links.get("next", {}).get("url")
+    page = httpx.URL(url).params.get("page") if url else None
+    return int(page) if page is not None and page.isdigit() else None
+
+
+def _ref(value: str) -> str:
+    return quote(value, safe="")
+
+
 def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _optional_int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _expiry(now: datetime, seconds: Any) -> datetime | None:
