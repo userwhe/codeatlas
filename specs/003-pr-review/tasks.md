@@ -828,7 +828,7 @@ the following:
 
 ### Tests for User Story 3 ⚠️ (write first, confirm they fail)
 
-- [ ] T050 [P] [US3] Integration tests in backend/tests/integration/test_review_freshness.py:
+- [X] T050 [P] [US3] Integration tests in backend/tests/integration/test_review_freshness.py:
   - **Freshness**:
     - `GET /v1/analysis-runs/{id}/freshness` returns `outdated: false` for the current head.
     - After `push_to_pull_request`, it returns `outdated: true` with the new `current_head_sha`.
@@ -852,13 +852,13 @@ the following:
 
 ### Implementation for User Story 3
 
-- [ ] T051 [US3] Add `freshness(db, *, user, workspace, run_id, gateway, request_id)` to
+- [X] T051 [US3] Add `freshness(db, *, user, workspace, run_id, gateway, request_id)` to
   backend/src/codeatlas/review/pulls.py:
   - scope and readability through `qa.runs.get_scoped`;
   - one `get_pull_request` with the user token, with errors mapped as in T034.
   - Add `GET /v1/analysis-runs/{run_id}/freshness` to
     backend/src/codeatlas/api/routes/analysis_runs.py.
-- [ ] T052 [US3] Add reuse to `submit` in backend/src/codeatlas/review/runs.py (research R9,
+- [X] T052 [US3] Add reuse to `submit` in backend/src/codeatlas/review/runs.py (research R9,
   step 5):
   - `mode: Literal["reuse", "new"] = "reuse"` in `SubmitIn`.
   - After the repository lock, a reuse request looks up the newest run with the same pull
@@ -871,7 +871,7 @@ the following:
   - Regenerate frontend/src/lib/api/schema.d.ts with `npm run gen:api`, so T053 has the
     freshness and `mode` types.
   - Make T050 pass.
-- [ ] T053 [US3] Frontend:
+- [X] T053 [US3] Frontend:
   - Add `useFreshness(runId)` to frontend/src/lib/api/reviews.ts. It is fetched once the run is
     terminal, and refetched when the window regains focus.
   - In frontend/src/app/reviews/[id]/review-detail.tsx, show a freshness banner:

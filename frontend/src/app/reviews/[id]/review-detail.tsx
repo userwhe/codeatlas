@@ -29,6 +29,7 @@ import {
   reviewStatusLabel,
   type ReviewTests,
   type Risk,
+  useFreshness,
   useRequestReview,
   useReview,
   useReviewMarkdown,
@@ -83,6 +84,8 @@ export function ReviewDetail({ runId }: { runId: string }) {
   return (
     <div className="flex flex-col gap-10">
       <ReviewHeader run={run} />
+
+      <FreshnessBanner run={run} finished={!active} />
 
       {active &&
         (run.job_id ? (
@@ -250,6 +253,112 @@ function ReviewHeader({ run }: { run: ReviewRun }) {
   );
 }
 
+const BANNER = "flex flex-col gap-2 rounded-md border px-4 py-3 text-sm";
+const NOTICE_BANNER = `${BANNER} border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100`;
+const NEUTRAL_BANNER = `${BANNER} border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200`;
+
+/**
+ * Whether the review still matches its pull request, checked on GitHub once the review has
+ * finished and again whenever the window regains focus. An outdated review stays readable and
+ * offers a review of the new head; a closed or merged pull request is named as such. Nothing is
+ * shown while the review matches an open pull request's head.
+ */
+function FreshnessBanner({ run, finished }: { run: ReviewRun; finished: boolean }) {
+  const router = useRouter();
+  const freshness = useFreshness(run.id, finished);
+  const request = useRequestReview();
+  const busy = request.isPending || request.isSuccess;
+
+  function reviewNewHead() {
+    if (busy) return;
+    request.mutate(
+      {
+        // Opens the new head's review if one was already requested.
+        repositoryId: run.repository_id,
+        pullRequestNumber: run.pull_request.number,
+        mode: "reuse",
+        idempotencyKey: crypto.randomUUID(),
+      },
+      { onSuccess: ({ run_id }) => router.push(`/reviews/${run_id}`) },
+    );
+  }
+
+  if (!finished) return null;
+
+  if (freshness.error) {
+    // Access loss is shown for the whole page by the review query.
+    if (isAccessLost(freshness.error)) return null;
+    return (
+      <section aria-label="Freshness" className={NEUTRAL_BANNER}>
+        <p>
+          <span className="font-medium">Freshness unknown:</span> could not check the pull
+          request on GitHub. {reviewErrorMessage(freshness.error)}
+        </p>
+        <button
+          type="button"
+          onClick={() => void freshness.refetch()}
+          disabled={freshness.isFetching}
+          className="self-start font-medium underline disabled:opacity-50"
+        >
+          {freshness.isFetching ? "Checking…" : "Check again"}
+        </button>
+      </section>
+    );
+  }
+
+  const current = freshness.data;
+  if (!current) return null;
+  const newHead = <Sha sha={current.current_head_sha} />;
+
+  if (current.pull_request_state !== "open") {
+    const merged = current.pull_request_state === "merged";
+    return (
+      <section aria-label="Freshness" className={NEUTRAL_BANNER}>
+        <p>
+          <span className="font-medium">{merged ? "Merged" : "Closed"}:</span>{" "}
+          {merged
+            ? "this pull request was merged."
+            : "this pull request was closed without being merged."}{" "}
+          {current.outdated ? (
+            <>
+              It had new commits after this review (head {newHead}). This review still shows the
+              head it examined.
+            </>
+          ) : (
+            "This review stays available."
+          )}
+        </p>
+      </section>
+    );
+  }
+
+  if (!current.outdated) return null;
+
+  return (
+    <section aria-label="Freshness" className={NOTICE_BANNER}>
+      <p>
+        <span className="font-medium">
+          Outdated: the pull request has new commits (head {newHead}).
+        </span>{" "}
+        This review still shows the head it examined, <Sha sha={run.commits.head_sha} />.
+      </p>
+      <button
+        type="button"
+        onClick={reviewNewHead}
+        disabled={busy}
+        className="self-start rounded-md bg-zinc-900 px-4 py-1.5 font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+      >
+        {busy ? "Requesting…" : "Review the new head"}
+      </button>
+      {request.error && (
+        <p role="alert" className="text-red-700 dark:text-red-300">
+          {reviewErrorMessage(request.error)}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function RunProblem({ run }: { run: ReviewRun }) {
   const router = useRouter();
   const request = useRequestReview();
@@ -260,9 +369,11 @@ function RunProblem({ run }: { run: ReviewRun }) {
     if (busy) return;
     request.mutate(
       {
-        // A new review of the same pull request, at its current head.
+        // A new review of the same pull request, at its current head. A failed review is never
+        // reused, so this opens a review of the head that is still waiting or running, if any.
         repositoryId: run.repository_id,
         pullRequestNumber: run.pull_request.number,
+        mode: "reuse",
         idempotencyKey: crypto.randomUUID(),
       },
       { onSuccess: ({ run_id }) => router.push(`/reviews/${run_id}`) },

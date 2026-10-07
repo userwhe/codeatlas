@@ -9,14 +9,14 @@ decided by the next access check.
 import base64
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal, cast
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
-from codeatlas.api.errors import ApiError
+from codeatlas.api.errors import ApiError, not_found
 from codeatlas.auth.github_login import get_user_token
 from codeatlas.github.gateway import (
     AppCredentialsRejected,
@@ -25,9 +25,11 @@ from codeatlas.github.gateway import (
     GitHubNotFound,
     GitHubUnavailable,
     PullRequest,
+    PullRequestState,
     UserAuthorizationInvalid,
 )
 from codeatlas.models import AnalysisRun, Job, Repository, User, Workspace
+from codeatlas.qa import runs
 from codeatlas.workspace import repositories as repos
 from codeatlas.workspace.repositories import github_unavailable, sign_in_again
 
@@ -57,6 +59,18 @@ class OpenPullRequest:
 class OpenPullRequests:
     items: list[OpenPullRequest]
     next_cursor: str | None
+
+
+@dataclass(frozen=True)
+class Freshness:
+    """A review's pull request as GitHub reports it now (research R10)."""
+
+    pull_request_state: PullRequestState
+    draft: bool
+    current_head_sha: str
+    # True when the head differs from the commit the review examined.
+    outdated: bool
+    checked_at: datetime
 
 
 def github_access_denied() -> ApiError:
@@ -118,8 +132,9 @@ def read(
 
 
 def _refusal(gateway: GitHubGateway, repository: Repository) -> ApiError:
-    """Classify a refused list (research R1): a missing Pull requests permission links to the
-    installation's settings, where the account owner approves it. Anything else is a plain denial.
+    """Classify a refused list or read (research R1): a missing Pull requests permission links to
+    the installation's settings, where the account owner approves it. Anything else is a plain
+    denial.
     """
     try:
         installation = gateway.get_installation_permissions(repository.full_name)
@@ -251,4 +266,41 @@ def list_open(
     return OpenPullRequests(
         items=items,
         next_cursor=encode_cursor(listed.next_page) if listed.next_page is not None else None,
+    )
+
+
+def freshness(
+    db: Session,
+    *,
+    user: User,
+    workspace: Workspace,
+    run_id: uuid.UUID,
+    gateway: GitHubGateway,
+    request_id: str | None,
+) -> Freshness:
+    """Whether a review still matches its pull request's head, with the pull request's state
+    (FR-022, FR-024). One read with the user token; nothing is stored. 404 for answers to
+    questions.
+    """
+    run = runs.get_scoped(db, user=user, workspace=workspace, run_id=run_id, request_id=request_id)
+    repository = db.get(Repository, run.repository_id)
+    if run.kind != ANALYSIS_KIND or repository is None:
+        raise not_found()
+    # The kind's check constraint makes both columns non-null for reviews.
+    number, head_sha = cast(int, run.pull_request_number), cast(str, run.head_sha)
+    token = user_token(db, user, gateway)
+    try:
+        pull = gateway.get_pull_request(token, repository.full_name, number)
+    except UserAuthorizationInvalid as exc:
+        raise sign_in_again() from exc
+    except (GitHubAccessDenied, GitHubNotFound) as exc:
+        raise _refusal(gateway, repository) from exc
+    except GitHubUnavailable as exc:
+        raise github_unavailable() from exc
+    return Freshness(
+        pull_request_state=pull.state,
+        draft=pull.draft,
+        current_head_sha=pull.head_sha,
+        outdated=pull.head_sha != head_sha,
+        checked_at=datetime.now(UTC),
     )

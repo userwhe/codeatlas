@@ -22,7 +22,7 @@ from codeatlas.github.gateway import get_gateway
 from codeatlas.models import AnalysisRun, Job, User, Workspace
 from codeatlas.qa import runs
 from codeatlas.qa.schema import AnswerOutput, Claim
-from codeatlas.review import markdown
+from codeatlas.review import markdown, pulls
 from codeatlas.review import runs as review_runs
 from codeatlas.review.schema import ChangeKind, RiskBasis, RiskCategory, Severity
 from codeatlas.workspace import repositories as repos
@@ -50,13 +50,16 @@ class SubmitIn(BaseModel):
     target: TargetIn = Field(default_factory=TargetIn)
     # Required for questions; must be absent for reviews.
     question: str | None = None
+    # Reviews only: `reuse` (the default when absent) returns an existing review of the same head
+    # commit that is waiting, running, or succeeded; `new` always creates one.
+    mode: review_runs.SubmitMode | None = None
 
 
 class SubmitOut(BaseModel):
     run_id: uuid.UUID
     job_id: uuid.UUID
     status: RunStatus
-    # Whether an earlier review was returned instead of a new one; always false for now.
+    # Whether an earlier review was returned instead of a new one; always false for questions.
     reused: bool
     # Questions only: the pinned indexed version.
     snapshot_id: uuid.UUID | None
@@ -268,6 +271,17 @@ class ReviewMarkdownOut(BaseModel):
     markdown: str
 
 
+class FreshnessOut(BaseModel):
+    """A review's pull request as GitHub reports it now."""
+
+    pull_request_state: Literal["open", "closed", "merged"]
+    draft: bool
+    current_head_sha: str
+    # True when `current_head_sha` differs from the head commit the review examined.
+    outdated: bool
+    checked_at: datetime
+
+
 class RunSummaryOut(BaseModel):
     id: uuid.UUID
     kind: AnalysisKind
@@ -367,12 +381,13 @@ def _submit_review(
         raise _invalid_request("target.snapshot_id")
     if body.target.pull_request_number is None:
         raise _invalid_request("target.pull_request_number")
-    run, job = review_runs.submit(
+    run, job, reused = review_runs.submit(
         db,
         user=user,
         workspace=workspace,
         repository_id=body.repository_id,
         pull_request_number=body.target.pull_request_number,
+        mode=body.mode or "reuse",
         request_id=request_id,
         gateway=get_gateway(),
     )
@@ -381,7 +396,7 @@ def _submit_review(
         run_id=run.id,
         job_id=job.id,
         status=_status(job),
-        reused=False,
+        reused=reused,
         snapshot_id=None,
         pull_request_number=run.pull_request_number,
         head_sha=run.head_sha,
@@ -390,7 +405,12 @@ def _submit_review(
     )
 
 
-@router.post("/analysis-runs", status_code=202, response_model=SubmitOut)
+@router.post(
+    "/analysis-runs",
+    status_code=202,
+    response_model=SubmitOut,
+    responses={200: {"model": SubmitOut, "description": "An earlier review was reused"}},
+)
 def submit_run(
     body: SubmitIn,
     db: DbSession,
@@ -403,7 +423,8 @@ def submit_run(
 
     def operation() -> tuple[int, dict[str, Any]]:
         out = submit(db, body, user=user, workspace=workspace, request_id=request_id)
-        return 202, out.model_dump(mode="json")
+        # A replay with the same key answers with the same status.
+        return 200 if out.reused else 202, out.model_dump(mode="json")
 
     status, payload = run_idempotent(
         db,
@@ -492,4 +513,38 @@ def get_review_markdown(
         raise ApiError(409, "review_not_finished", "The review has not finished.")
     return ReviewMarkdownOut(
         markdown=markdown.render(run, run.result, review_runs.citations(db, run))
+    )
+
+
+@router.get("/analysis-runs/{run_id}/freshness")
+def get_review_freshness(
+    run_id: uuid.UUID,
+    db: DbSession,
+    user: CurrentUser,
+    workspace: CurrentWorkspace,
+    request_id: RequestId,
+) -> FreshnessOut:
+    """Whether a review is outdated, from one read of its pull request on GitHub (FR-022,
+    research R10).
+
+    404 for an answer to a question. GitHub errors are 401 `github_sign_in_required`, 409
+    `github_access_denied`, and 502 `github_unavailable`; the page then shows the freshness as
+    unknown.
+    """
+    freshness = pulls.freshness(
+        db,
+        user=user,
+        workspace=workspace,
+        run_id=run_id,
+        gateway=get_gateway(),
+        request_id=request_id,
+    )
+    # Keeps a user token that was refreshed for the call.
+    db.commit()
+    return FreshnessOut(
+        pull_request_state=freshness.pull_request_state,
+        draft=freshness.draft,
+        current_head_sha=freshness.current_head_sha,
+        outdated=freshness.outdated,
+        checked_at=freshness.checked_at,
     )

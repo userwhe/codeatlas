@@ -23,6 +23,9 @@ export type ChecklistItem = components["schemas"]["ChecklistItemOut"];
 export type ReviewTests = components["schemas"]["ReviewTestsOut"];
 export type CandidateTest = components["schemas"]["CandidateTestOut"];
 export type NewTestCase = components["schemas"]["NewTestCaseOut"];
+export type Freshness = components["schemas"]["FreshnessOut"];
+/** `reuse` opens an existing review of the same head when there is one; `new` always requests one. */
+export type ReviewMode = NonNullable<components["schemas"]["SubmitIn"]["mode"]>;
 
 const PULL_REQUEST_POLL_MS = 10_000;
 const REVIEW_POLL_MS = 3000;
@@ -93,7 +96,27 @@ export function useReviewMarkdown(runId: string, enabled = true) {
 }
 
 /**
- * Requests a review of a pull request at its current head. Each submission attempt passes a new
+ * Whether a review still matches its pull request, read live from GitHub: the pull request's
+ * state and current head. Enable it once the review has finished. It is checked again whenever the
+ * window regains focus, since new commits can arrive at any time.
+ */
+export function useFreshness(runId: string, enabled = true) {
+  return useQuery({
+    // Under the run's key, so that refreshing the run checks again too.
+    queryKey: ["analysis-runs", runId, "freshness"],
+    queryFn: () =>
+      unwrap(
+        api.GET("/v1/analysis-runs/{run_id}/freshness", { params: { path: { run_id: runId } } }),
+      ),
+    enabled,
+    refetchOnWindowFocus: "always",
+  });
+}
+
+/**
+ * Requests a review of a pull request at its current head. With `mode: "reuse"`, the API returns
+ * an existing review of that head (`reused: true`) when it has one that is waiting, running, or
+ * succeeded; with `mode: "new"`, it always queues one. Each submission attempt passes a new
  * idempotency key, so a replayed request cannot queue the review twice. Usage is refreshed whether
  * or not it succeeds.
  */
@@ -103,10 +126,12 @@ export function useRequestReview() {
     mutationFn: ({
       repositoryId,
       pullRequestNumber,
+      mode,
       idempotencyKey,
     }: {
       repositoryId: string;
       pullRequestNumber: number;
+      mode: ReviewMode;
       idempotencyKey: string;
     }) =>
       unwrap(
@@ -115,6 +140,7 @@ export function useRequestReview() {
             repository_id: repositoryId,
             kind: "pull_request_review",
             target: { pull_request_number: pullRequestNumber },
+            mode,
           },
           params: { header: { "Idempotency-Key": idempotencyKey } },
         }),

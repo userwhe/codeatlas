@@ -6,7 +6,7 @@ and head commits; the review job resolves the merge base and reads both sides fr
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from sqlalchemy import select
@@ -27,6 +27,10 @@ from codeatlas.workspace.quotas import reserve_review
 ANALYSIS_KIND = pulls.ANALYSIS_KIND
 JOB_KIND = "review_pull_request"
 RUN_TTL = timedelta(days=30)
+# `reuse` returns an existing review of the same head instead of a new one (FR-023).
+SubmitMode = Literal["reuse", "new"]
+# Job statuses of a review that a request for the same head returns instead of a new one.
+REUSABLE_STATUSES = ("queued", "running", "retry_wait", "succeeded")
 MAX_BODY_CHARS = 8000
 # The pull request fields returned with a review; the stored description is for the prompt only.
 PULL_REQUEST_OUT_FIELDS = (
@@ -61,53 +65,41 @@ def _pull_request_record(pull: PullRequest) -> dict[str, Any]:
     }
 
 
-def submit(
+def _reusable(
+    db: Session, repository_id: uuid.UUID, pull: PullRequest, now: datetime
+) -> tuple[AnalysisRun, Job] | None:
+    """The newest unexpired review of the pull request at its current head that is waiting,
+    running, or succeeded (FR-023).
+    """
+    row = db.execute(
+        select(AnalysisRun, Job)
+        .join(Job, Job.id == AnalysisRun.job_id)
+        .where(
+            AnalysisRun.repository_id == repository_id,
+            AnalysisRun.kind == ANALYSIS_KIND,
+            AnalysisRun.pull_request_number == pull.number,
+            AnalysisRun.head_sha == pull.head_sha,
+            AnalysisRun.expires_at > now,
+            Job.status.in_(REUSABLE_STATUSES),
+        )
+        .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id.desc())
+        .limit(1)
+    ).first()
+    return (row[0], row[1]) if row is not None else None
+
+
+def _create(
     db: Session,
     *,
     user: User,
     workspace: Workspace,
-    repository_id: uuid.UUID,
-    pull_request_number: int,
-    request_id: str | None,
-    gateway: GitHubGateway,
+    repository: Repository,
+    pull: PullRequest,
+    now: datetime,
 ) -> tuple[AnalysisRun, Job]:
-    """Pin an open pull request, reserve a review, and queue the review job. The caller commits.
-
-    Stored state is checked before GitHub is called, so a lost, rejected, or paused repository
-    is refused without a GitHub call or any allowance used. The one GitHub call reads the pull
-    request with the owner's user token (research R9).
-    """
-    repository = repos.get_scoped(
-        db,
-        user=user,
-        workspace=workspace,
-        repository_id=repository_id,
-        request_id=request_id,
-        content=True,
-    )
-    pulls.refuse_rejected(db, repository)
-    if (
-        repository.access_state == "paused"
-        and repository.access_reason == "external_processing_not_accepted"
-    ):
-        raise repos.external_processing_not_accepted()
-    pull = pulls.read(
-        db, user=user, repository=repository, number=pull_request_number, gateway=gateway
-    )
-    if pull.state != "open":
-        raise ApiError(409, "pull_request_not_open", "Only open pull requests can be reviewed.")
-
-    # Serialize submissions for the repository, then recheck it: a disconnect or loss of access
-    # may have been committed while GitHub was being read.
-    db.execute(select(Repository.id).where(Repository.id == repository.id).with_for_update())
-    db.refresh(repository)
-    if repository.deleted_at is not None:
-        raise not_found()
-    ensure_readable(repository)
-
+    """Reserve a review from the allowance, then create the run and queue its job."""
     reserve_review(db, workspace.id)
     settings = get_settings()
-    now = datetime.now(UTC)
     run = AnalysisRun(
         workspace_id=workspace.id,
         repository_id=repository.id,
@@ -136,6 +128,64 @@ def submit(
         dedupe_key=f"run:{run.id}",
     )
     run.job_id = job.id
+    return run, job
+
+
+def submit(
+    db: Session,
+    *,
+    user: User,
+    workspace: Workspace,
+    repository_id: uuid.UUID,
+    pull_request_number: int,
+    mode: SubmitMode,
+    request_id: str | None,
+    gateway: GitHubGateway,
+) -> tuple[AnalysisRun, Job, bool]:
+    """Pin an open pull request, reserve a review, and queue the review job. The caller commits.
+
+    With `mode` `reuse`, an existing review of the same head is returned instead, without using
+    the allowance; the returned flag says so. Stored state is checked before GitHub is called, so
+    a lost, rejected, or paused repository is refused without a GitHub call or any allowance used.
+    The one GitHub call reads the pull request with the owner's user token (research R9).
+    """
+    repository = repos.get_scoped(
+        db,
+        user=user,
+        workspace=workspace,
+        repository_id=repository_id,
+        request_id=request_id,
+        content=True,
+    )
+    pulls.refuse_rejected(db, repository)
+    if (
+        repository.access_state == "paused"
+        and repository.access_reason == "external_processing_not_accepted"
+    ):
+        raise repos.external_processing_not_accepted()
+    pull = pulls.read(
+        db, user=user, repository=repository, number=pull_request_number, gateway=gateway
+    )
+    if pull.state != "open":
+        raise ApiError(409, "pull_request_not_open", "Only open pull requests can be reviewed.")
+
+    # Serialize submissions for the repository, then recheck it: a disconnect or loss of access
+    # may have been committed while GitHub was being read. The lock also lets a reuse request see
+    # a review that a concurrent request for the same head has just created.
+    db.execute(select(Repository.id).where(Repository.id == repository.id).with_for_update())
+    db.refresh(repository)
+    if repository.deleted_at is not None:
+        raise not_found()
+    ensure_readable(repository)
+
+    now = datetime.now(UTC)
+    reusable = _reusable(db, repository.id, pull, now) if mode == "reuse" else None
+    if reusable is not None:
+        run, job = reusable
+    else:
+        run, job = _create(
+            db, user=user, workspace=workspace, repository=repository, pull=pull, now=now
+        )
     record(
         db,
         action="pull_request_review_submit",
@@ -145,9 +195,9 @@ def submit(
         resource_type="analysis_run",
         resource_id=str(run.id),
         request_id=request_id,
-        detail={"pull_request_number": pull.number},
+        detail={"pull_request_number": pull.number, "mode": mode, "reused": reusable is not None},
     )
-    return run, job
+    return run, job, reusable is not None
 
 
 def cited_labels(result: dict[str, Any]) -> list[str]:

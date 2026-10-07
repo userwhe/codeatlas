@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { RelativeTime } from "@/components/RelativeTime";
 import { ApiError } from "@/lib/api/client";
@@ -11,6 +11,7 @@ import { shortSha } from "@/lib/api/repositories";
 import {
   externalUrl,
   type PullRequest,
+  type ReviewMode,
   type ReviewState,
   reviewErrorMessage,
   reviewStateLabel,
@@ -42,6 +43,8 @@ export function PullRequestList({ repositoryId }: { repositoryId: string }) {
   const request = useRequestReview();
   // Pages are loaded once and kept; this is the one on screen.
   const [pageIndex, setPageIndex] = useState(0);
+  // The pull request whose current review is about to be repeated, awaiting confirmation.
+  const [confirming, setConfirming] = useState<PullRequest | null>(null);
 
   if (!pullRequests.data) {
     if (pullRequests.error) {
@@ -60,12 +63,15 @@ export function PullRequestList({ repositoryId }: { repositoryId: string }) {
   const busy = request.isPending || request.isSuccess;
   const requestedNumber = request.variables?.pullRequestNumber ?? null;
 
-  function review(number: number) {
+  // `reuse` opens the review of the current head if it already has one; `new` always queues one.
+  // Either way, the returned review opens.
+  function review(number: number, mode: ReviewMode) {
     if (busy) return;
     request.mutate(
       {
         repositoryId,
         pullRequestNumber: number,
+        mode,
         // A new key for each submission attempt; a replay of the same request queues it once.
         idempotencyKey: crypto.randomUUID(),
       },
@@ -104,7 +110,8 @@ export function PullRequestList({ repositoryId }: { repositoryId: string }) {
                 busy={busy}
                 requesting={requested && busy}
                 error={requested && request.error ? reviewErrorMessage(request.error) : null}
-                onReview={() => review(pullRequest.number)}
+                onReview={() => review(pullRequest.number, "reuse")}
+                onReviewAgain={() => setConfirming(pullRequest)}
               />
             );
           })}
@@ -115,6 +122,14 @@ export function PullRequestList({ repositoryId }: { repositoryId: string }) {
         <p role="alert" className="text-sm text-red-700 dark:text-red-400">
           Could not load the pull requests: {reviewErrorMessage(pullRequests.error)}
         </p>
+      )}
+
+      {confirming && (
+        <ReviewAgainDialog
+          pullRequest={confirming}
+          onConfirm={() => review(confirming.number, "new")}
+          onClose={() => setConfirming(null)}
+        />
       )}
 
       {(index > 0 || hasNext) && (
@@ -171,12 +186,16 @@ function PullRequestRow({
   requesting,
   error,
   onReview,
+  onReviewAgain,
 }: {
   pullRequest: PullRequest;
   busy: boolean;
   requesting: boolean;
   error: string | null;
+  /** Reviews the current head, or opens its existing review. */
   onReview: () => void;
+  /** Asks to confirm a new review of a head that already has a current one. */
+  onReviewAgain: () => void;
 }) {
   const review = pullRequest.review;
   const url = externalUrl(pullRequest.html_url);
@@ -199,6 +218,22 @@ function PullRequestRow({
           Last review
         </Link>
         <button type="button" onClick={onReview} disabled={busy} className={SECONDARY_BUTTON}>
+          {requesting ? "Requesting…" : "Review again"}
+        </button>
+      </>
+    );
+  } else if (review.state === "current") {
+    action = (
+      <>
+        <Link href={`/reviews/${review.run_id}`} className={SECONDARY_BUTTON}>
+          View review
+        </Link>
+        <button
+          type="button"
+          onClick={onReviewAgain}
+          disabled={busy}
+          className="text-sm text-zinc-600 underline disabled:opacity-50 dark:text-zinc-400"
+        >
           {requesting ? "Requesting…" : "Review again"}
         </button>
       </>
@@ -269,6 +304,67 @@ function PullRequestRow({
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * A modal dialog that confirms a new review of a head that already has a current review. Mount it
+ * to open it; it calls `onClose` when dismissed, and `onConfirm` before closing when confirmed.
+ */
+function ReviewAgainDialog({
+  pullRequest,
+  onConfirm,
+  onClose,
+}: {
+  pullRequest: PullRequest;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      onClose={onClose}
+      aria-labelledby="review-again-title"
+      aria-describedby="review-again-description"
+      className="m-auto w-[calc(100%-2rem)] max-w-md rounded-lg bg-white text-zinc-900 shadow-xl backdrop:bg-black/50 dark:bg-zinc-900 dark:text-zinc-100"
+    >
+      <div className="flex flex-col gap-4 p-6">
+        <h2 id="review-again-title" className="text-lg font-semibold">
+          Review #{pullRequest.number} again?
+        </h2>
+        <p id="review-again-description" className="text-sm">
+          Its head commit <code title={pullRequest.head_sha}>{shortSha(pullRequest.head_sha)}</code>{" "}
+          already has a current review. A new review of the same changes counts against
+          today&apos;s allowance. The current review stays available.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            autoFocus
+            onClick={() => dialogRef.current?.close()}
+            className={SECONDARY_BUTTON}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onConfirm();
+              dialogRef.current?.close();
+            }}
+            className={PRIMARY_BUTTON}
+          >
+            Request a new review
+          </button>
+        </div>
+      </div>
+    </dialog>
   );
 }
 

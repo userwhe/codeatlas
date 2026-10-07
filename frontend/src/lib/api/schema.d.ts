@@ -327,6 +327,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/analysis-runs/{run_id}/freshness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Review Freshness
+         * @description Whether a review is outdated, from one read of its pull request on GitHub (FR-022,
+         *     research R10).
+         *
+         *     404 for an answer to a question. GitHub errors are 401 `github_sign_in_required`, 409
+         *     `github_access_denied`, and 502 `github_unavailable`; the page then shows the freshness as
+         *     unknown.
+         */
+        get: operations["get_review_freshness_v1_analysis_runs__run_id__freshness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -539,6 +564,28 @@ export interface components {
             end_line: number;
             /** Lines */
             lines: string[];
+        };
+        /**
+         * FreshnessOut
+         * @description A review's pull request as GitHub reports it now.
+         */
+        FreshnessOut: {
+            /**
+             * Pull Request State
+             * @enum {string}
+             */
+            pull_request_state: "open" | "closed" | "merged";
+            /** Draft */
+            draft: boolean;
+            /** Current Head Sha */
+            current_head_sha: string;
+            /** Outdated */
+            outdated: boolean;
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
         };
         /** GitHubRepositoryOut */
         GitHubRepositoryOut: {
@@ -1217,6 +1264,8 @@ export interface components {
             target?: components["schemas"]["TargetIn"];
             /** Question */
             question?: string | null;
+            /** Mode */
+            mode?: ("reuse" | "new") | null;
         };
         /** SubmitOut */
         SubmitOut: {
@@ -1949,6 +1998,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description An earlier review was reused */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmitOut"];
+                };
+            };
             /** @description Successful Response */
             202: {
                 headers: {
@@ -2018,6 +2076,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReviewMarkdownOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_review_freshness_v1_analysis_runs__run_id__freshness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FreshnessOut"];
                 };
             };
             /** @description Validation Error */

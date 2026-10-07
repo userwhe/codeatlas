@@ -55,7 +55,7 @@ def connect(
 
 
 def request_review(
-    client: TestClient, repository_id: str, number: int = 1, **extra: Any
+    client: TestClient, repository_id: str, number: int = 1, *, mode: str = "reuse", **extra: Any
 ) -> Response:
     return client.post(
         "/v1/analysis-runs",
@@ -63,6 +63,7 @@ def request_review(
             "repository_id": repository_id,
             "kind": "pull_request_review",
             "target": {"pull_request_number": number},
+            "mode": mode,
         },
         **extra,
     )
@@ -163,7 +164,7 @@ def test_review_request_pins_the_pull_request(
         "analysis_run",
         run_id,
     )
-    assert audit.detail == {"pull_request_number": 1}
+    assert audit.detail == {"pull_request_number": 1, "mode": "reuse", "reused": False}
     assert octocat.get("/v1/usage").json()["reviews_used"] == 1
 
 
@@ -332,8 +333,9 @@ def test_github_unavailable(db: Session, octocat: TestClient, repository_id: str
 
 
 def test_daily_review_allowance(octocat: TestClient, repository_id: str) -> None:
-    statuses = [request_review(octocat, repository_id).status_code for _ in range(10)]
-    refused = request_review(octocat, repository_id)
+    # `reuse` would return the first review, so every request asks for a new one.
+    statuses = [request_review(octocat, repository_id, mode="new").status_code for _ in range(10)]
+    refused = request_review(octocat, repository_id, mode="new")
 
     assert statuses == [202] * 10
     assert error_code(refused) == (429, "daily_limit_reached")
