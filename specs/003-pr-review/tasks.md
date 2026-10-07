@@ -34,7 +34,7 @@ Everything else runs against the fake gateway and the fake review model.
 
 **Purpose**: Settings, the review fixture repository, and pull request fixtures
 
-- [ ] T001 Add review settings to backend/src/codeatlas/config.py:
+- [X] T001 Add review settings to backend/src/codeatlas/config.py:
   - `daily_review_limit: int = 10` (FR-027).
   - `review_deadline: timedelta = timedelta(minutes=5)` (FR-028).
   - The review limits (FR-018, research R4 and R6): `review_max_files: int = 100`,
@@ -45,7 +45,7 @@ Everything else runs against the fake gateway and the fake review model.
   - In backend/tests/conftest.py, set `DAILY_REVIEW_LIMIT=10` next to `DAILY_QUESTION_LIMIT`.
   - Add unit tests to backend/tests/unit/test_config.py: the defaults above, and an unknown
     `FAKE_REVIEW_MODEL_MODE` fails validation.
-- [ ] T002 [P] Create the fixture repository backend/tests/fixtures/repos/review-app/ (research
+- [X] T002 [P] Create the fixture repository backend/tests/fixtures/repos/review-app/ (research
   R13). Keep it to about 10 small files that pass `uv run ruff check .`:
   - `README.md`: one paragraph describing the app.
   - `app/__init__.py` and `app/auth/__init__.py`: empty.
@@ -69,7 +69,7 @@ Everything else runs against the fake gateway and the fake review model.
   - In backend/tests/fixtures/repos/README.md, add rows for 2011 `octo-org/review-app` (public;
     octocat and hubot) and 2012 `octo-org/review-app-private` (private; octocat), and a short
     review-app section.
-- [ ] T003 [P] Create the pull request overlays in backend/tests/fixtures/pull-requests/:
+- [X] T003 [P] Create the pull request overlays in backend/tests/fixtures/pull-requests/:
   - Each pull request is a directory holding a `pull-request.json` and an optional `files/` tree,
     which is written over the base tree.
   - `pull-request.json` holds: `number`, `title`, `body`, `author`, `draft`, `state` (`open` or
@@ -109,13 +109,13 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
 
 ### Tests for the foundation ⚠️ (write first, confirm they fail)
 
-- [ ] T005 [P] Unit tests for archive hashes in backend/tests/unit/test_archive_hashes.py:
+- [X] T005 [P] Unit tests for archive hashes in backend/tests/unit/test_archive_hashes.py:
   - Build a gzip tar in memory, as the existing extraction tests do.
   - Every `ArchiveMember` yielded by `iter_archive` carries `sha256` equal to
     `hashlib.sha256(<member bytes>).digest()`.
   - A member over `max_file_bytes` has `content=None` and still the correct `sha256`.
   - `RejectedMember` has no hash, and the extraction safety caps still apply.
-- [ ] T006 [P] Unit tests for the pull request calls in
+- [X] T006 [P] Unit tests for the pull request calls in
   backend/tests/unit/test_github_pulls_client.py, using `httpx.MockTransport`:
   - **List**: `list_pull_requests(user_token, "o/r", page=1)` sends
     `GET /repos/o/r/pulls?state=open&sort=updated&direction=desc&per_page=30&page=1` with the user
@@ -139,7 +139,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - **Errors**: classified as the existing calls are. A 401 with a user token raises
     `UserAuthorizationInvalid`; a 403 raises `GitHubAccessDenied`; a 404 on list or get raises
     `GitHubNotFound`; a 429, a 5xx, or a rate-limited 403 raises `GitHubUnavailable`.
-- [ ] T007 [P] Unit tests for the fake's pull requests in backend/tests/unit/test_fake_github.py:
+- [X] T007 [P] Unit tests for the fake's pull requests in backend/tests/unit/test_fake_github.py:
   - **List**: for octocat on 2011, `list_pull_requests` returns #1 to #8, newest `updated_at`
     first, with #8 marked draft. #9 is closed and absent.
   - **Get**: `get_pull_request` returns #9 as `closed`.
@@ -162,7 +162,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
       raise `GitHubNotFound` for that SHA.
     - `unrelated_history(2011, 1)` makes `compare_commits` raise `NoCommonHistory`.
   - **Access**: hubot listing 2012 raises `GitHubNotFound`.
-- [ ] T008 [P] Integration tests for the schema in
+- [X] T008 [P] Integration tests for the schema in
   backend/tests/integration/test_review_schema.py, inserting rows directly:
   - A complete review row is accepted.
   - These raise `IntegrityError`:
@@ -179,7 +179,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - `usage_counters.reviews_count` defaults to 0.
   - A job of kind `review_pull_request` and an audit event with action
     `pull_request_review_submit` are accepted.
-- [ ] T009 [P] Integration tests for the review allowance in
+- [X] T009 [P] Integration tests for the review allowance in
   backend/tests/integration/test_review_quota.py:
   - `reserve_review` counts up to `daily_review_limit`. The next call raises 429
     `daily_limit_reached` with `details` holding `allowance: "reviews"`, `limit`, and
@@ -189,7 +189,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - `refund_review(db, workspace_id, usage_date)` decrements that day's count and never goes
     below zero.
   - `GET /v1/usage` returns `reviews_used` and `reviews_limit`.
-- [ ] T010 [P] Unit tests for the review model call in
+- [X] T010 [P] Unit tests for the review model call in
   backend/tests/unit/test_gemini_review_call.py, using the `StubClient` pattern from
   backend/tests/unit/test_gemini_answer_model.py:
   - **Gemini**: `GeminiAnswerModel.review(system=..., user_content=...)`:
@@ -209,7 +209,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
     - `invalid_citations` cites `E999` everywhere;
     - `unavailable` and `refusal` raise.
     - The fake appends each prompt to `prompts`.
-- [ ] T011 [P] Add deadline tests to backend/tests/integration/test_job_queue.py:
+- [X] T011 [P] Add deadline tests to backend/tests/integration/test_job_queue.py:
   - A claimed `review_pull_request` job gets `deadline_at = started_at + review_deadline`.
   - Its timeout failure has code `timeout` and the message "Reviewing the pull request did not
     finish within the time limit."
@@ -217,7 +217,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
 
 ### Implementation for the foundation
 
-- [ ] T012 Write migration backend/alembic/versions/0003_pull_request_review.py, and update
+- [X] T012 Write migration backend/alembic/versions/0003_pull_request_review.py, and update
   backend/src/codeatlas/models.py (data-model.md):
   - Constants: add `"pull_request_review"` to `ANALYSIS_KINDS`, `"reviewed", "nothing_to_review"`
     to `QUALITY_STATES`, `"change", "reference", "test"` to `EVIDENCE_SOURCE_TYPES`,
@@ -247,13 +247,13 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - Downgrade: refuse when any review row exists. Otherwise drop the new columns and index, and
     restore 002's checks.
   - Make T008 pass.
-- [ ] T013 [P] In backend/src/codeatlas/ingestion/extract.py, add `sha256: bytes` to
+- [X] T013 [P] In backend/src/codeatlas/ingestion/extract.py, add `sha256: bytes` to
   `ArchiveMember`:
   - Compute it while reading every regular member, including members over `max_file_bytes`. For
     those, read in chunks without keeping the content.
   - `filter_members` and indexing are otherwise unchanged.
   - Make T005 pass, with the 001 extraction tests unchanged.
-- [ ] T014 Add the pull request calls in backend/src/codeatlas/github/gateway.py and
+- [X] T014 Add the pull request calls in backend/src/codeatlas/github/gateway.py and
   backend/src/codeatlas/github/client.py (research R1, R2):
   - **Dataclasses** in gateway.py:
     - `PullRequest(number, title, body, author, state: Literal["open", "closed", "merged"], draft, base_ref, base_sha, head_ref, head_sha, head_repository: str | None, is_fork, html_url, updated_at, additions: int | None, deletions: int | None, changed_files: int | None)`.
@@ -270,7 +270,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - **Client**: implement them with the existing pooled client, timeouts, headers, token helpers,
     and error classification, including the fork retry and the 404 and 422 mapping from T006.
   - Make T006 pass.
-- [ ] T015 Extend the fake gateway in backend/src/codeatlas/github/fake.py (needs T002, T003, and
+- [X] T015 Extend the fake gateway in backend/src/codeatlas/github/fake.py (needs T002, T003, and
   T014):
   - Repositories:
     - Add `REVIEW_APP_ID = 2011` (`octo-org/review-app`, public) and
@@ -292,7 +292,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
     `set_pull_request_body`, `withhold_permission`, `drop_commit`, and `unrelated_history`, as
     tested in T007. `reset()` restores them all. `make_private` works on 2011 as on 2001.
   - Make T007 pass. The 001 and 002 fake tests must still pass.
-- [ ] T016 [P] Per-kind deadlines in backend/src/codeatlas/jobs/queue.py:
+- [X] T016 [P] Per-kind deadlines in backend/src/codeatlas/jobs/queue.py:
   - Replace the `answer_question` branches in `_deadline` and `timeout_failure` with one mapping
     from kind to a setting and a description:
     - `index_repository` → `indexing_deadline`, "Indexing";
@@ -301,7 +301,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - Add `"review_pull_request"` to the `JobKind` literal in
     backend/src/codeatlas/api/routes/jobs.py.
   - Make T011 pass.
-- [ ] T017 The review allowance in backend/src/codeatlas/workspace/quotas.py and
+- [X] T017 The review allowance in backend/src/codeatlas/workspace/quotas.py and
   backend/src/codeatlas/api/routes/usage.py:
   - Factor the upsert in `reserve_question` into a helper parameterized by the counter column,
     limit, allowance name, and noun.
@@ -311,7 +311,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - The 429 `details` gain `allowance` (`questions` or `reviews`).
   - `Usage` and the `/v1/usage` response gain `reviews_used` and `reviews_limit`.
   - Make T009 pass.
-- [ ] T018 Share the job access helpers. Create backend/src/codeatlas/jobs/github_access.py and
+- [X] T018 Share the job access helpers. Create backend/src/codeatlas/jobs/github_access.py and
   move into it, from backend/src/codeatlas/ingestion/pipeline.py:
   - `OwnerToken`, `_workspace_owner`, `_stored_token`, `_owner_token` (renamed `owner_token`,
     with a `stage` parameter instead of the hard-coded `"resolving_commit"`), and
@@ -323,7 +323,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
     (renamed `disclosure_not_accepted`), and `DISCONNECTED_MESSAGE` and `ACCESS_LOST_MESSAGE`.
   - pipeline.py imports them. There is no behavior change, and every 001 and 002 test passes
     unchanged.
-- [ ] T019 The review output schema and model call (research R7):
+- [X] T019 The review output schema and model call (research R7):
   - Create backend/src/codeatlas/review/__init__.py, and backend/src/codeatlas/review/schema.py
     with `ReviewOutput` and its parts:
     - `overview: str` (1 to 600 characters);

@@ -1,7 +1,8 @@
 """The answer-model boundary (research R11). Real and fake answer models follow this protocol.
 
-Each `answer` call is one stateless request. Prompts, evidence, output text, and the API key are
-never logged or put into exception messages; only error classes, status codes, and token counts.
+Each `answer` or `review` call (specs/003-pr-review research R7) is one stateless request with
+its own output schema. Prompts, evidence, output text, and the API key are never logged or put
+into exception messages; only error classes, status codes, and token counts.
 """
 
 import logging
@@ -19,11 +20,12 @@ from google.genai import types
 from google.genai._gaos.lib.compat_errors import APIConnectionError, APIError
 from google.genai._gaos.utils.retries import RetryConfig
 from google.genai.interactions import GenerationConfigParam, Interaction
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from codeatlas.config import Settings, get_settings
 from codeatlas.providers.errors import ProviderRefused, ProviderUnavailable
 from codeatlas.qa.schema import AnswerOutput, Claim
+from codeatlas.review.schema import ReviewOutput, RiskOut, Severity, SummaryPoint
 
 logger = logging.getLogger(__name__)
 # With GOOGLE_GENAI_DEBUG set, the SDK logs request bodies and headers at DEBUG level.
@@ -68,9 +70,23 @@ class AnswerResult:
     model: str
 
 
+@dataclass(frozen=True)
+class ReviewResult:
+    """`output` is None when the text did not parse against the schema; `parse_error` says why."""
+
+    output: ReviewOutput | None
+    parse_error: str | None
+    usage: AnswerUsage
+    model: str
+
+
 class AnswerModel(Protocol):
     def answer(self, *, system: str, user_content: str) -> AnswerResult:
         """One stateless call. Raises `ProviderUnavailable` or `ProviderRefused`."""
+        ...
+
+    def review(self, *, system: str, user_content: str) -> ReviewResult:
+        """One stateless review call. Raises `ProviderUnavailable` or `ProviderRefused`."""
         ...
 
 
@@ -94,13 +110,13 @@ class GeminiClient(Protocol):
     def interactions(self) -> InteractionsAPI: ...
 
 
-def _response_schema() -> dict[str, Any]:
-    """`AnswerOutput`'s JSON schema with references inlined and only keywords Gemini documents.
+def _response_schema(output_model: type[BaseModel]) -> dict[str, Any]:
+    """The output model's JSON schema with references inlined and only keywords Gemini documents.
 
     Dropped keywords (titles, string lengths) stay enforced when the output is validated.
     """
     keywords = {"type", "description", "properties", "required", "enum", "items", "maxItems"}
-    full = AnswerOutput.model_json_schema()
+    full = output_model.model_json_schema()
     definitions: dict[str, Any] = full.get("$defs", {})
 
     def clean(node: dict[str, Any]) -> dict[str, Any]:
@@ -119,7 +135,8 @@ def _response_schema() -> dict[str, Any]:
     return clean(full)
 
 
-RESPONSE_SCHEMA = _response_schema()
+RESPONSE_SCHEMA = _response_schema(AnswerOutput)
+REVIEW_RESPONSE_SCHEMA = _response_schema(ReviewOutput)
 
 
 class GeminiAnswerModel:
@@ -142,21 +159,40 @@ class GeminiAnswerModel:
         self._client = client
 
     def answer(self, *, system: str, user_content: str) -> AnswerResult:
-        interaction = self._create(system, user_content)
+        interaction = self._interact(system, user_content, RESPONSE_SCHEMA, call="answer")
+        output, parse_error = _parse(interaction.output_text, interaction.status, AnswerOutput)
+        return AnswerResult(
+            output=output, parse_error=parse_error, usage=_usage(interaction), model=self._model
+        )
+
+    def review(self, *, system: str, user_content: str) -> ReviewResult:
+        interaction = self._interact(system, user_content, REVIEW_RESPONSE_SCHEMA, call="review")
+        output, parse_error = _parse(interaction.output_text, interaction.status, ReviewOutput)
+        return ReviewResult(
+            output=output, parse_error=parse_error, usage=_usage(interaction), model=self._model
+        )
+
+    def _interact(
+        self, system: str, user_content: str, schema: dict[str, Any], *, call: str
+    ) -> Interaction:
+        """A completed or incomplete interaction; a block or any other ending raises.
+
+        `schema` is the output model's response schema, and `call` names the call in messages.
+        """
+        interaction = self._create(system, user_content, schema, call=call)
         codes = [_code_name(error.code) for error in interaction.errors or []]
         if any(code in _BLOCK_CODES for code in codes):
-            raise ProviderRefused(f"Gemini blocked the answer ({', '.join(codes)})")
+            raise ProviderRefused(f"Gemini blocked the {call} ({', '.join(codes)})")
         if interaction.status not in ("completed", "incomplete"):
             raise ProviderUnavailable(
                 f"Gemini interaction ended with status {interaction.status}"
                 + (f" ({', '.join(codes)})" if codes else "")
             )
-        output, parse_error = _parse(interaction.output_text, interaction.status)
-        return AnswerResult(
-            output=output, parse_error=parse_error, usage=_usage(interaction), model=self._model
-        )
+        return interaction
 
-    def _create(self, system: str, user_content: str) -> Interaction:
+    def _create(
+        self, system: str, user_content: str, schema: dict[str, Any], *, call: str
+    ) -> Interaction:
         client = self._client_or_build()
         attempt = 1
         while True:
@@ -168,7 +204,7 @@ class GeminiAnswerModel:
                     response_format={
                         "type": "text",
                         "mime_type": "application/json",
-                        "schema": RESPONSE_SCHEMA,
+                        "schema": schema,
                     },
                     generation_config=self._generation_config,
                     store=False,
@@ -177,14 +213,15 @@ class GeminiAnswerModel:
                 if _blocked(exc):
                     raise ProviderRefused(f"Gemini blocked the request ({_describe(exc)})") from exc
                 if not _retryable(exc):
-                    raise ProviderUnavailable(_rejected_message(exc)) from exc
+                    raise ProviderUnavailable(_rejected_message(exc, call)) from exc
                 if attempt == MAX_ATTEMPTS:
                     raise ProviderUnavailable(
-                        f"Gemini answer failed after {MAX_ATTEMPTS} attempts: {_describe(exc)}"
+                        f"Gemini {call} failed after {MAX_ATTEMPTS} attempts: {_describe(exc)}"
                     ) from exc
                 delay = min(BACKOFF_BASE_SECONDS * 2 ** (attempt - 1), BACKOFF_CAP_SECONDS)
                 logger.warning(
-                    "Gemini answer attempt %d of %d failed (%s); retrying in %.1f s",
+                    "Gemini %s attempt %d of %d failed (%s); retrying in %.1f s",
+                    call,
                     attempt,
                     MAX_ATTEMPTS,
                     _describe(exc),
@@ -210,12 +247,14 @@ class GeminiAnswerModel:
         return self._client
 
 
-def _parse(text: str | None, status: str) -> tuple[AnswerOutput | None, str | None]:
+def _parse[OutputT: BaseModel](
+    text: str | None, status: str, output_model: type[OutputT]
+) -> tuple[OutputT | None, str | None]:
     cut_off = "the output hit the token limit; " if status == "incomplete" else ""
     if not text or not text.strip():
         return None, f"{cut_off}the output was empty"
     try:
-        return AnswerOutput.model_validate_json(text), None
+        return output_model.model_validate_json(text), None
     except ValidationError as exc:
         # Locations and messages only: input values could echo the output text.
         details = [
@@ -262,8 +301,8 @@ def _describe(exc: APIError) -> str:
     return type(exc).__name__ + (f", HTTP {status}" if isinstance(status, int) else "")
 
 
-def _rejected_message(exc: APIError) -> str:
-    message = f"Gemini rejected the answer request ({_describe(exc)})"
+def _rejected_message(exc: APIError, call: str) -> str:
+    message = f"Gemini rejected the {call} request ({_describe(exc)})"
     if exc.status_code in (401, 403):
         message += "; check GEMINI_API_KEY"
     return message
@@ -272,6 +311,11 @@ def _rejected_message(exc: APIError) -> str:
 FAKE_MODEL = "fake-answer-model"
 FAKE_USAGE = AnswerUsage(input_tokens=1200, output_tokens=180, thinking_tokens=320, cached_tokens=0)
 _EVIDENCE_LABEL = re.compile(r'<evidence id="(E\d+)"')
+# A diff hunk's opening tag in a review prompt, and the change labels in it (specs/003-pr-review
+# research R6, R7).
+_HUNK_TAG = re.compile(r"<hunk\b([^>]*)>")
+_HUNK_LABEL = re.compile(r'\b(before|after)="(E\d+)"')
+UNKNOWN_REVIEW_LABEL = "E999"
 
 
 class FakeAnswerModel:
@@ -284,12 +328,26 @@ class FakeAnswerModel:
     - `invalid_citations`: a fact citing `E99`, on every call.
     - `refusal`: raises `ProviderRefused`.
 
-    `calls` counts every call, including those that raise.
+    Reviews follow `fake_review_model_mode`, also read at call time (specs/003-pr-review
+    research R13). The change labels are those in the prompt's hunk tags, in prompt order.
+
+    - `ok`: an overview, one summary point citing the first change label, and one `security`
+      risk. The risk cites the first `before` label with severity `high` when there is one,
+      otherwise the first change label with severity `low`. Without change labels, it gives
+      only the overview.
+    - `no_risks`: the same without the risk.
+    - `partly_invalid`: `ok` plus a risk citing the unknown label `E999`.
+    - `invalid_citations`: every summary point and risk cites `E999`, on every call.
+    - `unavailable` and `refusal`: raise `ProviderUnavailable` and `ProviderRefused`.
+
+    `calls` counts every call, including those that raise, and `prompts` records the user
+    content of every review call, so tests can check what was sent.
     """
 
     def __init__(self, settings: Settings):
         self._settings = settings
         self.calls = 0
+        self.prompts: list[str] = []
 
     def answer(self, *, system: str, user_content: str) -> AnswerResult:
         self.calls += 1
@@ -333,6 +391,61 @@ class FakeAnswerModel:
                 status="answered", summary="The evidence answers the question.", claims=claims
             )
         return AnswerResult(output=output, parse_error=None, usage=FAKE_USAGE, model=FAKE_MODEL)
+
+    def review(self, *, system: str, user_content: str) -> ReviewResult:
+        self.calls += 1
+        self.prompts.append(user_content)
+        mode = self._settings.fake_review_model_mode
+        if mode == "unavailable":
+            raise ProviderUnavailable("The fake review model is configured as unavailable")
+        if mode == "refusal":
+            raise ProviderRefused("The fake review model is configured to refuse")
+        sides = [
+            (side, label)
+            for attributes in _HUNK_TAG.findall(user_content)
+            for side, label in _HUNK_LABEL.findall(attributes)
+        ]
+        change_labels = [label for _, label in sides]
+        before_labels = [label for side, label in sides if side == "before"]
+        points: list[SummaryPoint] = []
+        risks: list[RiskOut] = []
+        if mode == "invalid_citations":
+            points.append(_fake_summary_point(UNKNOWN_REVIEW_LABEL))
+            risks.append(_fake_risk(UNKNOWN_REVIEW_LABEL, "low"))
+        elif change_labels:
+            points.append(_fake_summary_point(change_labels[0]))
+            if mode != "no_risks":
+                risks.append(
+                    _fake_risk(before_labels[0], "high")
+                    if before_labels
+                    else _fake_risk(change_labels[0], "low")
+                )
+        if mode == "partly_invalid":
+            risks.append(_fake_risk(UNKNOWN_REVIEW_LABEL, "medium"))
+        output = ReviewOutput(
+            overview="The pull request changes the code shown in the diff.",
+            summary_points=points,
+            risks=risks,
+        )
+        return ReviewResult(output=output, parse_error=None, usage=FAKE_USAGE, model=FAKE_MODEL)
+
+
+def _fake_summary_point(label: str) -> SummaryPoint:
+    return SummaryPoint(
+        change="modified", text="The first change is summarized here.", evidence_ids=[label]
+    )
+
+
+def _fake_risk(label: str, severity: Severity) -> RiskOut:
+    return RiskOut(
+        title="The change may weaken a check",
+        severity=severity,
+        category="security",
+        basis="observed",
+        explanation="The cited lines change how a request is checked.",
+        suggested_check="Confirm that the check still refuses requests it refused before.",
+        evidence_ids=[label],
+    )
 
 
 _fake_answer_model: FakeAnswerModel | None = None
