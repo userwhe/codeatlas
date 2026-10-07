@@ -1,0 +1,14 @@
+{
+  "number": 3,
+  "title": "Trim slugs",
+  "body": "Long names made long URLs. Slugs now stop at 40 characters.",
+  "author": "hubot",
+  "draft": false,
+  "state": "open",
+  "base_ref": "main",
+  "head_ref": "trim-slugs",
+  "head_owner": "hubot",
+  "remove": [],
+  "rename": {},
+  "updated_at": "2026-10-05T14:00:00Z"
+}

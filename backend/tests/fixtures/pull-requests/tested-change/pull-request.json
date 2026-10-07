@@ -1,0 +1,14 @@
+{
+  "number": 2,
+  "title": "Pluralize zero counts",
+  "body": "`formatCount(0)` returned \"0 item\". Use the singular for exactly one item, and test zero.",
+  "author": "octocat",
+  "draft": false,
+  "state": "open",
+  "base_ref": "release",
+  "head_ref": "pluralize-zero-counts",
+  "head_owner": null,
+  "remove": [],
+  "rename": {},
+  "updated_at": "2026-10-05T15:00:00Z"
+}

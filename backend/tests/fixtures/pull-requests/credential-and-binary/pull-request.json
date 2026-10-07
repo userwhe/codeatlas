@@ -1,0 +1,14 @@
+{
+  "number": 4,
+  "title": "Add local settings",
+  "body": "Adds the settings file for local runs and the logo.",
+  "author": "octocat",
+  "draft": false,
+  "state": "open",
+  "base_ref": "main",
+  "head_ref": "local-settings",
+  "head_owner": null,
+  "remove": [],
+  "rename": {},
+  "updated_at": "2026-10-05T13:00:00Z"
+}
