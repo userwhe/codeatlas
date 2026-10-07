@@ -58,6 +58,31 @@ export function usePullRequests(repositoryId: string) {
   });
 }
 
+/**
+ * The repository's reviews, newest first, read from CodeAtlas rather than GitHub: reviews of
+ * closed and merged pull requests stay reachable here after they leave the open list (FR-024).
+ */
+export function useReviewHistory(repositoryId: string) {
+  return useInfiniteQuery({
+    queryKey: ["analysis-runs", "list", repositoryId, "reviews"],
+    queryFn: ({ pageParam }) =>
+      unwrap(
+        api.GET("/v1/analysis-runs", {
+          params: {
+            query: { repository_id: repositoryId, kind: "pull_request_review", cursor: pageParam },
+          },
+        }),
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.next_cursor,
+    // Keep statuses current while any listed review is still running.
+    refetchInterval: (query) =>
+      query.state.data?.pages.some((page) => page.items.some((item) => isActiveJob(item.status)))
+        ? PULL_REQUEST_POLL_MS
+        : false,
+  });
+}
+
 /** One review: its pull request, commits, and, once it succeeds, the review and coverage. */
 export function useReview(runId: string) {
   return useQuery({
@@ -147,6 +172,9 @@ export function useRequestReview() {
       ),
     onSuccess: (_, { repositoryId }) => {
       void queryClient.invalidateQueries({ queryKey: ["pull-requests", repositoryId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["analysis-runs", "list", repositoryId, "reviews"],
+      });
     },
     onError: (error, { repositoryId }) => {
       // The repository was paused or lost access after the page loaded: reload it to show why.

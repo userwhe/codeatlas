@@ -291,6 +291,11 @@ class RunSummaryOut(BaseModel):
     quality_state: QuestionQuality | ReviewQuality | None
     commit_sha: str
     created_at: datetime
+    # Reviews only, so the history can name each review's pull request (FR-024); the level is
+    # null until the review succeeds.
+    pull_request_number: int | None
+    pull_request_title: str | None
+    overall_risk_level: Literal["high", "medium", "low", "none"] | None
 
 
 class RunPage(BaseModel):
@@ -474,6 +479,11 @@ def list_runs(
                 quality_state=run.quality_state,
                 commit_sha=run.commit_sha,
                 created_at=run.created_at,
+                pull_request_number=run.pull_request_number,
+                pull_request_title=(run.pull_request or {}).get("title"),
+                overall_risk_level=(run.result or {}).get("overall_risk", {}).get("level")
+                if run.kind == review_runs.ANALYSIS_KIND
+                else None,
             )
         )
     return RunPage(items=items, next_cursor=next_cursor(page, len(window), len(rows) > page.limit))

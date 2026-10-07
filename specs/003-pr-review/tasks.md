@@ -884,6 +884,14 @@ the following:
       was reused;
     - "Review again" on a `current` review asks for confirmation, then posts with `mode: "new"`.
 
+- [X] T063 [US3] Past reviews list, found missing during real-mode validation (FR-024):
+  - `GET /v1/analysis-runs` items gain `pull_request_number`, `pull_request_title`, and
+    `overall_risk_level` for reviews (backend/src/codeatlas/api/routes/analysis_runs.py), with a
+    test in backend/tests/integration/test_review_access.py.
+  - frontend/src/components/ReviewHistory.tsx and `useReviewHistory` in
+    frontend/src/lib/api/reviews.ts. A "Past reviews" list under the pull requests on the
+    repository page links every review, including those of closed and merged pull requests.
+
 **Checkpoint**: All three stories work independently in fake mode.
 
 ---

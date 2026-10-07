@@ -12,6 +12,7 @@ import { DisconnectRepositoryDialog } from "@/components/DisconnectRepositoryDia
 import { ExternalProcessingAcceptance } from "@/components/ExternalProcessingAcceptance";
 import { JobProgress } from "@/components/JobProgress";
 import { PullRequestList } from "@/components/PullRequestList";
+import { ReviewHistory } from "@/components/ReviewHistory";
 import { RepositoryAccessPanel } from "@/components/RepositoryAccessPanel";
 import { RepositoryStateBadge } from "@/components/RepositoryStateBadge";
 import { SnapshotSelector } from "@/components/SnapshotSelector";
@@ -160,7 +161,11 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
         {lost ? (
           <HiddenWhileLost>Reviewing pull requests</HiddenWhileLost>
         ) : (
-          <PullRequestList repositoryId={repository.id} />
+          <>
+            <PullRequestList repositoryId={repository.id} />
+            <h3 className="text-sm font-semibold">Past reviews</h3>
+            <ReviewHistory repositoryId={repository.id} />
+          </>
         )}
       </Section>
 

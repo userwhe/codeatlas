@@ -1122,6 +1122,12 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Pull Request Number */
+            pull_request_number: number | null;
+            /** Pull Request Title */
+            pull_request_title: string | null;
+            /** Overall Risk Level */
+            overall_risk_level: ("high" | "medium" | "low" | "none") | null;
         };
         /** SearchRequest */
         SearchRequest: {

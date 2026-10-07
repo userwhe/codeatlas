@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from codeatlas.github.fake import REVIEW_APP_ID, commit_sha
+from codeatlas.github.fake import REVIEW_APP_ID, commit_sha, get_fake_github
 from codeatlas.jobs.maintenance import run_maintenance
 from codeatlas.models import AnalysisRun, AuditEvent, EvidenceItem, Job, Repository
 from codeatlas.workspace import access
@@ -389,6 +389,43 @@ def test_nothing_to_review_result(db: Session, octocat: TestClient, repository_i
     (risk,) = body["review"]["risks"]
     assert (risk["origin"], risk["path"], risk["citations"]) == ("rule", ".env", [])
     assert body["citations"] == []
+
+
+def test_the_review_history_lists_reviews_of_closed_and_open_pull_requests(
+    db: Session, octocat: TestClient, repository_id: str
+) -> None:
+    # Reviews stay reachable after their pull request leaves the open list (FR-024): the run
+    # list is read from the database, never from GitHub's open pull requests.
+    get_fake_github().merge_pull_request(REVIEW_APP_ID, 3)
+    merged = add_review(
+        db, repository_id, number=3, created_at=datetime.now(UTC) - timedelta(hours=1)
+    )
+    running = add_review(db, repository_id, number=1, job_status="running")
+    db.commit()
+
+    reviews = octocat.get(
+        "/v1/analysis-runs", params={"repository_id": repository_id, "kind": "pull_request_review"}
+    ).json()["items"]
+    questions = octocat.get(
+        "/v1/analysis-runs", params={"repository_id": repository_id, "kind": "repository_qa"}
+    ).json()["items"]
+
+    assert [item["id"] for item in reviews] == [str(running.id), str(merged.id)]
+    assert reviews[1] | {"id": None, "created_at": None} == {
+        "id": None,
+        "kind": "pull_request_review",
+        "question": None,
+        "status": "succeeded",
+        "quality_state": "reviewed",
+        "commit_sha": HEAD_SHA,
+        "created_at": None,
+        "pull_request_number": 3,
+        "pull_request_title": PULL_REQUEST["title"],
+        "overall_risk_level": RESULT["overall_risk"]["level"],
+    }
+    # A review without a result yet has no level.
+    assert (reviews[0]["status"], reviews[0]["overall_risk_level"]) == ("running", None)
+    assert questions == []
 
 
 def test_reviews_are_denied_while_access_is_lost_and_return_with_it(

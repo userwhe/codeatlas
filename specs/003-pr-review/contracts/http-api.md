@@ -99,7 +99,11 @@ Errors for this kind:
 
 - New optional filter: `kind` (`repository_qa` or `pull_request_review`). The question history
   sends `kind=repository_qa`, so reviews never appear in it.
-- Items gain `kind`. `question` is null for reviews.
+- Items gain `kind`, plus `pull_request_number`, `pull_request_title`, and `overall_risk_level`
+  (null until the review succeeds) for reviews. `question` is null for reviews.
+- The repository page's "Past reviews" list sends `kind=pull_request_review`. It is how reviews of
+  closed and merged pull requests stay reachable (FR-024), because the pull request list shows
+  only open pull requests.
 
 ## `GET /v1/analysis-runs/{run_id}` (changed)
 

@@ -204,6 +204,7 @@ frontend/
 │   │   └── reviews/[id]/                             # new: page.tsx, review-detail.tsx
 │   ├── components/
 │   │   ├── PullRequestList.tsx       # new: review states and actions; permission notice
+│   │   ├── ReviewHistory.tsx         # new: past reviews, including closed and merged pull requests
 │   │   ├── RiskLevelBadge.tsx        # new: overall level and severities
 │   │   ├── ReviewCitation.tsx        # new: excerpt with side, commit, and GitHub link (uses CodeView)
 │   │   ├── ExternalProcessingAcceptance.tsx          # disclosure mentions pull request content
