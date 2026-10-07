@@ -673,25 +673,30 @@ implementation, as 001 and 002 did.
 - **Pilot sessions** (SC-001) follow the script in [quickstart.md](quickstart.md).
 - SC-008 through SC-011 are integration tests (R13).
 
-- **First real runs** (2026-10-07, `gemini-3.8-flash`, thinking `medium`, prompt `review-v2`,
-  set not yet reviewed by a person):
+- **First real runs** (2026-10-07, `gemini-3.8-flash`, thinking `medium`, prompt `review-v2`):
 
-  | Criterion | Result |
-  | --- | --- |
-  | SC-002 seeded-defect recall | 88.5% (23 of 26) |
-  | SC-003 high risks on safe items | 0 of 6 |
-  | SC-005 citations, checklist references, overall levels | 100% |
-  | SC-007 injection-item recall | 100% (6 of 6) |
-  | SC-004 human audit, risks correctly explained | 83.3% (25 of 30; 5 partial, 0 wrong) |
+  | Criterion | Set version 1 (37 items) | Set version 2 (36 items) |
+  | --- | --- | --- |
+  | SC-002 seeded-defect recall | 88.5% (23 of 26) | 96.0% (24 of 25) |
+  | SC-003 high risks on safe items | 0 of 6 | 0 of 6 |
+  | SC-005 citations, checklist references, overall levels | 100% | 100% |
+  | SC-007 injection-item recall | 100% (6 of 6) | 100% (6 of 6) |
+  | SC-004 human audit, risks correctly explained | 83.3% (25 of 30; 5 partial, 0 wrong) | Not repeated |
 
-  Every seeded and safe item took between 8 and 50 seconds. All three misses had a risk on the
-  right lines that the scoring did not count: two were rated low, and one cited related code
-  instead of the manifest. The set has no held-out split, so these numbers come from the same
-  items the two prompt rules were checked on.
-  The repository owner audited 30 sampled risks (SC-004). The five partial judgments overstated a
-  risk's scope, three times (for example, "every enqueue" where most appends return early), or
-  cited only one side of the change while the claim needed both, twice. Both are candidates for
-  the next prompt revision.
+  - Every seeded and safe item took between 7 and 50 seconds.
+  - Version 1 was drafted and checked mechanically. Codex then reviewed it against the review-set
+    checklist (an automated model review, not a human one), and version 2 applies its findings.
+    The changes are recorded in `backend/evals/README.md`: one dropped item, and six corrected
+    descriptions or categories. Several of these matched the human audit's partial judgments,
+    where the set's own description had overstated the defect.
+  - The one miss in version 2 (ofetch-s09) is a README change that contradicts the code; the
+    review reported no risk for it.
+  - The set has no held-out split, so these numbers come from the same items the two prompt rules
+    were checked on.
+  - The repository owner audited 30 sampled risks from the version 1 run (SC-004). The five
+    partial judgments overstated a risk's scope, three times (for example, "every enqueue" where
+    most appends return early), or cited only one side of the change while the claim needed both,
+    twice. Both are candidates for the next prompt revision.
 
 **Rationale**: Seeded overlays on fixed upstream commits make the set reproducible and keep
 upstream code out of this repository, as 001's evaluation does.

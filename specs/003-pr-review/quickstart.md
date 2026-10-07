@@ -108,3 +108,33 @@ WHERE r.kind = 'pull_request_review'
 3. Record whether they name the removed check, and how long they took.
 
 At least 4 of 5 participants should name it.
+
+## Validation record (2026-10-07)
+
+Real mode: the development GitHub App with Pull requests read access, `gemini-3.8-flash` with
+prompt `review-v2`, and a public fixture repository built from `backend/tests/fixtures/repos/review-app`
+with pull requests opened from `backend/tests/fixtures/pull-requests`.
+
+| # | Result |
+| --- | --- |
+| 1 | Pass: the open pull requests, including the draft, were listed as "Not reviewed" |
+| 2 | Pass: a high security risk for the removed role check. Under `review-v1` it cited the after side; `review-v2` asks for the before side when lines are removed |
+| 3 | Pass: every citation opened the cited lines, and GitHub showed the same lines |
+| 4 | Pass: 2 checklist items, `tests/test_permissions.py` as a candidate test, 1 suggested new test |
+| 5 | Pass: `web/src/format.test.ts` listed under the tests the pull request changes |
+| 6 | Pass: the Markdown preview showed the sections, a task list, and working links, with no mentions |
+| 7 | Pass: after a push, the review showed "Outdated" and kept its head; the new head got a separate review |
+| 8 | Pass: requesting the new head again opened the same review, and the allowance did not change |
+| 9 | Pass, after a fix. The review of the merged pull request said "Merged", but nothing in the app linked to it once the pull request left the open list. T063 added a "Past reviews" list and a "Merged" or "Closed" badge in the review header |
+| 10 | Not run: needs a second GitHub account to fork the repository |
+| 11 | Pass: "Nothing to review" with a high security risk naming `.env`; the dummy value appeared in no log, response, or database row |
+| 12 | Pass: the injection pull request still got the high security risk |
+| 13 | Pass: "Nothing to review", the image listed as binary, and the allowance unchanged |
+| 14 | Not run: needs a second installation that has not approved the new permission. The installation object's `permissions` map was confirmed after approval only (research R1) |
+| 15 | Pass: after 10 of 10 reviews, the next request was refused with the reset time |
+| 16 | Pass: p95 31.9 seconds over 20 reviews that did not wait in the queue (median 14.8 seconds, maximum 37.9 seconds, no failures). The limit was raised to 40 for this run and then restored |
+
+Real mode also exposed three problems that the fakes could not, all fixed before this record:
+Gemini rejected the review schema while it carried both enums and list lengths; Gemini left out
+the optional `risks` field in every review; and a plain 404 from comparing commits was treated as
+a missing commit even when GitHub had only not yet computed the comparison (research R2 and R7).

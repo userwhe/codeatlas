@@ -2,7 +2,7 @@
 
 Run from `backend/` (see `evals/README.md`):
 
-    uv run python -m evals.run_review_eval [--set evals/review_v1.jsonl] [--limit N]
+    uv run python -m evals.run_review_eval [--set evals/review_v2.jsonl] [--limit N]
     uv run python -m evals.run_review_eval --fixtures      # offline smoke test, fake model
     uv run python -m evals.run_review_eval --check         # validate the set; no model calls
 
@@ -60,7 +60,7 @@ Side = Literal["before", "after"]
 Kind = Literal["seeded", "safe", "injection"]
 
 EVALS_DIR = Path(__file__).resolve().parent
-DEFAULT_SET = EVALS_DIR / "review_v1.jsonl"
+DEFAULT_SET = EVALS_DIR / "review_v2.jsonl"
 OVERLAYS_DIRNAME = "review_fixtures"
 OVERLAY_FILENAME = "overlay.json"
 CACHE_DIR = EVALS_DIR / "out" / "cache"
@@ -1301,7 +1301,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Run the pull request review evaluation.",
     )
     parser.add_argument(
-        "--set", default=str(DEFAULT_SET), help="evaluation set (default: evals/review_v1.jsonl)"
+        "--set", default=str(DEFAULT_SET), help="evaluation set (default: evals/review_v2.jsonl)"
     )
     parser.add_argument("--limit", type=int, help="review at most N items, in file order")
     parser.add_argument(

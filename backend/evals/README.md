@@ -16,7 +16,8 @@ review set and runner for `specs/003-pr-review/spec.md`
 | --- | --- |
 | `qa_v1.jsonl` | The question set, version 1 (68 questions over 3 public repositories) |
 | `run_qa_eval.py` | The runner: indexes the pinned commits, asks the questions, and writes the report |
-| `review_v1.jsonl` | The pull request review set, version 1 (37 items on the same 3 repositories, plus 3 offline fixture items) |
+| `review_v2.jsonl` | The pull request review set, version 2 (36 items on the same 3 repositories, plus 3 offline fixture items) |
+| `review_v1.jsonl` | Version 1, superseded by version 2 after the review recorded in the [review-set log](#review-set-log); kept because its numbers were reported |
 | `review_fixtures/` | One overlay per directory: the edits a review item makes to its base commit |
 | `run_review_eval.py` | The review runner: builds each pull request from its overlay, reviews it, and writes the report |
 | `out/` | Reports, audit sheets, scratch clones, and the archive cache (gitignored; never commit it) |
@@ -308,11 +309,12 @@ which is gitignored.
 
 ## Pull request review evaluation
 
-> **Draft: needs human review before use.** The pull requests, overlays, and labels in
-> `review_v1.jsonl` and `review_fixtures/` were drafted and checked mechanically (`--check`), but
-> no person has reviewed them yet. Do not report any number measured with this set until a
-> reviewer has worked through the [review-set checklist](#review-set-checklist) and recorded the
-> review in the [review-set log](#review-set-log).
+> **Reviewed by a model, not yet by a person.** The pull requests, overlays, and labels were
+> drafted and checked mechanically (`--check`). Codex then applied the
+> [review-set checklist](#review-set-checklist) to every item of `review_v1.jsonl`, and
+> `review_v2.jsonl` applies its findings (see the [review-set log](#review-set-log)). Label
+> numbers measured with it as coming from a set without a full human review, until a person has
+> worked through the checklist and recorded that review in the log.
 
 The review set measures `specs/003-pr-review/spec.md` SC-002, SC-003, SC-005, and SC-007, and
 samples risks for the SC-004 audit (research R14). Each item is a small pull request made by
@@ -472,11 +474,12 @@ A reviewer checks every item before the set is used:
 
 | Date | Reviewer | Items reviewed | Changes |
 | --- | --- | --- | --- |
-| | | | |
+| 2026-10-07 | Codex (automated model review, read-only; not a human review) | All 40 items of `review_v1.jsonl` | 33 ok, 6 fix, 1 drop, applied in `review_v2.jsonl`: ofetch-s04 relabeled as a compatibility defect (wildcard CORS and Request credentials) instead of a credential leak; ofetch-s07 and ofetch-i02 describe the stale `pnpm-lock.yaml`, which certainly fails CI, instead of an unverified runtime failure; p-queue-s03 and p-queue-i02 no longer claim a general O(n log n) cost on every enqueue; p-queue-s06 no longer claims a wait forever with no task running; ofetch-s08 dropped, because a missing rejection assertion is a low-severity test gap |
 
-Once the set has been reviewed and a number from it has been reported, do not edit
-`review_v1.jsonl` or its overlays. Put changes in a new version (`review_v2.jsonl`, with new
-overlay directories). Every report records a SHA-256 over the set file and its overlays.
+Once a number from a set version has been reported, do not edit that version or its overlays.
+Put changes in a new version, with new overlay directories for any overlay that changes.
+`review_v2.jsonl` changes labels only, so it reuses the overlays of `review_v1.jsonl`. Every report
+records a SHA-256 over the set file and its overlays.
 
 ### Running the review evaluation
 
@@ -493,7 +496,7 @@ uv run python -m evals.run_review_eval
 
 | Option | Meaning |
 | --- | --- |
-| `--set FILE` | The review set (default `evals/review_v1.jsonl`); overlays are read from `review_fixtures/` next to it |
+| `--set FILE` | The review set (default `evals/review_v2.jsonl`); overlays are read from `review_fixtures/` next to it |
 | `--limit N` | Review at most N items, in file order |
 | `--fixtures` | Run the set's `fixture:` items with the fake review model, instead of the pinned-repository items with Gemini |
 | `--check` | Build and check the selected items only, with no model calls |

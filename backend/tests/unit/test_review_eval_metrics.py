@@ -691,7 +691,12 @@ def test_shipped_set_has_offline_fixture_items_and_no_unused_overlays() -> None:
     assert len(fixtures) >= 2
     assert {i.labels.kind for i in fixtures} == {"seeded", "safe", "injection"}
     assert all((FIXTURE_REPOS_DIR / i.repository.split(":", 1)[1]).is_dir() for i in fixtures)
-    assert {p.name for p in overlays_dir.iterdir() if p.is_dir()} == {i.overlay_name for i in items}
+    # Overlays stay while any shipped version uses them: version 1 is kept because its numbers
+    # were reported, and it still uses an overlay that version 2 dropped.
+    versions = sorted(DEFAULT_SET.parent.glob("review_v*.jsonl"))
+    used = {i.overlay_name for version in versions for i in load_items(version)}
+    assert {p.name for p in overlays_dir.iterdir() if p.is_dir()} == used
+    assert {i.overlay_name for i in items} <= used
 
 
 @pytest.fixture
