@@ -991,7 +991,7 @@ documentation, real-GitHub checks, and final validation
     `GET /repos/{owner}/{repo}/installation` omits `pull_requests` before approval.
   - Correct the client mapping and the T006 tests if any answer differs. Add the findings to
     research R1 and R2.
-- [ ] T062 Run final validation:
+- [X] T062 Run final validation:
   - Every automated check in specs/003-pr-review/quickstart.md.
   - Validation scenarios 1 to 16 with the real GitHub App (needs T004). Their GitHub writes
     (opening, pushing to, merging, and closing pull requests, and forking) are developer actions,
@@ -1003,6 +1003,10 @@ documentation, real-GitHub checks, and final validation
   - Scan the changes for absolute local paths, secrets, personal notes, and mentions of private
     material before committing.
   - Fix any failure until every test passes.
+  - Done on 2026-10-07. Scenarios 10 and 14 were not run, for lack of a second account and an
+    unapproved installation; the results are in the quickstart's validation record. Real mode found
+    three defects, which were fixed and recorded in research R2 and R7. It also found one gap, the
+    missing past-review list, fixed in T063.
 
 ---
 
