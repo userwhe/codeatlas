@@ -116,6 +116,11 @@ def test_system_prompt_states_the_rules() -> None:
     assert '"possible"' in SYSTEM_PROMPT
     for field in ('"checklist"', '"risk_indexes"', '"new_test_cases"', "<candidate_tests>"):
         assert field in SYSTEM_PROMPT
+    # The response schema leaves list lengths out (research R7), so the prompt states them.
+    assert (
+        "at most 15 summary points, 12 risks, 12 checklist items, and 8 new test cases"
+        in " ".join(SYSTEM_PROMPT.split())
+    )
 
 
 def test_user_content_sections_come_in_order() -> None:

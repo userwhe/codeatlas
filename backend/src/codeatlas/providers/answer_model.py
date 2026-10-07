@@ -118,12 +118,15 @@ class GeminiClient(Protocol):
     def interactions(self) -> InteractionsAPI: ...
 
 
-def _response_schema(output_model: type[BaseModel]) -> dict[str, Any]:
+def _response_schema(output_model: type[BaseModel], *, max_items: bool = True) -> dict[str, Any]:
     """The output model's JSON schema with references inlined and only keywords Gemini documents.
 
-    Dropped keywords (titles, string lengths) stay enforced when the output is validated.
+    Dropped keywords (titles, string lengths, and list lengths when `max_items` is false) stay
+    enforced when the output is validated.
     """
-    keywords = {"type", "description", "properties", "required", "enum", "items", "maxItems"}
+    keywords = {"type", "description", "properties", "required", "enum", "items"}
+    if max_items:
+        keywords.add("maxItems")
     full = output_model.model_json_schema()
     definitions: dict[str, Any] = full.get("$defs", {})
 
@@ -144,7 +147,10 @@ def _response_schema(output_model: type[BaseModel]) -> dict[str, Any]:
 
 
 RESPONSE_SCHEMA = _response_schema(AnswerOutput)
-REVIEW_RESPONSE_SCHEMA = _response_schema(ReviewOutput)
+# Gemini rejects the full review schema with "Request contains an invalid argument" (HTTP 400)
+# when it carries both the enums and the list lengths (specs/003-pr-review research R7). The
+# review prompt states the lengths instead.
+REVIEW_RESPONSE_SCHEMA = _response_schema(ReviewOutput, max_items=False)
 
 
 class GeminiAnswerModel:

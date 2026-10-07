@@ -144,7 +144,6 @@ def test_review_schema_is_review_output_without_unsupported_keywords() -> None:
         "new_test_cases",
     }
     assert REVIEW_RESPONSE_SCHEMA["required"] == ["overview"]
-    assert point["maxItems"] == 15
     assert point["items"]["properties"]["change"]["enum"] == [
         "added",
         "modified",
@@ -153,7 +152,6 @@ def test_review_schema_is_review_output_without_unsupported_keywords() -> None:
     ]
     assert point["items"]["properties"]["evidence_ids"]["items"] == {"type": "string"}
     assert point["items"]["required"] == ["change", "text"]
-    assert risk["maxItems"] == 12
     assert risk["items"]["properties"]["severity"]["enum"] == ["high", "medium", "low"]
     assert risk["items"]["properties"]["category"]["enum"] == CATEGORIES
     assert risk["items"]["properties"]["basis"]["enum"] == ["observed", "possible"]
@@ -165,10 +163,8 @@ def test_review_schema_is_review_output_without_unsupported_keywords() -> None:
         "explanation",
         "suggested_check",
     ]
-    assert checklist["maxItems"] == 12
     assert checklist["items"]["properties"]["risk_indexes"]["items"] == {"type": "integer"}
     assert checklist["items"]["required"] == ["text"]
-    assert new_test_cases["maxItems"] == 8
     assert new_test_cases["items"]["required"] == ["behavior"]
     assert schema_keywords(REVIEW_RESPONSE_SCHEMA) <= {
         "type",
@@ -546,3 +542,11 @@ def test_fake_records_every_review_prompt_and_counts_calls(
 
     assert model.prompts == [ADDED_ONLY, REMOVED_ONLY]
     assert model.calls == 3
+
+
+def test_review_schema_leaves_list_lengths_to_the_prompt_and_validation() -> None:
+    # Gemini rejects the full review schema with a 400 when it carries both the enums and the list
+    # lengths (research R7). The lengths are stated in the system prompt and enforced when the
+    # output is parsed; the smaller answer schema keeps its length.
+    assert "maxItems" not in json.dumps(REVIEW_RESPONSE_SCHEMA)
+    assert RESPONSE_SCHEMA["properties"]["claims"]["maxItems"] == 10

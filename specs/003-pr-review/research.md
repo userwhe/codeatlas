@@ -366,6 +366,11 @@ commit, as FR-016 requires, while the model still sees each hunk as one diff.
 
   Categories are `correctness`, `security`, `data_and_migrations`, `compatibility`, `performance`,
   `dependencies`, `tests`, and `other`.
+- **Schema sent to Gemini** (found on 2026-10-07): Gemini rejects the full review schema with HTTP
+  400 "Request contains an invalid argument" when it carries both the enums and the `maxItems`
+  list lengths; any one part alone is accepted. The review schema therefore leaves out `maxItems`.
+  The system instruction states the list lengths, and parsing still enforces them, so an output
+  over a limit goes to the repair call. The answer schema is smaller and keeps its `maxItems`.
 - **Validation** (pure function):
   - Every label exists.
   - Summary points and new test cases cite at least one `change` label.
