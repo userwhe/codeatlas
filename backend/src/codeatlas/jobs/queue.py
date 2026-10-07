@@ -29,6 +29,13 @@ WAITING_STATUSES = ("queued", "retry_wait")
 INDEX_JOB = "index_repository"
 # Bounds one claim call: unique-index races and jobs failed on sight each use one round.
 MAX_CLAIM_ROUNDS = 10
+# Each kind's deadline setting, and the work its timeout message names (FR-031, and
+# specs/003-pr-review FR-028).
+DEADLINES = {
+    "index_repository": ("indexing_deadline", "Indexing"),
+    "answer_question": ("question_deadline", "Answering the question"),
+    "review_pull_request": ("review_deadline", "Reviewing the pull request"),
+}
 
 
 class LeaseLost(Exception):
@@ -72,13 +79,14 @@ def _now(now: datetime | None) -> datetime:
 
 
 def _deadline(kind: str) -> timedelta:
-    settings = get_settings()
-    return settings.question_deadline if kind == "answer_question" else settings.indexing_deadline
+    setting, _ = DEADLINES[kind]
+    deadline: timedelta = getattr(get_settings(), setting)
+    return deadline
 
 
 def timeout_failure(kind: str) -> JobFailure:
     """The failure recorded when a job passes its deadline (FR-031)."""
-    work = "Answering the question" if kind == "answer_question" else "Indexing"
+    _, work = DEADLINES[kind]
     return JobFailure(
         "timeout", f"{work} did not finish within the time limit.", permanent=True, retryable=True
     )

@@ -111,7 +111,7 @@ def handle_answer(ctx: JobContext) -> None:
         repository = db.get(Repository, ctx.repository_id)
         snapshot = db.get(Snapshot, run.snapshot_id) if run is not None else None
         disconnected = repository is None or repository.deleted_at is not None
-        question = run.question if run is not None else ""
+        question = (run.question or "") if run is not None else ""
     if run is None or snapshot is None or disconnected:
         with ctx.publish() as (db, job):
             cancel(db, job, message="The repository was disconnected.")

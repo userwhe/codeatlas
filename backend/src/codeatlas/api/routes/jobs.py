@@ -17,7 +17,7 @@ from codeatlas.workspace.audit import deny
 
 router = APIRouter(tags=["jobs"])
 
-JobKind = Literal["index_repository", "answer_question"]
+JobKind = Literal["index_repository", "answer_question", "review_pull_request"]
 JobStatus = Literal["queued", "running", "retry_wait", "succeeded", "failed", "canceled"]
 # What started a job (specs/002-push-reindexing/contracts/http-api.md).
 JobTrigger = Literal["user", "push", "check"]

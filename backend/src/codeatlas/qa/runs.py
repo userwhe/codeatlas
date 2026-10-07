@@ -162,7 +162,7 @@ def view_url(snapshot_id: uuid.UUID, path: str, start_line: int, end_line: int) 
 
 def citations(db: Session, run: AnalysisRun) -> list[dict[str, Any]]:
     """Citations built from stored evidence items, never from model text (FR-020)."""
-    if run.result is None:
+    if run.result is None or run.snapshot_id is None:
         return []
     labels = cited_labels(AnswerOutput.model_validate(run.result))
     items = {
