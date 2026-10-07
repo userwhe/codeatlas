@@ -4,8 +4,13 @@ import Link from "next/link";
 
 import { RunStatusBadge } from "@/components/RunStatusBadge";
 import { errorMessage } from "@/lib/api/client";
-import { useRunHistory } from "@/lib/api/questions";
+import { type QualityState, type RunSummary, useRunHistory } from "@/lib/api/questions";
 import { shortSha } from "@/lib/api/repositories";
+
+/** The history holds only questions, so a review's quality state never appears in it. */
+function questionQuality(quality: RunSummary["quality_state"]): QualityState {
+  return quality === "answered" || quality === "insufficient_evidence" ? quality : null;
+}
 
 /** The questions asked about a repository, newest first, each linking to its answer. */
 export function AnswerHistory({ repositoryId }: { repositoryId: string }) {
@@ -40,7 +45,7 @@ export function AnswerHistory({ repositoryId }: { repositoryId: string }) {
             >
               <span className="flex items-start justify-between gap-3">
                 <span className="line-clamp-2 font-medium break-words">{run.question}</span>
-                <RunStatusBadge status={run.status} quality={run.quality_state} />
+                <RunStatusBadge status={run.status} quality={questionQuality(run.quality_state)} />
               </span>
               <span className="text-xs text-zinc-500">
                 Commit <code title={run.commit_sha}>{shortSha(run.commit_sha)}</code> ·{" "}

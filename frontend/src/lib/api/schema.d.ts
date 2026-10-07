@@ -159,6 +159,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/repositories/{repository_id}/pull-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pull Requests */
+        get: operations["list_pull_requests_v1_repositories__repository_id__pull_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/snapshots/{snapshot_id}": {
         parameters: {
             query?: never;
@@ -263,8 +280,8 @@ export interface paths {
         /** List Runs */
         get: operations["list_runs_v1_analysis_runs_get"];
         put?: never;
-        /** Submit Question */
-        post: operations["submit_question_v1_analysis_runs_post"];
+        /** Submit Run */
+        post: operations["submit_run_v1_analysis_runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -347,6 +364,34 @@ export interface components {
             /** Reason */
             reason: string | null;
         };
+        /** CandidateTestOut */
+        CandidateTestOut: {
+            /** Path */
+            path: string;
+            /** Reason */
+            reason: string;
+            /** Citations */
+            citations: string[];
+        };
+        /** ChangedTestOut */
+        ChangedTestOut: {
+            /** Path */
+            path: string;
+            /**
+             * Change
+             * @enum {string}
+             */
+            change: "added" | "modified" | "renamed" | "removed";
+        };
+        /** ChecklistItemOut */
+        ChecklistItemOut: {
+            /** Text */
+            text: string;
+            /** Paths */
+            paths: string[];
+            /** Risk Ids */
+            risk_ids: string[];
+        };
         /** CitationOut */
         CitationOut: {
             /** Label */
@@ -381,6 +426,15 @@ export interface components {
             /** Citations */
             citations: string[];
         };
+        /** CommitsOut */
+        CommitsOut: {
+            /** Base Sha */
+            base_sha: string;
+            /** Head Sha */
+            head_sha: string;
+            /** Merge Base Sha */
+            merge_base_sha: string | null;
+        };
         /** ConnectIn */
         ConnectIn: {
             /** Github Repository Id */
@@ -411,6 +465,34 @@ export interface components {
             reason: string;
             /** Detail */
             detail: string | null;
+        };
+        /**
+         * CoverageFileOut
+         * @description One changed file, or one excluded directory (`entry_type` `directory`, with a `count`).
+         */
+        CoverageFileOut: {
+            /** Path */
+            path: string;
+            /**
+             * Entry Type
+             * @default file
+             * @enum {string}
+             */
+            entry_type: "file" | "directory";
+            /** Previous Path */
+            previous_path?: string | null;
+            /** Change */
+            change?: ("added" | "modified" | "renamed" | "removed") | null;
+            /** Additions */
+            additions?: number | null;
+            /** Deletions */
+            deletions?: number | null;
+            /** Reviewed */
+            reviewed: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Count */
+            count?: number | null;
         };
         /** CoveragePage */
         CoveragePage: {
@@ -540,7 +622,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "index_repository" | "answer_question";
+            kind: "index_repository" | "answer_question" | "review_pull_request";
             /**
              * Status
              * @enum {string}
@@ -603,6 +685,109 @@ export interface components {
             /** Github App Install Url */
             github_app_install_url: string;
         };
+        /** NewTestCaseOut */
+        NewTestCaseOut: {
+            /** Behavior */
+            behavior: string;
+            /** Location Hint */
+            location_hint: string | null;
+            /** Citations */
+            citations: string[];
+        };
+        /** OverallRiskOut */
+        OverallRiskOut: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "high" | "medium" | "low" | "none";
+            /** Partial */
+            partial: boolean;
+        };
+        /**
+         * PullRequestOut
+         * @description An open pull request, read live from GitHub. `title` and `author` are untrusted text.
+         */
+        PullRequestOut: {
+            /** Number */
+            number: number;
+            /** Title */
+            title: string;
+            /** Author */
+            author: string;
+            /** Draft */
+            draft: boolean;
+            /** Base Ref */
+            base_ref: string;
+            /** Head Ref */
+            head_ref: string;
+            /** Head Sha */
+            head_sha: string;
+            /** Is Fork */
+            is_fork: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Html Url */
+            html_url: string;
+            review: components["schemas"]["PullRequestReviewOut"] | null;
+        };
+        /** PullRequestPage */
+        PullRequestPage: {
+            /** Items */
+            items: components["schemas"]["PullRequestOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /**
+         * PullRequestRefOut
+         * @description The reviewed pull request, as copied at submission. `title` and `author` are untrusted.
+         */
+        PullRequestRefOut: {
+            /** Number */
+            number: number;
+            /** Title */
+            title: string;
+            /** Author */
+            author: string;
+            /** Draft */
+            draft: boolean;
+            /** Base Ref */
+            base_ref: string;
+            /** Head Ref */
+            head_ref: string;
+            /** Head Repository */
+            head_repository: string | null;
+            /** Is Fork */
+            is_fork: boolean;
+            /** Html Url */
+            html_url: string;
+        };
+        /**
+         * PullRequestReviewOut
+         * @description The newest review of a pull request (specs/003-pr-review/data-model.md).
+         */
+        PullRequestReviewOut: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "running" | "current" | "outdated" | "failed";
+            /** Head Sha */
+            head_sha: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** RepositoryOut */
         RepositoryOut: {
             /**
@@ -639,6 +824,148 @@ export interface components {
             /** Next Cursor */
             next_cursor: string | null;
         };
+        /** ReviewCitationOut */
+        ReviewCitationOut: {
+            /** Label */
+            label: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "change" | "reference" | "test";
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "before" | "after";
+            /** Path */
+            path: string;
+            /** Commit Sha */
+            commit_sha: string;
+            /** Start Line */
+            start_line: number;
+            /** End Line */
+            end_line: number;
+            /** Excerpt */
+            excerpt: string;
+            /** Github Url */
+            github_url: string;
+        };
+        /** ReviewCoverageOut */
+        ReviewCoverageOut: {
+            /** Files */
+            files: components["schemas"]["CoverageFileOut"][];
+            /** Changed Files */
+            changed_files: number;
+            /** Reviewed Files */
+            reviewed_files: number;
+            /** Changed Lines Reviewed */
+            changed_lines_reviewed: number;
+            /** Context Items */
+            context_items: number;
+        };
+        /** ReviewOut */
+        ReviewOut: {
+            overall_risk: components["schemas"]["OverallRiskOut"];
+            /** Overview */
+            overview: string;
+            /** Summary */
+            summary: components["schemas"]["SummaryAreaOut"][];
+            /** Risks */
+            risks: components["schemas"]["ReviewRiskOut"][];
+            /** Checklist */
+            checklist: components["schemas"]["ChecklistItemOut"][];
+            tests: components["schemas"]["ReviewTestsOut"];
+            /** Omitted Items */
+            omitted_items: number;
+        };
+        /** ReviewRiskOut */
+        ReviewRiskOut: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "high" | "medium" | "low";
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "correctness" | "security" | "data_and_migrations" | "compatibility" | "performance" | "dependencies" | "tests" | "other";
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "observed" | "possible";
+            /** Explanation */
+            explanation: string;
+            /** Suggested Check */
+            suggested_check: string;
+            /** Citations */
+            citations: string[];
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "model" | "rule";
+            /** Path */
+            path: string | null;
+        };
+        /** ReviewRunOut */
+        ReviewRunOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "pull_request_review";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "retry_wait" | "succeeded" | "failed" | "canceled";
+            /** Quality State */
+            quality_state: ("reviewed" | "nothing_to_review") | null;
+            /**
+             * Repository Id
+             * Format: uuid
+             */
+            repository_id: string;
+            /** Repository Full Name */
+            repository_full_name: string;
+            pull_request: components["schemas"]["PullRequestRefOut"];
+            commits: components["schemas"]["CommitsOut"];
+            review: components["schemas"]["ReviewOut"] | null;
+            coverage: components["schemas"]["ReviewCoverageOut"] | null;
+            /** Citations */
+            citations: components["schemas"]["ReviewCitationOut"][];
+            error: components["schemas"]["JobError"] | null;
+            /** Job Id */
+            job_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Completed At */
+            completed_at: string | null;
+        };
+        /** ReviewTestsOut */
+        ReviewTestsOut: {
+            /** Changed */
+            changed: components["schemas"]["ChangedTestOut"][];
+            /** Candidates */
+            candidates: components["schemas"]["CandidateTestOut"][];
+            /** New Cases */
+            new_cases: components["schemas"]["NewTestCaseOut"][];
+        };
         /** RunOut */
         RunOut: {
             /**
@@ -647,8 +974,8 @@ export interface components {
              */
             id: string;
             /**
-             * Kind
-             * @constant
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
             kind: "repository_qa";
             /**
@@ -700,15 +1027,20 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "repository_qa" | "pull_request_review";
             /** Question */
-            question: string;
+            question: string | null;
             /**
              * Status
              * @enum {string}
              */
             status: "queued" | "running" | "retry_wait" | "succeeded" | "failed" | "canceled";
             /** Quality State */
-            quality_state: ("answered" | "insufficient_evidence") | null;
+            quality_state: ("answered" | "insufficient_evidence") | ("reviewed" | "nothing_to_review") | null;
             /** Commit Sha */
             commit_sha: string;
             /**
@@ -852,12 +1184,12 @@ export interface components {
             /**
              * Kind
              * @default repository_qa
-             * @constant
+             * @enum {string}
              */
-            kind: "repository_qa";
+            kind: "repository_qa" | "pull_request_review";
             target?: components["schemas"]["TargetIn"];
             /** Question */
-            question: string;
+            question?: string | null;
         };
         /** SubmitOut */
         SubmitOut: {
@@ -876,20 +1208,49 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "retry_wait" | "succeeded" | "failed" | "canceled";
-            /**
-             * Snapshot Id
-             * Format: uuid
-             */
-            snapshot_id: string;
+            /** Reused */
+            reused: boolean;
+            /** Snapshot Id */
+            snapshot_id: string | null;
+            /** Pull Request Number */
+            pull_request_number: number | null;
+            /** Head Sha */
+            head_sha: string | null;
             /** Result Url */
             result_url: string;
             /** Events Url */
             events_url: string;
         };
+        /** SummaryAreaOut */
+        SummaryAreaOut: {
+            /** Area */
+            area: string;
+            /** Points */
+            points: components["schemas"]["SummaryPointOut"][];
+        };
+        /** SummaryPointOut */
+        SummaryPointOut: {
+            /**
+             * Change
+             * @enum {string}
+             */
+            change: "added" | "modified" | "renamed" | "removed";
+            /** Text */
+            text: string;
+            /** Citations */
+            citations: string[];
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "model" | "rule";
+        };
         /** TargetIn */
         TargetIn: {
             /** Snapshot Id */
             snapshot_id?: string | null;
+            /** Pull Request Number */
+            pull_request_number?: number | null;
         };
         /** TreeEntryOut */
         TreeEntryOut: {
@@ -923,6 +1284,10 @@ export interface components {
             questions_used: number;
             /** Questions Limit */
             questions_limit: number;
+            /** Reviews Used */
+            reviews_used: number;
+            /** Reviews Limit */
+            reviews_limit: number;
             /**
              * Resets At
              * Format: date-time
@@ -1309,6 +1674,39 @@ export interface operations {
             };
         };
     };
+    list_pull_requests_v1_repositories__repository_id__pull_requests_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                repository_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullRequestPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_snapshot_v1_snapshots__snapshot_id__get: {
         parameters: {
             query?: never;
@@ -1479,6 +1877,7 @@ export interface operations {
         parameters: {
             query: {
                 repository_id: string;
+                kind?: ("repository_qa" | "pull_request_review") | null;
                 cursor?: string | null;
                 limit?: number;
             };
@@ -1508,7 +1907,7 @@ export interface operations {
             };
         };
     };
-    submit_question_v1_analysis_runs_post: {
+    submit_run_v1_analysis_runs_post: {
         parameters: {
             query?: never;
             header?: {
@@ -1560,7 +1959,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunOut"];
+                    "application/json": components["schemas"]["RunOut"] | components["schemas"]["ReviewRunOut"];
                 };
             };
             /** @description Validation Error */

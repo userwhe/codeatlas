@@ -11,8 +11,8 @@ export function HeaderNav() {
   const pathname = usePathname();
   if (!me) return null;
 
-  // Answers and indexed versions belong to a repository.
-  const current = ["/repositories", "/answers", "/snapshots"].some((prefix) =>
+  // Answers, reviews, and indexed versions belong to a repository.
+  const current = ["/repositories", "/answers", "/reviews", "/snapshots"].some((prefix) =>
     pathname.startsWith(prefix),
   );
   return (

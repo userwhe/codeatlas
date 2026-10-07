@@ -16,7 +16,8 @@ const REASON_LABELS: Record<string, string> = {
   embeddings_unavailable: "Documentation search by meaning unavailable",
 };
 
-function reasonLabel(reason: string) {
+/** Why an entry was skipped, in words; review coverage uses the same labels. */
+export function reasonLabel(reason: string) {
   return REASON_LABELS[reason] ?? reason.replaceAll("_", " ");
 }
 

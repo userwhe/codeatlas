@@ -496,7 +496,7 @@ fixture lines.
     - the same `Idempotency-Key` sent 100 times creates one run (SC-011);
     - a second review requested while one is running stays `queued` with `queued_behind: 1`;
     - the submission makes exactly one `get_pull_request` call.
-- [ ] T027 [P] [US1] Integration tests for the review job in
+- [X] T027 [P] [US1] Integration tests for the review job in
   backend/tests/integration/test_review_job.py, with the fake model in `ok` mode unless stated:
   - **#1 end to end**:
     - The job events show the stages `checking_access`, `resolving_commits`, `fetching_source`,
@@ -614,7 +614,7 @@ fixture lines.
     `evidence_ids` as `citations`, `coverage` at the top level, and the other result fields under
     `review`. Use 001's `qa.runs.get_scoped` for scope and readability.
   - Make T026 pass, together with T037.
-- [ ] T036 [US1] Implement the job in backend/src/codeatlas/review/review.py, and add
+- [X] T036 [US1] Implement the job in backend/src/codeatlas/review/review.py, and add
   `"codeatlas.review.review"` to `HANDLER_MODULES` in backend/src/codeatlas/jobs/worker.py:
   - **`analyze(pull_request, head, base, rename_hints, *, head_sha, merge_base_sha, settings, model) -> Analysis`**:
     a function with no database or GitHub access. It does selection, rule risks, context,
@@ -644,7 +644,7 @@ fixture lines.
        (calls, tokens, `omitted_items`), and `completed_at`. For `nothing_to_review`, call
        `refund_review` for the run's creation date.
   - Make T027 pass.
-- [ ] T037 [US1] Wire the API routes, after T034 to T036:
+- [X] T037 [US1] Wire the API routes, after T034 to T036:
   - **backend/src/codeatlas/api/routes/repositories.py**:
     `GET /v1/repositories/{repository_id}/pull-requests`, with response models from
     contracts/http-api.md.
@@ -660,7 +660,7 @@ fixture lines.
     - `GET /v1/analysis-runs` gains the `kind` filter, and its items gain `kind`.
   - Regenerate frontend/src/lib/api/schema.d.ts with `npm run gen:api`.
   - Make T025, T026, and T028 pass.
-- [ ] T038 [US1] Frontend API layer:
+- [X] T038 [US1] Frontend API layer:
   - Create frontend/src/lib/api/reviews.ts with `usePullRequests(repositoryId)`,
     `useRequestReview()` (sends an `Idempotency-Key` as `useAskQuestion` does), and
     `useReview(runId)`. Polling stops at a terminal status, as `useRun` does.
@@ -670,7 +670,7 @@ fixture lines.
   - In frontend/src/lib/api/questions.ts, `useRunHistory` requests `kind=repository_qa`, so
     reviews never appear in the question history.
   - frontend/src/app/answers/[id]/answer-detail.tsx narrows the run type to `repository_qa`.
-- [ ] T039 [US1] Add the pull request list to the repository page:
+- [X] T039 [US1] Add the pull request list to the repository page:
   - Create frontend/src/components/PullRequestList.tsx. Each row shows the number, the title
     (rendered as text), the author, a draft label, `base_ref` ← `head_ref`, the short head SHA,
     the review state, and an action:
@@ -683,7 +683,7 @@ fixture lines.
     `<HiddenWhileLost>Reviewing pull requests</HiddenWhileLost>` instead of the list while access
     is lost.
   - frontend/src/components/UsageIndicator.tsx shows reviews used out of the limit.
-- [ ] T040 [US1] Create the review page: frontend/src/app/reviews/[id]/page.tsx and
+- [X] T040 [US1] Create the review page: frontend/src/app/reviews/[id]/page.tsx and
   review-detail.tsx, plus frontend/src/components/RiskLevelBadge.tsx and
   frontend/src/components/ReviewCitation.tsx.
   - The header: number and title (linked to `html_url`), author, branches, fork and draft labels,
@@ -708,7 +708,7 @@ fixture lines.
     "After · head 8d3f1c2"), and a "View on GitHub" link to `github_url`. A `reference` citation
     is also labeled "Related code (candidate, found by name)" (FR-012).
   - Rule risks show their path without citations.
-- [ ] T041 [P] [US1] Disclosure text (FR-030): in
+- [X] T041 [P] [US1] Disclosure text (FR-030): in
   frontend/src/components/ExternalProcessingAcceptance.tsx, set
   `EXTERNAL_PROCESSING_DISCLOSURE` to "Selected source excerpts, pull request descriptions, and
   pull request changes may be sent to an external model provider". Update any end-to-end

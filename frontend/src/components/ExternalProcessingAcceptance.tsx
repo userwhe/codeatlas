@@ -1,8 +1,8 @@
 "use client";
 
-/** The processing disclosure for private repositories (FR-006). */
+/** The processing disclosure for private repositories (FR-006), covering pull request content. */
 export const EXTERNAL_PROCESSING_DISCLOSURE =
-  "Selected source excerpts may be sent to an external model provider";
+  "Selected source excerpts, pull request descriptions, and pull request changes may be sent to an external model provider";
 
 /**
  * The checkbox that accepts the external processing disclosure for a private repository: when

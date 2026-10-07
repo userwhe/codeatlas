@@ -57,6 +57,21 @@ export function AnswerDetail({ runId }: { runId: string }) {
     return <p className="text-sm text-zinc-500">Loading answer…</p>;
   }
 
+  // The same address space holds pull request reviews, which have their own page.
+  if (run.kind !== "repository_qa") {
+    return (
+      <div className="flex flex-col gap-4">
+        <RepositoryLink repositoryId={run.repository_id} />
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          This is a pull request review, not an answer.{" "}
+          <Link href={`/reviews/${run.id}`} className="font-medium underline">
+            Open the review
+          </Link>
+        </p>
+      </div>
+    );
+  }
+
   const active = isActiveJob(run.status);
 
   return (
