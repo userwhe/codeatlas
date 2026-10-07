@@ -899,7 +899,7 @@ documentation, real-GitHub checks, and final validation
     request list of octocat's repository returns 404 to hubot.
   - When both users connect 2011 and review #1, each sees only their own review, and their
     allowances are separate (SC-010).
-- [ ] T055 [P] Extend backend/tests/integration/test_logging.py:
+- [X] T055 [P] Extend backend/tests/integration/test_logging.py:
   - Review #7 and #4, with a fixture body containing a unique marker string.
   - None of these appear in the captured logs:
     - the title, the body, or the marker;
@@ -907,7 +907,7 @@ documentation, real-GitHub checks, and final validation
     - the `.env` value;
     - the review's overview or risk text;
     - the system prompt.
-- [ ] T056 [P] Credential tests in backend/tests/integration/test_review_credentials.py (SC-008):
+- [X] T056 [P] Credential tests in backend/tests/integration/test_review_credentials.py (SC-008):
   - Review #4. The `.env` value `review-fixture-not-a-secret` appears in none of these:
     - the fake model's recorded `prompts` (no call is expected);
     - any evidence item;
