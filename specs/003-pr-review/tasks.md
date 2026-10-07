@@ -970,7 +970,7 @@ documentation, real-GitHub checks, and final validation
     `specs/003-pr-review`, ADRs 0008 and 0009 apply. Reviews read commit archives instead of
     pull-request snapshots, and related code comes from text search until the dependency graph
     lands.
-- [ ] T061 Real-GitHub checks for the open questions in research R1 and R2 (needs T004). Every
+- [X] T061 Real-GitHub checks for the open questions in research R1 and R2 (needs T004). Every
   step that writes to GitHub (forking, opening, pushing, or force-pushing) is a developer action:
   an agent may draft the exact `git` or `gh` commands, and runs them only after the developer
   confirms that draft. Reading GitHub's answers needs no confirmation.

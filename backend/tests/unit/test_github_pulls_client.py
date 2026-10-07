@@ -37,6 +37,8 @@ PULLS = f"GET {API}/repos/o/r/pulls"
 PULL = f"GET {API}/repos/o/r/pulls/12"
 COMPARE = f"GET {API}/repos/o/r/compare/{BASE_SHA}...{HEAD_SHA}"
 COMPARE_FORK = f"GET {API}/repos/o/r/compare/o:{BASE_SHA}...hubot:{HEAD_SHA}"
+BASE_COMMIT = f"GET {API}/repos/o/r/commits/{BASE_SHA}"
+HEAD_COMMIT = f"GET {API}/repos/o/r/commits/{HEAD_SHA}"
 APP_INSTALLATION = f"GET {API}/repos/o/r/installation"
 TOKEN_MINT = f"POST {API}/app/installations/7/access_tokens"
 
@@ -304,6 +306,37 @@ def test_a_missing_commit_is_unavailable(settings: Settings, head_owner: str | N
 
     compares = [r for r in fake.requests if "/compare/" in r.url.path]
     assert len(compares) == (1 if head_owner is None else 2)
+
+
+def test_a_comparison_of_existing_commits_that_github_has_not_computed_is_retryable(
+    settings: Settings,
+) -> None:
+    # GitHub answers a plain 404 while it has not computed a comparison of diverged commits, and
+    # the same request succeeds later (research R2).
+    fake = FakeGitHub(
+        {
+            COMPARE: respond(404, json={"message": "Not Found"}),
+            BASE_COMMIT: respond(json={"sha": BASE_SHA}),
+            HEAD_COMMIT: respond(json={"sha": HEAD_SHA}),
+        }
+    )
+
+    with pytest.raises(GitHubUnavailable):
+        make_client(settings, fake).compare_commits(7, "o/r", BASE_SHA, HEAD_SHA, head_owner=None)
+
+    assert len(fake.calls(BASE_COMMIT)) == len(fake.calls(HEAD_COMMIT)) == 1
+    assert fake.calls(HEAD_COMMIT)[0].headers["authorization"] == "Bearer ghs_installation"
+
+
+@pytest.mark.parametrize("missing", ["base", "head"])
+def test_a_plain_404_with_a_missing_commit_is_unavailable(settings: Settings, missing: str) -> None:
+    present = {"base": HEAD_COMMIT, "head": BASE_COMMIT}[missing]
+    fake = FakeGitHub(
+        {COMPARE: respond(404, json={"message": "Not Found"}), present: respond(json={})}
+    )
+
+    with pytest.raises(CommitUnavailable):
+        make_client(settings, fake).compare_commits(7, "o/r", BASE_SHA, HEAD_SHA, head_owner=None)
 
 
 def test_a_422_comparison_is_unavailable(settings: Settings) -> None:

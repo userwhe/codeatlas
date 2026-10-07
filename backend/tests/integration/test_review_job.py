@@ -35,7 +35,7 @@ from codeatlas.github.fake import (
     commit_sha,
     get_fake_github,
 )
-from codeatlas.github.gateway import GitHubNotFound
+from codeatlas.github.gateway import GitHubNotFound, GitHubUnavailable
 from codeatlas.models import AnalysisRun, EvidenceItem, Job, JobEvent, Repository
 from codeatlas.providers.answer_model import FakeAnswerModel, ReviewResult, get_answer_model
 from codeatlas.review import review
@@ -579,6 +579,31 @@ def test_commit_no_longer_served(
     assert_failed(load_job(db, submitted), "commit_unavailable", retryable=False)
     assert_nothing_published(db, submitted)
     # After the access check passed, a missing commit says nothing about access.
+    repository = load_repository(db, repository_id)
+    assert (repository.access_state, repository.access_reason) == ("active", None)
+    assert fake_model().calls == 0
+
+
+def test_a_comparison_github_has_not_computed_is_retried(
+    db: Session,
+    octocat: TestClient,
+    run_worker_once: Callable[[], bool],
+    repository_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The client reports a comparison of existing commits that GitHub has not computed yet as
+    # unavailable (research R2), so the job retries it instead of failing for a lost commit.
+    def not_computed(*args: object, **kwargs: object) -> None:
+        raise GitHubUnavailable("GitHub has not computed the comparison yet")
+
+    monkeypatch.setattr(get_fake_github(), "compare_commits", not_computed)
+
+    submitted = review_pull_request(octocat, run_worker_once, repository_id)
+
+    job = load_job(db, submitted)
+    assert job.attempt == job.max_attempts
+    assert_failed(job, "github_unavailable", retryable=True)
+    assert_nothing_published(db, submitted)
     repository = load_repository(db, repository_id)
     assert (repository.access_state, repository.access_reason) == ("active", None)
     assert fake_model().calls == 0

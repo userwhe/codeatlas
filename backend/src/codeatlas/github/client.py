@@ -276,7 +276,16 @@ class GitHubClient:
                 base = f"{_ref(full_name.partition('/')[0])}:{_ref(base_sha)}"
                 head = f"{_ref(head_owner)}:{_ref(head_sha)}"
                 response = self._api(http, "GET", f"{compare}/{base}...{head}", token)
-        _check_comparison(response, installation_id, token)
+            # GitHub also answers a plain 404 for a comparison of existing commits that it has not
+            # computed yet; only a missing commit makes the comparison unavailable (research R2).
+            commits_exist = (
+                response.status_code == 404
+                and not _no_common_ancestor(response)
+                and all(
+                    self._commit_exists(http, token, full_name, sha) for sha in (base_sha, head_sha)
+                )
+            )
+        _check_comparison(response, installation_id, token, commits_exist=commits_exist)
         data = _json(response)
         files = data.get("files") or []
         return Comparison(
@@ -288,6 +297,13 @@ class GitHubClient:
             },
             listed_files=len(files),
         )
+
+    def _commit_exists(self, http: httpx.Client, token: str, full_name: str, sha: str) -> bool:
+        response = self._api(http, "GET", f"{_repo_path(full_name)}/commits/{_ref(sha)}", token)
+        if response.status_code in (404, 422):
+            return False
+        _check(response, unauthorized=GitHubAccessDenied)
+        return True
 
     def get_installation_permissions(self, full_name: str) -> InstallationPermissions:
         data = self._installation(full_name)
@@ -511,16 +527,25 @@ def _check_installation_read(response: httpx.Response, installation_id: int, tok
         raise
 
 
-def _check_comparison(response: httpx.Response, installation_id: int, token: str) -> None:
+def _no_common_ancestor(response: httpx.Response) -> bool:
+    return "no common ancestor" in _message(response).lower()
+
+
+def _check_comparison(
+    response: httpx.Response, installation_id: int, token: str, *, commits_exist: bool
+) -> None:
     """`_check_installation_read` for a comparison. It runs after the access check passed, so a
     404 or 422 means that a pinned commit is gone, or that the commits share no ancestor
-    (research R2).
+    (research R2). A plain 404 for commits that both exist means GitHub has not computed the
+    comparison yet, which a later attempt can get.
     """
     status = response.status_code
     if status in (404, 422):
         where = f"{response.request.method} {response.request.url.path}"
-        if status == 404 and "no common ancestor" in _message(response).lower():
+        if status == 404 and _no_common_ancestor(response):
             raise NoCommonHistory(f"GitHub found no common ancestor for {where}")
+        if status == 404 and commits_exist:
+            raise GitHubUnavailable(f"GitHub has not computed the comparison for {where} yet")
         raise CommitUnavailable(f"GitHub returned {status} for {where}")
     _check_installation_read(response, installation_id, token)
 

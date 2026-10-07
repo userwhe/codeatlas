@@ -85,6 +85,13 @@ The rule from 001 still applies: build only what the current requirements need.
 - **Installation tokens for the list**: these do not prove that the signed-in user can read the
   pull request, and each request would mint or reuse an installation token.
 
+Checked against the CodeAtlas App on 2026-10-07: the installation object returns the granted
+`permissions` map, which included `pull_requests: read` after the owner approved the update. Its
+contents while an approval is still pending were not observed, because the only installation had
+already approved it. If the map listed requested rather than granted permissions, the list would
+show `github_access_denied` instead of the permission notice. That message is less specific, but
+still correct.
+
 Documented facts this relies on:
 
 - "List pull requests" needs Pull requests read for private repositories. "Get a pull request"
@@ -115,15 +122,28 @@ Documented facts this relies on:
   - The compare documentation is inconsistent about SHAs: its summary allows commit SHAs, and its
     parameter text says branch names. It documents an owner-qualified form for repositories in the
     same network.
-  - Implementation verifies the plain `SHA...SHA` form against a real fork pull request. If GitHub
-    refuses it for a fork head, the owner-qualified form is used.
+  - Verified on 2026-10-07 with two open fork pull requests in a public repository: the plain
+    `base_sha...head_sha` form returns 200 with the merge base, and the fork head's archive
+    downloads through the base repository. The owner-qualified retry stays as a fallback that
+    has not been needed.
 - **Failures**: the access check runs first (R9). After it passes, a not-found answer from the
   comparison or an archive means the commit is gone, not that access was lost.
   - A pinned commit that GitHub no longer serves (for example, after a force push and garbage
     collection) fails the run with `commit_unavailable`, permanently.
   - Commits with no common ancestor fail the run with `no_common_history`, permanently.
-  - The exact status codes are checked against a real repository during implementation. Fake mode
-    models both cases.
+  - Status codes, checked against real repositories on 2026-10-07:
+    - A commit GitHub does not have, as either side of a comparison or as an archive, returns 404
+      with the message "Not Found".
+    - Commits with no common ancestor return 404 with the message "No common ancestor between
+      main and gh-pages."
+    - A comparison of two existing commits that GitHub has not computed yet, such as long-diverged
+      branches, also returns a plain 404 "Not Found", and the same request later returns 200.
+  - So a plain 404 alone does not prove a commit is gone. The client then checks both commits
+    with `GET /repos/{owner}/{repo}/commits/{sha}`. If both exist, the comparison is reported as
+    unavailable (`github_unavailable`), and the job retries it with backoff. Only a missing commit
+    gives `commit_unavailable`.
+  - Fake mode models the missing commit and the unrelated histories. A unit test models the
+    comparison that is not computed yet.
 
 **Rationale**: These are the base, head, and merge-base commits the design document asks to
 persist. GitHub's own pull request diff is the change from the merge base to the head.
