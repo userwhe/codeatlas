@@ -9,8 +9,11 @@
 > runs the job queue (no SQS or outbox). Progress uses polling instead of SSE. Answers use
 > Gemini 3.8 Flash. For the second increment (`specs/002-push-reindexing`), ADR 0007 applies:
 > webhook deliveries commit with their jobs without an outbox, and installation status lives on
-> repository rows rather than in an installation table. Where this document and an ADR disagree,
-> the ADR applies.
+> repository rows rather than in an installation table. For the third increment
+> (`specs/003-pr-review`), ADRs 0008 and 0009 apply: reviews read the merge-base and head commit
+> archives instead of building pull request snapshots, and related code and candidate tests come
+> from a text search of the head commit until the dependency graph lands. Where this document and
+> an ADR disagree, the ADR applies.
 
 CodeAtlas is a web application that helps developers understand a GitHub repository and investigate a pull request or failed CI run using traceable evidence. This document defines the proposed first release, its implementation boundaries, and the checks required before a pilot deployment.
 

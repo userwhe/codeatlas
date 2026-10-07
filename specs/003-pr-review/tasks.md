@@ -961,7 +961,7 @@ documentation, real-GitHub checks, and final validation
     their citations (SC-004).
   - Exit codes: 0 when every target passes, 1 when any fails, 2 on setup errors.
   - Unit-test the scoring functions in backend/tests/unit/test_review_eval_metrics.py.
-- [ ] T060 [P] Documentation:
+- [X] T060 [P] Documentation:
   - In README.md, describe pull request reviews in the overview, link specs/003-pr-review (spec,
     plan, research, data model, HTTP API changes, and quickstart), and add ADRs 0008 and 0009 to
     the decision list.
