@@ -139,3 +139,28 @@ def test_expired_user_token_is_refreshed(
     db.refresh(credential)
     assert credential.access_token_expires_at is not None
     assert credential.access_token_expires_at > datetime.now(UTC)
+
+
+def test_a_refreshed_user_token_outlives_a_rollback_of_the_caller(
+    db: Session, signed_in: Callable[[str], TestClient]
+) -> None:
+    # GitHub replaces the refresh token on every refresh, so a request that fails after the
+    # refresh must not take the new tokens with it.
+    signed_in("octocat")
+    user = db.scalars(select(User)).one()
+    expired = datetime.now(UTC) - timedelta(minutes=5)
+    db.execute(update(GitHubCredential).values(access_token_expires_at=expired))
+    db.commit()
+
+    get_user_token(db, user, get_gateway())
+
+    # The caller's session already shows the stored credential.
+    credential = db.get(GitHubCredential, user.id)
+    assert credential is not None
+    assert credential.access_token_expires_at is not None
+    assert credential.access_token_expires_at > datetime.now(UTC)
+    db.rollback()
+    credential = db.get(GitHubCredential, user.id)
+    assert credential is not None
+    assert credential.access_token_expires_at is not None
+    assert credential.access_token_expires_at > datetime.now(UTC)

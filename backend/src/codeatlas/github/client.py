@@ -282,7 +282,8 @@ class GitHubClient:
                 response.status_code == 404
                 and not _no_common_ancestor(response)
                 and all(
-                    self._commit_exists(http, token, full_name, sha) for sha in (base_sha, head_sha)
+                    self._commit_exists(http, installation_id, token, full_name, sha)
+                    for sha in (base_sha, head_sha)
                 )
             )
         _check_comparison(response, installation_id, token, commits_exist=commits_exist)
@@ -298,11 +299,13 @@ class GitHubClient:
             listed_files=len(files),
         )
 
-    def _commit_exists(self, http: httpx.Client, token: str, full_name: str, sha: str) -> bool:
+    def _commit_exists(
+        self, http: httpx.Client, installation_id: int, token: str, full_name: str, sha: str
+    ) -> bool:
         response = self._api(http, "GET", f"{_repo_path(full_name)}/commits/{_ref(sha)}", token)
         if response.status_code in (404, 422):
             return False
-        _check(response, unauthorized=GitHubAccessDenied)
+        _check_installation_read(response, installation_id, token)
         return True
 
     def get_installation_permissions(self, full_name: str) -> InstallationPermissions:

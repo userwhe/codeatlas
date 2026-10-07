@@ -11,9 +11,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from codeatlas.auth.github_login import TOKEN_REFRESH_MARGIN
 from codeatlas.github import fake as fake_module
 from codeatlas.github.fake import (
     OVERSIZED_ID,
@@ -22,7 +23,15 @@ from codeatlas.github.fake import (
     commit_sha,
     get_fake_github,
 )
-from codeatlas.models import AuditEvent, Repository
+from codeatlas.github.gateway import (
+    GitHubAccessDenied,
+    GitHubError,
+    InstallationPermissions,
+    PullRequestPage,
+    UserAuthorizationInvalid,
+    UserTokens,
+)
+from codeatlas.models import AuditEvent, GitHubCredential, Repository
 from codeatlas.workspace import access
 from tests.integration.test_review_access import add_review
 from tests.integration.test_review_submit import connect, error_code
@@ -175,6 +184,46 @@ def test_missing_pull_request_permission_links_to_the_installation(
     assert response.json()["error"]["details"]["settings_url"] == SETTINGS_URL
 
 
+def test_a_token_refreshed_before_a_refused_list_is_kept(
+    db: Session,
+    octocat: TestClient,
+    repository_id: str,
+    run_worker_once: Callable[[], bool],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_id = connect(
+        octocat, run_worker_once, REVIEW_APP_PRIVATE_ID, accept_external_processing=True
+    )
+    fake = get_fake_github()
+    fake.withhold_permission(REVIEW_APP_PRIVATE_ID, "pull_requests")
+    expiring = datetime.now(UTC) + TOKEN_REFRESH_MARGIN / 2
+    db.execute(update(GitHubCredential).values(access_token_expires_at=expiring))
+    db.commit()
+    refresh = fake.refresh_user_token
+    used: list[str] = []
+
+    def refresh_once(refresh_token: str) -> UserTokens:
+        # GitHub replaces the refresh token on every refresh, so each one works once.
+        if refresh_token in used:
+            raise UserAuthorizationInvalid("the refresh token was already used")
+        used.append(refresh_token)
+        return refresh(refresh_token)
+
+    monkeypatch.setattr(fake, "refresh_user_token", refresh_once)
+
+    refused = octocat.get(f"/v1/repositories/{private_id}/pull-requests")
+
+    assert error_code(refused) == (409, "pull_requests_permission_missing")
+    assert len(used) == 1
+    db.expire_all()
+    credential = db.scalars(select(GitHubCredential)).one()
+    assert credential.access_token_expires_at is not None
+    assert credential.access_token_expires_at > expiring + timedelta(hours=1)
+    # The next request uses the refreshed token instead of asking the owner to sign in again.
+    assert pull_requests(octocat, repository_id)["items"]
+    assert len(used) == 1
+
+
 def test_other_refusals_leave_access_unchanged(
     db: Session, octocat: TestClient, run_worker_once: Callable[[], bool]
 ) -> None:
@@ -191,6 +240,41 @@ def test_other_refusals_leave_access_unchanged(
     assert repository is not None
     assert (repository.access_state, repository.access_reason) == ("active", None)
     assert octocat.get(f"/v1/repositories/{private_id}").json()["state"] == "ready"
+
+
+def test_any_other_github_error_is_access_denied(
+    db: Session, octocat: TestClient, repository_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def list_pull_requests(user_token: str, full_name: str, page: int) -> PullRequestPage:
+        raise GitHubError("GitHub returned 451")
+
+    monkeypatch.setattr(get_fake_github(), "list_pull_requests", list_pull_requests)
+
+    response = octocat.get(f"/v1/repositories/{repository_id}/pull-requests")
+
+    assert error_code(response) == (409, "github_access_denied")
+    db.expire_all()
+    repository = db.get(Repository, uuid.UUID(repository_id))
+    assert repository is not None
+    assert (repository.access_state, repository.access_reason) == ("active", None)
+
+
+def test_any_other_github_error_while_classifying_a_refusal_is_access_denied(
+    octocat: TestClient, repository_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def list_pull_requests(user_token: str, full_name: str, page: int) -> PullRequestPage:
+        raise GitHubAccessDenied("GitHub refused the list")
+
+    def get_installation_permissions(full_name: str) -> InstallationPermissions:
+        raise GitHubError("GitHub returned 451")
+
+    fake = get_fake_github()
+    monkeypatch.setattr(fake, "list_pull_requests", list_pull_requests)
+    monkeypatch.setattr(fake, "get_installation_permissions", get_installation_permissions)
+
+    response = octocat.get(f"/v1/repositories/{repository_id}/pull-requests")
+
+    assert error_code(response) == (409, "github_access_denied")
 
 
 def test_lost_repository(db: Session, octocat: TestClient, repository_id: str) -> None:

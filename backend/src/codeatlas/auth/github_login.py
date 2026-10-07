@@ -169,6 +169,10 @@ def _forget_credentials(user_id: uuid.UUID) -> None:
 def get_user_token(db: Session, user: User, gateway: GitHubGateway) -> str:
     """Return the user's GitHub token, refreshing it when it is about to expire.
 
+    A refreshed credential is stored in its own transaction, so it is kept even when the caller
+    then fails and rolls back: GitHub replaces the refresh token on every refresh. The caller's
+    session is refreshed to match it.
+
     Raises `UserAuthorizationInvalid` when there is no usable credential or GitHub refuses the
     refresh. A credential that can no longer be decrypted (for example after
     `TOKEN_ENCRYPTION_KEY` changed) is removed and the user's sessions are revoked, so the next
@@ -189,6 +193,7 @@ def get_user_token(db: Session, user: User, gateway: GitHubGateway) -> str:
         _forget_credentials(user.id)
         raise UserAuthorizationInvalid("stored GitHub credentials cannot be read") from exc
     tokens = gateway.refresh_user_token(refresh_token)
-    _store_tokens(db, user.id, tokens)
-    db.flush()
+    with session_scope() as refresh_db:
+        _store_tokens(refresh_db, user.id, tokens)
+    db.refresh(credential)
     return tokens.access_token

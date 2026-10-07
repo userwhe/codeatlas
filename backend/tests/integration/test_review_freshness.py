@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from codeatlas.github.fake import REVIEW_APP_ID, REVIEW_APP_PRIVATE_ID, commit_sha, get_fake_github
-from codeatlas.github.gateway import PullRequest
+from codeatlas.github.gateway import GitHubError, PullRequest
 from codeatlas.models import AnalysisRun, AuditEvent
 from tests.integration.test_questions import drain
 from tests.integration.test_review_access import add_review
@@ -227,6 +227,19 @@ def test_refused_read_is_access_denied(
     )
     run = add_review(db, private_id, head_sha=commit_sha(REVIEW_APP_PRIVATE_ID, "pr-1"))
     get_fake_github().revoke_access("octocat", REVIEW_APP_PRIVATE_ID)
+
+    assert error_code(freshness(octocat, run.id)) == (409, "github_access_denied")
+
+
+def test_any_other_github_error_is_access_denied(
+    db: Session, octocat: TestClient, repository_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = add_review(db, repository_id)
+
+    def get_pull_request(user_token: str, full_name: str, number: int) -> PullRequest:
+        raise GitHubError("GitHub returned 451")
+
+    monkeypatch.setattr(get_fake_github(), "get_pull_request", get_pull_request)
 
     assert error_code(freshness(octocat, run.id)) == (409, "github_access_denied")
 

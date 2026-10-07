@@ -386,6 +386,26 @@ def test_a_refused_comparison_is_an_access_denial_and_drops_the_token(
     assert len(fake.calls(TOKEN_MINT)) == 2
 
 
+def test_a_refused_commit_check_is_an_access_denial_and_drops_the_token(
+    settings: Settings,
+) -> None:
+    fake = FakeGitHub(
+        {
+            COMPARE: respond(404, json={"message": "Not Found"}),
+            BASE_COMMIT: respond(401, json={"message": "Bad credentials"}),
+        }
+    )
+    client = make_client(settings, fake)
+
+    with pytest.raises(GitHubAccessDenied) as caught:
+        client.compare_commits(7, "o/r", BASE_SHA, HEAD_SHA, head_owner=None)
+    assert type(caught.value) is GitHubAccessDenied
+
+    fake.routes[COMPARE] = respond(json=compare_json())
+    client.compare_commits(7, "o/r", BASE_SHA, HEAD_SHA, head_owner=None)
+    assert len(fake.calls(TOKEN_MINT)) == 2
+
+
 # get_installation_permissions
 
 
@@ -470,6 +490,16 @@ def test_user_token_calls_classify_refusals(
     raised = call_failing(settings, call, failing, failure)
 
     assert type(raised) is error
+
+
+@pytest.mark.parametrize("status", [410, 422, 451])
+@pytest.mark.parametrize(("call", "failing"), USER_TOKEN_CALLS.values(), ids=USER_TOKEN_CALLS)
+def test_other_user_token_call_errors_are_plain_gateway_errors(
+    settings: Settings, call: Call, failing: str, status: int
+) -> None:
+    raised = call_failing(settings, call, failing, respond(status, json={"message": "x"}))
+
+    assert type(raised) is GitHubError
 
 
 @pytest.mark.parametrize(

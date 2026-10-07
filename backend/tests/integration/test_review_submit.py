@@ -7,13 +7,13 @@ tests check the stored run, its job, the audit event, the allowance, and every r
 
 import uuid
 from collections.abc import Callable
-from datetime import timedelta
-from typing import Any
+from datetime import UTC, datetime, time, timedelta, tzinfo
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from codeatlas.db import session_scope
@@ -23,8 +23,10 @@ from codeatlas.github.fake import (
     commit_sha,
     get_fake_github,
 )
+from codeatlas.github.gateway import GitHubError, PullRequest
 from codeatlas.jobs import queue
-from codeatlas.models import AnalysisRun, AuditEvent, Job, Repository
+from codeatlas.models import AnalysisRun, AuditEvent, Job, Repository, UsageCounter
+from codeatlas.review import runs as review_runs
 from codeatlas.review.prompt import PROMPT_VERSION
 from codeatlas.workspace import access
 from tests.integration.test_questions import drain
@@ -312,6 +314,90 @@ def test_repository_paused_for_the_disclosure(
     assert run_count(db) == 0
 
 
+def change_while_reading(
+    monkeypatch: pytest.MonkeyPatch, change: Callable[[Session], None]
+) -> None:
+    """Commit `change` in its own transaction while a submission reads the pull request, after
+    its first checks of the repository.
+    """
+    fake = get_fake_github()
+    original = fake.get_pull_request
+
+    def get_pull_request(user_token: str, full_name: str, number: int) -> PullRequest:
+        with session_scope() as other:
+            change(other)
+        return original(user_token, full_name, number)
+
+    monkeypatch.setattr(fake, "get_pull_request", get_pull_request)
+
+
+def test_a_pause_for_the_disclosure_while_github_is_read_is_refused(
+    db: Session, octocat: TestClient, repository_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def pause(other: Session) -> None:
+        repository = other.get(Repository, uuid.UUID(repository_id))
+        assert repository is not None
+        assert access.pause(other, repository, "external_processing_not_accepted")
+
+    change_while_reading(monkeypatch, pause)
+
+    response = request_review(octocat, repository_id)
+
+    assert error_code(response) == (422, "external_processing_not_accepted")
+    assert run_count(db) == 0
+    assert octocat.get("/v1/usage").json()["reviews_used"] == 0
+
+
+def test_a_rejection_while_github_is_read_is_refused(
+    db: Session, octocat: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The first indexing is still waiting when the review is requested, then exceeds a size limit.
+    connected = octocat.post("/v1/repositories", json={"github_repository_id": REVIEW_APP_ID})
+    assert connected.status_code == 202, connected.text
+    repository_id = connected.json()["repository"]["id"]
+
+    def reject(other: Session) -> None:
+        other.execute(
+            update(Job)
+            .where(Job.repository_id == uuid.UUID(repository_id))
+            .values(status="failed", error_code="limit_exceeded")
+        )
+
+    change_while_reading(monkeypatch, reject)
+
+    response = request_review(octocat, repository_id)
+
+    assert error_code(response) == (409, "repository_rejected")
+    assert run_count(db) == 0
+    assert octocat.get("/v1/usage").json()["reviews_used"] == 0
+
+
+def test_the_review_is_charged_to_the_day_it_was_created(
+    db: Session, octocat: TestClient, repository_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Submission reads the clock just before midnight UTC; any later reading is on the next day.
+    # A refund uses the creation day, so the charge must use it too.
+    created_at = datetime.combine(datetime.now(UTC).date(), time(), tzinfo=UTC) - timedelta(
+        milliseconds=1
+    )
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> "Clock":
+            return cast(Clock, created_at)
+
+    monkeypatch.setattr(review_runs, "datetime", Clock)
+
+    response = request_review(octocat, repository_id)
+
+    assert response.status_code == 202, response.text
+    run = db.get(AnalysisRun, uuid.UUID(response.json()["run_id"]))
+    assert run is not None
+    assert run.created_at == created_at
+    charged = db.execute(select(UsageCounter.usage_date, UsageCounter.reviews_count)).all()
+    assert [tuple(row) for row in charged] == [(created_at.date(), 1)]
+
+
 def test_revoked_authorization_needs_sign_in(
     db: Session, octocat: TestClient, repository_id: str
 ) -> None:
@@ -321,6 +407,21 @@ def test_revoked_authorization_needs_sign_in(
 
     assert error_code(response) == (401, "github_sign_in_required")
     assert run_count(db) == 0
+
+
+def test_any_other_github_error_is_access_denied(
+    db: Session, octocat: TestClient, repository_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def get_pull_request(user_token: str, full_name: str, number: int) -> PullRequest:
+        raise GitHubError("GitHub returned 451")
+
+    monkeypatch.setattr(get_fake_github(), "get_pull_request", get_pull_request)
+
+    response = request_review(octocat, repository_id)
+
+    assert error_code(response) == (409, "github_access_denied")
+    assert run_count(db) == 0
+    assert load_repository(db, repository_id).access_state == "active"
 
 
 def test_github_unavailable(db: Session, octocat: TestClient, repository_id: str) -> None:

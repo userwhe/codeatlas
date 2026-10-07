@@ -8,6 +8,8 @@ decided by the next access check.
 
 import base64
 import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
@@ -19,8 +21,8 @@ from sqlalchemy.orm import Session
 from codeatlas.api.errors import ApiError, not_found
 from codeatlas.auth.github_login import get_user_token
 from codeatlas.github.gateway import (
-    AppCredentialsRejected,
     GitHubAccessDenied,
+    GitHubError,
     GitHubGateway,
     GitHubNotFound,
     GitHubUnavailable,
@@ -110,6 +112,32 @@ def user_token(db: Session, user: User, gateway: GitHubGateway) -> str:
         raise github_unavailable() from exc
 
 
+@contextmanager
+def _github_errors(refused: Callable[[GitHubError], ApiError]) -> Iterator[None]:
+    """Turn the gateway errors of a read made with the user token into API errors.
+
+    A 403 or 404 becomes `refused(error)`. Any other error answer from GitHub (410, 422, 451, ...)
+    is a plain denial.
+    """
+    try:
+        yield
+    except UserAuthorizationInvalid as exc:
+        raise sign_in_again() from exc
+    except (GitHubAccessDenied, GitHubNotFound) as exc:
+        raise refused(exc) from exc
+    except GitHubUnavailable as exc:
+        raise github_unavailable() from exc
+    except GitHubError as exc:
+        raise github_access_denied() from exc
+
+
+def _missing_or_denied(error: GitHubError) -> ApiError:
+    """A refused read of one pull request: missing (404), or a plain denial."""
+    if isinstance(error, GitHubNotFound):
+        return ApiError(404, "pull_request_not_found", "This repository has no such pull request.")
+    return github_access_denied()
+
+
 def read(
     db: Session, *, user: User, repository: Repository, number: int, gateway: GitHubGateway
 ) -> PullRequest:
@@ -117,18 +145,8 @@ def read(
     no such pull request in the repository.
     """
     token = user_token(db, user, gateway)
-    try:
+    with _github_errors(_missing_or_denied):
         return gateway.get_pull_request(token, repository.full_name, number)
-    except UserAuthorizationInvalid as exc:
-        raise sign_in_again() from exc
-    except GitHubNotFound as exc:
-        raise ApiError(
-            404, "pull_request_not_found", "This repository has no such pull request."
-        ) from exc
-    except GitHubAccessDenied as exc:
-        raise github_access_denied() from exc
-    except GitHubUnavailable as exc:
-        raise github_unavailable() from exc
 
 
 def _refusal(gateway: GitHubGateway, repository: Repository) -> ApiError:
@@ -138,10 +156,11 @@ def _refusal(gateway: GitHubGateway, repository: Repository) -> ApiError:
     """
     try:
         installation = gateway.get_installation_permissions(repository.full_name)
-    except (GitHubNotFound, GitHubAccessDenied, AppCredentialsRejected):
-        return github_access_denied()
     except GitHubUnavailable:
         return github_unavailable()
+    except GitHubError:
+        # Not found, denied, rejected App credentials, or any other answer.
+        return github_access_denied()
     if PULL_REQUESTS_PERMISSION not in installation.permissions:
         return ApiError(
             409,
@@ -248,14 +267,8 @@ def list_open(
     )
     refuse_rejected(db, repository)
     token = user_token(db, user, gateway)
-    try:
+    with _github_errors(lambda _: _refusal(gateway, repository)):
         listed = gateway.list_pull_requests(token, repository.full_name, page)
-    except UserAuthorizationInvalid as exc:
-        raise sign_in_again() from exc
-    except (GitHubAccessDenied, GitHubNotFound) as exc:
-        raise _refusal(gateway, repository) from exc
-    except GitHubUnavailable as exc:
-        raise github_unavailable() from exc
 
     reviews = latest_reviews(
         db, repository.id, {pull.number: pull.head_sha for pull in listed.items}
@@ -289,14 +302,8 @@ def freshness(
     # The kind's check constraint makes both columns non-null for reviews.
     number, head_sha = cast(int, run.pull_request_number), cast(str, run.head_sha)
     token = user_token(db, user, gateway)
-    try:
+    with _github_errors(lambda _: _refusal(gateway, repository)):
         pull = gateway.get_pull_request(token, repository.full_name, number)
-    except UserAuthorizationInvalid as exc:
-        raise sign_in_again() from exc
-    except (GitHubAccessDenied, GitHubNotFound) as exc:
-        raise _refusal(gateway, repository) from exc
-    except GitHubUnavailable as exc:
-        raise github_unavailable() from exc
     return Freshness(
         pull_request_state=pull.state,
         draft=pull.draft,

@@ -97,8 +97,10 @@ def _create(
     pull: PullRequest,
     now: datetime,
 ) -> tuple[AnalysisRun, Job]:
-    """Reserve a review from the allowance, then create the run and queue its job."""
-    reserve_review(db, workspace.id)
+    """Reserve a review from the allowance, then create the run and queue its job. The review is
+    counted on the UTC day of `now`, its creation time, so a refund gives it back to that day.
+    """
+    reserve_review(db, workspace.id, now=now)
     settings = get_settings()
     run = AnalysisRun(
         workspace_id=workspace.id,
@@ -131,6 +133,18 @@ def _create(
     return run, job
 
 
+def _refuse_stored_state(db: Session, repository: Repository) -> None:
+    """Refuse a repository rejected for a size limit, or paused until the owner accepts the
+    external processing disclosure.
+    """
+    pulls.refuse_rejected(db, repository)
+    if (
+        repository.access_state == "paused"
+        and repository.access_reason == "external_processing_not_accepted"
+    ):
+        raise repos.external_processing_not_accepted()
+
+
 def submit(
     db: Session,
     *,
@@ -157,26 +171,22 @@ def submit(
         request_id=request_id,
         content=True,
     )
-    pulls.refuse_rejected(db, repository)
-    if (
-        repository.access_state == "paused"
-        and repository.access_reason == "external_processing_not_accepted"
-    ):
-        raise repos.external_processing_not_accepted()
+    _refuse_stored_state(db, repository)
     pull = pulls.read(
         db, user=user, repository=repository, number=pull_request_number, gateway=gateway
     )
     if pull.state != "open":
         raise ApiError(409, "pull_request_not_open", "Only open pull requests can be reviewed.")
 
-    # Serialize submissions for the repository, then recheck it: a disconnect or loss of access
-    # may have been committed while GitHub was being read. The lock also lets a reuse request see
-    # a review that a concurrent request for the same head has just created.
+    # Serialize submissions for the repository, then recheck it: a disconnect, loss of access,
+    # rejection, or pause may have been committed while GitHub was being read. The lock also lets
+    # a reuse request see a review that a concurrent request for the same head has just created.
     db.execute(select(Repository.id).where(Repository.id == repository.id).with_for_update())
     db.refresh(repository)
     if repository.deleted_at is not None:
         raise not_found()
     ensure_readable(repository)
+    _refuse_stored_state(db, repository)
 
     now = datetime.now(UTC)
     reusable = _reusable(db, repository.id, pull, now) if mode == "reuse" else None
