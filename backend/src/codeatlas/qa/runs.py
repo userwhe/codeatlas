@@ -16,6 +16,7 @@ from codeatlas.qa.prompt import PROMPT_VERSION
 from codeatlas.qa.schema import AnswerOutput
 from codeatlas.qa.validate import cited_labels
 from codeatlas.workspace import repositories as repos
+from codeatlas.workspace.access import ensure_readable
 from codeatlas.workspace.audit import deny, record
 from codeatlas.workspace.quotas import reserve_question
 
@@ -41,12 +42,20 @@ def submit(
     question: str,
     request_id: str | None,
 ) -> tuple[AnalysisRun, Job]:
-    """Pin a ready snapshot, reserve quota, and queue the answer job. The caller commits."""
+    """Pin a ready snapshot, reserve quota, and queue the answer job. The caller commits.
+
+    A lost repository is a 403 `repository_access_lost` before any quota is reserved (FR-014).
+    """
     text = question.strip()
     if not 1 <= len(text) <= MAX_QUESTION_CHARS:
         raise _invalid_question()
     repository = repos.get_scoped(
-        db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
+        db,
+        user=user,
+        workspace=workspace,
+        repository_id=repository_id,
+        request_id=request_id,
+        content=True,
     )
     if snapshot_id is not None:
         snapshot = repos.get_scoped_snapshot(
@@ -113,6 +122,9 @@ def get_scoped(
     run_id: uuid.UUID,
     request_id: str | None,
 ) -> AnalysisRun:
+    """A run of this workspace's connected repository; 404 otherwise (FR-004), and 403 while
+    the repository's access is lost (FR-014).
+    """
     run = db.get(AnalysisRun, run_id)
     if run is None:
         raise not_found()
@@ -125,6 +137,7 @@ def get_scoped(
             resource_id=str(run_id),
             request_id=request_id,
         )
+    ensure_readable(repository)
     return run
 
 

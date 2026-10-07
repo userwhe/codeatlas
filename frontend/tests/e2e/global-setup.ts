@@ -22,6 +22,23 @@ const HOW_TO_START = "Start the stack in fake mode first; see frontend/README.md
 export default async function globalSetup(config: FullConfig) {
   const baseURL = config.projects[0]?.use.baseURL ?? "http://localhost:3000";
 
+  // The webhook tests sign deliveries with the stack's secret and send them to the API directly.
+  if (!process.env.GITHUB_WEBHOOK_SECRET) {
+    throw new Error(
+      "Set GITHUB_WEBHOOK_SECRET to the value the stack uses before running the tests. " +
+        HOW_TO_START,
+    );
+  }
+  const apiURL = process.env.E2E_API_URL ?? "http://localhost:8000";
+  try {
+    const health = await fetch(new URL("/healthz", apiURL));
+    if (!health.ok) throw new Error(`GET /healthz returned ${health.status}`);
+  } catch (error) {
+    throw new Error(`The CodeAtlas API is not reachable at ${apiURL}. ${HOW_TO_START}`, {
+      cause: error,
+    });
+  }
+
   let login: Response;
   try {
     login = await fetch(new URL("/auth/github/login", baseURL), { redirect: "manual" });

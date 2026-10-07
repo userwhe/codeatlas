@@ -3,6 +3,10 @@
 The `jobs` table is both the state authority and the queue. A worker claims one job at a time
 with `FOR UPDATE SKIP LOCKED`, holds a 60-second lease that a heartbeat renews, and proves
 ownership with the job's fencing token in every write it makes after the claim.
+
+Requests with the same dedupe key share a job. At most one job per key waits (`queued` or
+`retry_wait`), so a running job is followed by at most one waiting job with its key
+(specs/002-push-reindexing, research R3).
 """
 
 import random
@@ -16,12 +20,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from codeatlas.config import get_settings
-from codeatlas.models import ACTIVE_JOB_STATUSES, Job, JobEvent
+from codeatlas.models import ACTIVE_JOB_STATUSES, Job, JobEvent, Repository
 
 LEASE_DURATION = timedelta(seconds=60)
 BACKOFF_BASE_SECONDS = 5.0
 BACKOFF_CAP_SECONDS = 60.0
 WAITING_STATUSES = ("queued", "retry_wait")
+INDEX_JOB = "index_repository"
 # Bounds one claim call: unique-index races and jobs failed on sight each use one round.
 MAX_CLAIM_ROUNDS = 10
 
@@ -58,6 +63,7 @@ class Claim:
     analysis_run_id: uuid.UUID | None
     payload: dict[str, Any]
     created_by: uuid.UUID | None
+    trigger: str
     deadline_at: datetime
 
 
@@ -102,14 +108,71 @@ def append_event(
     return event
 
 
+def index_dedupe_key(repository_id: uuid.UUID, branch: str) -> str:
+    """The dedupe key shared by every indexing request for one branch of a repository."""
+    return f"index:{repository_id}:{branch}"
+
+
 def _active_with_key(db: Session, workspace_id: uuid.UUID, dedupe_key: str) -> Job | None:
+    """The active job a request with this key joins: the waiting one, else the running one."""
     return db.scalar(
-        select(Job).where(
+        select(Job)
+        .where(
             Job.workspace_id == workspace_id,
             Job.dedupe_key == dedupe_key,
             Job.status.in_(ACTIVE_JOB_STATUSES),
         )
+        .order_by(Job.status == "running")
+        .limit(1)
     )
+
+
+def _waiting_with_key(db: Session, workspace_id: uuid.UUID, dedupe_key: str) -> Job | None:
+    """Lock and return the waiting job with this key, if any.
+
+    The lock keeps a worker from claiming the job while the caller changes it. A job claimed
+    meanwhile is no longer waiting when the lock is granted, so it is not returned.
+    """
+    return db.scalar(
+        select(Job)
+        .where(
+            Job.workspace_id == workspace_id,
+            Job.dedupe_key == dedupe_key,
+            Job.status.in_(WAITING_STATUSES),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+
+
+def _running_with_key(db: Session, workspace_id: uuid.UUID, dedupe_key: str) -> Job | None:
+    """The running job with this key, with the commit its current attempt resolved, if any.
+
+    The attempt that owns the job records that commit under its fencing token, so a stale
+    attempt cannot make the job look as if it covers a newer push (research R3).
+    """
+    return db.scalar(
+        select(Job)
+        .where(
+            Job.workspace_id == workspace_id,
+            Job.dedupe_key == dedupe_key,
+            Job.status == "running",
+        )
+        .execution_options(populate_existing=True)
+    )
+
+
+def _join(job: Job, trigger: str, created_by: uuid.UUID | None) -> None:
+    """Merge a request into a waiting job it joins (data-model.md, trigger rules).
+
+    A waiting `check` job takes the trigger of a `push` or `user` request, and a `user` request
+    also becomes its creator. Other merges keep the existing trigger.
+    """
+    if job.status not in WAITING_STATUSES or job.trigger != "check" or trigger == "check":
+        return
+    job.trigger = trigger
+    if job.created_by is None:
+        job.created_by = created_by
 
 
 def enqueue(
@@ -122,14 +185,17 @@ def enqueue(
     analysis_run_id: uuid.UUID | None = None,
     payload: dict[str, Any] | None = None,
     dedupe_key: str | None = None,
+    trigger: str = "user",
 ) -> tuple[Job, bool]:
     """Add a queued job, or return the active job with the same dedupe key (FR-029).
 
-    Returns `(job, created)`. Does not commit.
+    A waiting job is preferred over a running one, so a manual re-index joins a waiting
+    automatic run (specs/002-push-reindexing FR-005). Returns `(job, created)`. Does not commit.
     """
     if dedupe_key is not None:
         existing = _active_with_key(db, workspace_id, dedupe_key)
         if existing is not None:
+            _join(existing, trigger, created_by)
             return existing, False
     job = Job(
         workspace_id=workspace_id,
@@ -138,6 +204,7 @@ def enqueue(
         analysis_run_id=analysis_run_id,
         payload=payload or {},
         dedupe_key=dedupe_key,
+        trigger=trigger,
         status="queued",
         run_after=datetime.now(UTC),
         created_by=created_by,
@@ -152,9 +219,71 @@ def enqueue(
         existing = _active_with_key(db, workspace_id, dedupe_key)
         if existing is None:
             raise
+        _join(existing, trigger, created_by)
         return existing, False
     append_event(db, job.id, event_type="queued", message="Waiting to start.")
     return job, True
+
+
+def request_automatic_run(
+    db: Session,
+    *,
+    repository: Repository,
+    branch: str,
+    trigger: str,
+    pushed_commit_sha: str | None = None,
+) -> Job:
+    """Return the indexing job that covers an automatic request, creating one if needed
+    (specs/002-push-reindexing research R3).
+
+    1. A waiting job for the branch covers the request. A waiting `check` job takes the `push`
+       trigger, and the job records the newest pushed commit.
+    2. Otherwise, the running job covers a push once it has resolved the pushed commit.
+    3. Otherwise, a new `queued` job is created, with no creator. A run on an older commit is
+       therefore followed by exactly one waiting job.
+
+    Every attempt resolves the branch head when it starts, so the covering job indexes the
+    newest pushed commit (FR-003). Does not commit.
+    """
+    key = index_dedupe_key(repository.id, branch)
+    waiting = _waiting_with_key(db, repository.workspace_id, key)
+    if waiting is None:
+        running = _running_with_key(db, repository.workspace_id, key)
+        if (
+            running is not None
+            and pushed_commit_sha is not None
+            and running.payload.get("commit_sha") == pushed_commit_sha
+        ):
+            return running
+        payload: dict[str, Any] = {"branch": branch}
+        if pushed_commit_sha is not None:
+            payload["pushed_commit_sha"] = pushed_commit_sha
+        job = Job(
+            workspace_id=repository.workspace_id,
+            kind=INDEX_JOB,
+            repository_id=repository.id,
+            payload=payload,
+            dedupe_key=key,
+            trigger=trigger,
+            status="queued",
+            run_after=datetime.now(UTC),
+            created_by=None,
+        )
+        try:
+            with db.begin_nested():
+                db.add(job)
+        except IntegrityError:
+            # A concurrent request inserted a waiting job with the same key first.
+            waiting = _waiting_with_key(db, repository.workspace_id, key)
+            if waiting is None:
+                raise
+        else:
+            append_event(db, job.id, event_type="queued", message="Waiting to start.")
+            return job
+    _join(waiting, trigger, None)
+    if pushed_commit_sha is not None:
+        waiting.payload = {**waiting.payload, "pushed_commit_sha": pushed_commit_sha}
+    return waiting
 
 
 def _claimable(now: datetime) -> Select[Job]:
@@ -243,6 +372,7 @@ def claim_next(db: Session, *, now: datetime | None = None) -> Claim | None:
                 analysis_run_id=job.analysis_run_id,
                 payload=dict(job.payload),
                 created_by=job.created_by,
+                trigger=job.trigger,
                 deadline_at=deadline_at,
             )
             db.commit()
@@ -344,7 +474,12 @@ def fail(
     db.commit()
 
 
-def cancel_for_repository(db: Session, repository_id: uuid.UUID) -> int:
+def cancel_for_repository(
+    db: Session,
+    repository_id: uuid.UUID,
+    *,
+    message: str = "Canceled because the repository was disconnected.",
+) -> int:
     """Cancel the repository's `queued` and `retry_wait` jobs; returns the count. No commit."""
     jobs = db.scalars(
         select(Job)
@@ -354,7 +489,7 @@ def cancel_for_repository(db: Session, repository_id: uuid.UUID) -> int:
         .execution_options(populate_existing=True)
     ).all()
     for job in jobs:
-        cancel(db, job, message="Canceled because the repository was disconnected.")
+        cancel(db, job, message=message)
     return len(jobs)
 
 

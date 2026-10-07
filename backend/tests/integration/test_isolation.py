@@ -1,9 +1,12 @@
-"""Cross-workspace isolation with two users (SC-008, FR-004, FR-033).
+"""Cross-workspace isolation with two users (SC-008, FR-004, FR-033, and 002 FR-010).
 
 `octocat` and `hubot` both connect and index `octo-org/sample-app` (2001) in their own
 workspaces. `octocat` then re-indexes at a newer commit, so its active snapshot holds a path that
 `hubot`'s does not, and asks a question. On every `/v1` endpoint that takes one of `octocat`'s
 IDs, `hubot` gets exactly the response for a nonexistent resource, and the denial is audited.
+That holds after `octocat`'s repository loses access too: `hubot` never sees the 403 that tells
+the owner. A push to the repository both connected starts a separate run in each workspace, and
+each user sees only their own push, access, and pause data, jobs, and versions.
 
 To cover a new route, add a row to `CASES`; `test_every_id_route_has_a_case` fails until then.
 """
@@ -12,6 +15,7 @@ import re
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -21,11 +25,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from codeatlas.github.fake import SAMPLE_APP_ID, SAMPLE_APP_RENAMED, get_fake_github
-from codeatlas.models import AnalysisRun, AuditEvent, File, Job
+from codeatlas.models import AnalysisRun, AuditEvent, File, Job, Repository, Snapshot
+from codeatlas.workspace import access
+from tests.webhooks import push_payload, send_delivery
 
 pytestmark = pytest.mark.integration
 
 QUESTION = "Where are repository permissions checked?"
+# An access-check time that only octocat's repository has.
+CHECKED_AT = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 ONLY_IN_OCTOCAT_SNAPSHOT = SAMPLE_APP_RENAMED[1]  # `app/utils/text.py`, added by the new commit
 SEARCH_QUERIES = {"text": "slugify", "path": "utils", "symbol": "slugify", "docs": "access"}
 
@@ -117,6 +125,13 @@ CASES = [
     Case("GET", "/v1/jobs/{job_id}/events", "answer_job"),
     Case("DELETE", "/v1/repositories/{repository_id}", "repository"),
 ]
+# Requests about the repository itself, which its owner may still make after access is lost.
+# Every other case returns 403 `repository_access_lost` to the owner (002 FR-014).
+OWNER_REQUESTS_WHEN_LOST = {
+    ("GET", "/v1/repositories/{repository_id}"),
+    ("POST", "/v1/repositories/{repository_id}/index"),
+    ("DELETE", "/v1/repositories/{repository_id}"),
+}
 
 
 def _id_routes() -> set[tuple[str, str]]:
@@ -190,6 +205,65 @@ def _row_counts(db: Session) -> tuple[int | None, int | None]:
         db.scalar(select(func.count()).select_from(Job)),
         db.scalar(select(func.count()).select_from(AnalysisRun)),
     )
+
+
+def _repository(db: Session, repository_id: str) -> Repository:
+    db.expire_all()
+    repository = db.get(Repository, uuid.UUID(repository_id))
+    assert repository is not None
+    return repository
+
+
+def _error_code(response: Response) -> str | None:
+    body = response.json() if response.content else {}
+    code = body.get("error", {}).get("code") if isinstance(body, dict) else None
+    return code if isinstance(code, str) else None
+
+
+def _denials_that_do_not_look_missing(db: Session, hubot: TestClient, ids: Ids) -> list[str]:
+    """Send every case as hubot with octocat's IDs, and describe each response that differs from
+    the one for a nonexistent ID, or that is not audited as exactly one `access_denied` event.
+    """
+    me = hubot.get("/v1/me").json()
+    missing = {key: str(uuid.uuid4()) for key in ids} | {"own_repository": ids["own_repository"]}
+
+    failures = []
+    for case in CASES:
+        label = f"{case.method} {case.route} with octocat's {case.resource}"
+        nonexistent = case.send(hubot, missing)
+        response = case.send(hubot, ids)
+        if nonexistent.status_code != 404:
+            failures.append(f"{label}: a random ID gave {nonexistent.status_code}")
+            continue
+        expected = nonexistent.json()["error"]
+        error = response.json().get("error", {}) if response.content else {}
+        if (response.status_code, error.get("code"), error.get("message")) != (
+            404,
+            expected["code"],
+            expected["message"],
+        ):
+            failures.append(f"{label}: {response.status_code} {response.text}")
+            continue
+        events = db.scalars(
+            select(AuditEvent).where(
+                AuditEvent.action == "access_denied",
+                AuditEvent.request_id == response.headers["X-Request-ID"],
+            )
+        ).all()
+        recorded = [
+            (e.outcome, str(e.actor_user_id), str(e.workspace_id), e.resource_type, e.resource_id)
+            for e in events
+        ]
+        audit = (
+            "denied",
+            me["user"]["id"],
+            me["workspace"]["id"],
+            RESOURCE_TYPES[case.resource],
+            ids[case.resource],
+        )
+        if recorded != [audit]:
+            failures.append(f"{label}: audit events {recorded}")
+    return failures
 
 
 @pytest.fixture
@@ -279,45 +353,9 @@ def test_other_workspace_ids_look_missing_and_are_audited(
 ) -> None:
     octocat, hubot, ids = workspaces
     me = hubot.get("/v1/me").json()
-    missing = {key: str(uuid.uuid4()) for key in ids} | {"own_repository": ids["own_repository"]}
     before = _row_counts(db)
 
-    failures = []
-    for case in CASES:
-        label = f"{case.method} {case.route} with octocat's {case.resource}"
-        nonexistent = case.send(hubot, missing)
-        response = case.send(hubot, ids)
-        if nonexistent.status_code != 404:
-            failures.append(f"{label}: a random ID gave {nonexistent.status_code}")
-            continue
-        expected = nonexistent.json()["error"]
-        error = response.json().get("error", {}) if response.content else {}
-        if (response.status_code, error.get("code"), error.get("message")) != (
-            404,
-            expected["code"],
-            expected["message"],
-        ):
-            failures.append(f"{label}: {response.status_code} {response.text}")
-            continue
-        events = db.scalars(
-            select(AuditEvent).where(
-                AuditEvent.action == "access_denied",
-                AuditEvent.request_id == response.headers["X-Request-ID"],
-            )
-        ).all()
-        recorded = [
-            (e.outcome, str(e.actor_user_id), str(e.workspace_id), e.resource_type, e.resource_id)
-            for e in events
-        ]
-        audit = (
-            "denied",
-            me["user"]["id"],
-            me["workspace"]["id"],
-            RESOURCE_TYPES[case.resource],
-            ids[case.resource],
-        )
-        if recorded != [audit]:
-            failures.append(f"{label}: audit events {recorded}")
+    failures = _denials_that_do_not_look_missing(db, hubot, ids)
     assert failures == [], "\n".join(failures)
 
     # No denied request changed anything: no new jobs or runs, octocat's repository is intact,
@@ -331,3 +369,143 @@ def test_other_workspace_ids_look_missing_and_are_audited(
         .where(AuditEvent.action == "access_denied", AuditEvent.actor_user_id == me["user"]["id"])
     )
     assert denials == len(CASES)
+
+
+def test_push_access_and_pause_data_stay_in_their_workspace(
+    db: Session, workspaces: Workspaces
+) -> None:
+    octocat, hubot, ids = workspaces
+    theirs, mine = ids["repository"], ids["own_repository"]
+    sha = get_fake_github().push(SAMPLE_APP_ID)
+    delivered = send_delivery(hubot, "push", push_payload(SAMPLE_APP_ID, sha))
+    assert delivered.json() == {"outcome": "processed"}, delivered.text
+    # Give octocat's copy an access-check time and a pause that hubot's copy does not have.
+    repository = _repository(db, theirs)
+    repository.access_checked_at = CHECKED_AT
+    assert access.pause(db, repository, "external_processing_not_accepted")
+    db.commit()
+
+    detail = octocat.get(f"/v1/repositories/{theirs}").json()
+    their_job = detail["latest_push"]["job"]["id"]
+    assert detail["latest_push"]["commit_sha"] == sha
+    assert datetime.fromisoformat(detail["access"]["checked_at"]) == CHECKED_AT
+    assert detail["automatic_updates"] == {
+        "state": "paused",
+        "reason": "external_processing_not_accepted",
+    }
+
+    denied = hubot.get(f"/v1/repositories/{theirs}")
+    assert (denied.status_code, _error_code(denied)) == (404, "not_found")
+    listed = hubot.get("/v1/repositories")
+    (own,) = listed.json()["items"]
+    assert own["id"] == mine
+    # The same push is recorded on hubot's copy, with hubot's own job.
+    assert own["latest_push"]["commit_sha"] == sha
+    own_job = own["latest_push"]["job"]["id"]
+    assert own_job != their_job
+    assert own["automatic_updates"] == {"state": "on", "reason": None}
+    assert own["access"]["state"] == "verified"
+    assert datetime.fromisoformat(own["access"]["checked_at"]) != CHECKED_AT
+    assert hubot.get(f"/v1/jobs/{own_job}").json()["trigger"] == "push"
+    assert hubot.get(f"/v1/jobs/{their_job}").status_code == 404
+
+    seen = [
+        denied,
+        listed,
+        hubot.get(f"/v1/repositories/{mine}"),
+        hubot.get("/v1/github/repositories"),
+        hubot.get(f"/v1/jobs/{own_job}"),
+    ]
+    for response in seen:
+        for value in (theirs, their_job, "external_processing_not_accepted"):
+            assert value not in response.text, f"{response.request.url} shows {value}"
+
+
+def test_a_lost_repository_looks_missing_to_other_workspaces(
+    db: Session, workspaces: Workspaces
+) -> None:
+    octocat, hubot, ids = workspaces
+    assert access.mark_access_lost(
+        db, _repository(db, ids["repository"]), "app_uninstalled", trigger="notification"
+    )
+    db.commit()
+    before = _row_counts(db)
+
+    # The owner is told that access was lost, on every case except those about the repository
+    # itself. In octocat's own requests, `own_repository` is octocat's repository.
+    owner_ids = {**ids, "own_repository": ids["repository"]}
+    owner_failures = []
+    for case in CASES:
+        if (case.method, case.route) in OWNER_REQUESTS_WHEN_LOST:
+            continue
+        response = case.send(octocat, owner_ids)
+        if (response.status_code, _error_code(response)) != (403, "repository_access_lost"):
+            label = f"{case.method} {case.route} with octocat's {case.resource}"
+            owner_failures.append(f"{label}: {response.status_code} {response.text}")
+    assert owner_failures == [], "\n".join(owner_failures)
+
+    # hubot gets exactly the response for a nonexistent resource instead, audited as before.
+    failures = _denials_that_do_not_look_missing(db, hubot, ids)
+    assert failures == [], "\n".join(failures)
+
+    assert _row_counts(db) == before
+    assert _repository(db, ids["repository"]).deleted_at is None
+    # hubot's own copy of the same GitHub repository keeps its access.
+    own = hubot.get(f"/v1/repositories/{ids['own_repository']}").json()
+    assert (own["state"], own["access"]["state"]) == ("ready", "verified")
+    own_snapshot = own["active_snapshot"]["id"]
+    assert hubot.get(f"/v1/snapshots/{own_snapshot}").status_code == 200
+
+
+def test_a_push_to_a_shared_repository_runs_separately_in_each_workspace(
+    db: Session, workspaces: Workspaces, run_worker_once: Callable[[], bool]
+) -> None:
+    octocat, hubot, ids = workspaces
+    users = {"repository": octocat, "own_repository": hubot}
+    other = {"repository": "own_repository", "own_repository": "repository"}
+    versions_before = {
+        key: _ids(client.get(f"/v1/repositories/{ids[key]}/snapshots"))
+        for key, client in users.items()
+    }
+    sha = get_fake_github().push(SAMPLE_APP_ID)
+
+    delivered = send_delivery(octocat, "push", push_payload(SAMPLE_APP_ID, sha))
+
+    assert delivered.json() == {"outcome": "processed"}, delivered.text
+    db.expire_all()
+    jobs = db.scalars(select(Job).where(Job.trigger == "push")).all()
+    job_of = {str(job.repository_id): job for job in jobs}
+    assert len(jobs) == 2
+    assert set(job_of) == {ids["repository"], ids["own_repository"]}
+    for repository_id, job in job_of.items():
+        assert job.workspace_id == _repository(db, repository_id).workspace_id
+
+    _drain(run_worker_once)
+
+    built = {key: _active_snapshot(client, ids[key]) for key, client in users.items()}
+    for key, client in users.items():
+        mine, theirs = job_of[ids[key]], job_of[ids[other[key]]]
+        job = client.get(f"/v1/jobs/{mine.id}").json()
+        assert (job["status"], job["trigger"]) == ("succeeded", "push")
+        assert client.get(f"/v1/jobs/{mine.id}/events").status_code == 200
+        latest_push = client.get(f"/v1/repositories/{ids[key]}").json()["latest_push"]
+        assert latest_push["job"]["id"] == str(mine.id)
+        assert client.get(f"/v1/jobs/{theirs.id}").status_code == 404
+        assert client.get(f"/v1/jobs/{theirs.id}/events").status_code == 404
+
+        # The push built one new version, in this workspace, from this workspace's job.
+        versions = client.get(f"/v1/repositories/{ids[key]}/snapshots").json()["items"]
+        assert {item["id"] for item in versions} - versions_before[key] == {built[key]}
+        active = next(item for item in versions if item["is_active"])
+        assert (active["id"], active["commit_sha"], active["trigger"]) == (built[key], sha, "push")
+        snapshot = db.get(Snapshot, uuid.UUID(built[key]))
+        assert snapshot is not None
+        assert (snapshot.job_id, snapshot.workspace_id) == (mine.id, mine.workspace_id)
+        stored = db.scalars(
+            select(Snapshot.id).where(
+                Snapshot.workspace_id == mine.workspace_id, Snapshot.status == "ready"
+            )
+        )
+        assert {item["id"] for item in versions} == {str(snapshot_id) for snapshot_id in stored}
+        assert client.get(f"/v1/snapshots/{built[other[key]]}").status_code == 404
+    assert built["repository"] != built["own_repository"]

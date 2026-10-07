@@ -19,13 +19,14 @@ from codeatlas.github.gateway import (
     get_gateway,
     verify_access,
 )
-from codeatlas.jobs.queue import cancel_for_repository, enqueue
+from codeatlas.jobs.queue import cancel_for_repository, enqueue, index_dedupe_key
 from codeatlas.models import ACTIVE_JOB_STATUSES, Job, Repository, Snapshot, User, Workspace
+from codeatlas.workspace.access import ensure_readable, resume
 from codeatlas.workspace.audit import deny, record
 
 INDEX_JOB = "index_repository"
 
-RepositoryState = Literal["indexing", "ready", "rejected", "failed"]
+RepositoryState = Literal["access_lost", "indexing", "ready", "rejected", "failed"]
 
 
 def github_unavailable() -> ApiError:
@@ -39,8 +40,14 @@ def sign_in_again() -> ApiError:
     return ApiError(401, "github_sign_in_required", "Sign in with GitHub again.")
 
 
-def index_dedupe_key(repository_id: uuid.UUID, branch: str) -> str:
-    return f"index:{repository_id}:{branch}"
+def external_processing_not_accepted() -> ApiError:
+    """A private repository needs the external processing disclosure accepted (001 FR-006)."""
+    return ApiError(
+        422,
+        "external_processing_not_accepted",
+        "Private repositories require accepting that selected source excerpts may be sent "
+        "to an external model provider.",
+    )
 
 
 @dataclass(frozen=True)
@@ -109,12 +116,7 @@ def connect(
         raise github_unavailable() from exc
 
     if github_repo.private and not accept_external_processing:
-        raise ApiError(
-            422,
-            "external_processing_not_accepted",
-            "Private repositories require accepting that selected source excerpts may be sent "
-            "to an external model provider.",
-        )
+        raise external_processing_not_accepted()
 
     # Serialize connections per workspace so the repository limit holds (FR-009). FOR NO KEY
     # UPDATE still lets other transactions insert rows that reference the workspace.
@@ -181,11 +183,33 @@ def reindex(
     repository_id: uuid.UUID,
     branch: str | None,
     request_id: str | None,
+    accept_external_processing: bool = False,
 ) -> Job:
-    """Queue indexing without calling GitHub; the job re-checks access (FR-003, FR-014)."""
+    """Queue indexing without calling GitHub; the job re-checks access (FR-003, FR-014).
+
+    Allowed for a lost repository: the job's access check restores it if access has returned
+    (research R7). A repository paused because it became private needs the disclosure accepted:
+    the acceptance is recorded and automatic updates resume (FR-017, research R8). Acceptance
+    is ignored otherwise, and a pause for sign-in is resumed only by signing in.
+    """
     repository = get_scoped(
-        db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
+        db,
+        user=user,
+        workspace=workspace,
+        repository_id=repository_id,
+        request_id=request_id,
+        content=False,
     )
+    if repository.access_state == "paused":
+        # Decide on the locked row: every pause and resume takes this lock, so the reason read
+        # below cannot change before `resume`.
+        db.execute(select(Repository.id).where(Repository.id == repository.id).with_for_update())
+        db.refresh(repository)
+    if _paused_for_disclosure(repository):
+        if not accept_external_processing:
+            raise external_processing_not_accepted()
+        repository.external_processing_accepted_at = datetime.now(UTC)
+        resume(db, repository, via="acceptance", actor_user_id=user.id)
     selected_branch = branch or repository.default_branch
     job, _ = enqueue(
         db,
@@ -199,6 +223,13 @@ def reindex(
     return job
 
 
+def _paused_for_disclosure(repository: Repository) -> bool:
+    return (
+        repository.access_state == "paused"
+        and repository.access_reason == "external_processing_not_accepted"
+    )
+
+
 def disconnect(
     db: Session,
     *,
@@ -209,10 +240,15 @@ def disconnect(
 ) -> None:
     """Tombstone a repository: reads stop at once, queued work is canceled, and running work
     cannot publish (its fenced publish checks the tombstone). Data is purged by maintenance.
-    The caller commits (FR-034).
+    The caller commits (FR-034). Allowed for a lost repository.
     """
     repository = get_scoped(
-        db, user=user, workspace=workspace, repository_id=repository_id, request_id=request_id
+        db,
+        user=user,
+        workspace=workspace,
+        repository_id=repository_id,
+        request_id=request_id,
+        content=False,
     )
     db.execute(select(Repository.id).where(Repository.id == repository.id).with_for_update())
     repository.deleted_at = datetime.now(UTC)
@@ -236,8 +272,14 @@ def get_scoped(
     workspace: Workspace,
     repository_id: uuid.UUID,
     request_id: str | None,
+    content: bool = True,
 ) -> Repository:
-    """Return a repository of this workspace; anything else is a 404 (FR-004)."""
+    """Return a repository of this workspace; anything else is a 404 (FR-004).
+
+    With `content`, the caller reads the repository's content (versions, answers), so a lost
+    repository is a 403 `repository_access_lost` (FR-014). Pass `content=False` for the
+    repository row itself: its detail, re-indexing, and disconnecting.
+    """
     repository = db.get(Repository, repository_id)
     if repository is None:
         raise not_found()
@@ -249,6 +291,8 @@ def get_scoped(
             resource_id=str(repository_id),
             request_id=request_id,
         )
+    if content:
+        ensure_readable(repository)
     return repository
 
 
@@ -261,7 +305,9 @@ def get_scoped_snapshot(
     request_id: str | None,
     require_ready: bool = True,
 ) -> Snapshot:
-    """Return a snapshot whose repository belongs to this workspace and is connected."""
+    """Return a snapshot whose repository belongs to this workspace, is connected, and is
+    readable (FR-004, FR-014).
+    """
     snapshot = db.get(Snapshot, snapshot_id)
     if snapshot is None:
         raise not_found()
@@ -278,6 +324,7 @@ def get_scoped_snapshot(
             resource_id=str(snapshot_id),
             request_id=request_id,
         )
+    ensure_readable(repository)
     if require_ready and snapshot.status != "ready":
         raise ApiError(409, "snapshot_not_ready", "This indexed version is not ready.")
     return snapshot
@@ -292,12 +339,31 @@ def latest_indexing_job(db: Session, repository_id: uuid.UUID) -> Job | None:
     )
 
 
-def derive_state(repository: Repository, latest_job: Job | None) -> RepositoryState:
-    """Display state from data-model.md (`indexing`, `ready`, `rejected`, `failed`)."""
+def latest_failed_indexing_job(db: Session, repository_id: uuid.UUID) -> Job | None:
+    return db.scalar(
+        select(Job)
+        .where(Job.repository_id == repository_id, Job.kind == INDEX_JOB, Job.status == "failed")
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(1)
+    )
+
+
+def derive_state(
+    repository: Repository, latest_job: Job | None, latest_failed_job: Job | None = None
+) -> RepositoryState:
+    """Display state from data-model.md: `access_lost` first, then `indexing`, `ready`,
+    `rejected`, and `failed`.
+
+    Without a ready version, the latest failed run decides between `rejected` and `failed`: a
+    later check that found its commit already settled ("Already up to date") changes nothing.
+    """
+    if repository.access_state == "access_lost":
+        return "access_lost"
     if latest_job is not None and latest_job.status in ACTIVE_JOB_STATUSES:
         return "indexing"
     if repository.active_snapshot_id is not None:
         return "ready"
-    if latest_job is not None and latest_job.error_code == "limit_exceeded":
+    failed = latest_failed_job or latest_job
+    if failed is not None and failed.error_code == "limit_exceeded":
         return "rejected"
     return "failed"

@@ -2,6 +2,7 @@
 
 import io
 import tarfile
+from collections.abc import Callable
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -26,11 +27,14 @@ from codeatlas.github.gateway import (
     GitHubAccessDenied,
     GitHubGateway,
     GitHubNotFound,
+    GitHubUnavailable,
     RepositoryEmpty,
+    UserAuthorizationInvalid,
 )
 
 OCTOCAT = "fake-token-octocat"
 HUBOT = "fake-token-hubot"
+SAMPLE_APP = "octo-org/sample-app"
 
 
 @pytest.fixture
@@ -181,3 +185,166 @@ def test_call_counter_and_reset(fake: FakeGitHub) -> None:
     assert fake.resolve_commit(5001, "octo-org/sample-app", "main") == commit_sha(
         SAMPLE_APP_ID, "initial"
     )
+
+
+# Switches for push re-indexing and access changes
+
+
+def test_push_moves_the_default_branch_to_the_next_commit(fake: FakeGitHub) -> None:
+    second = commit_sha(SAMPLE_APP_ID, "second")
+
+    assert fake.push(SAMPLE_APP_ID) == second
+    assert fake.resolve_commit(5001, SAMPLE_APP, "main") == second
+    second_files = _file_paths(_members(fake, SAMPLE_APP))
+
+    # Past the fixture commits, each push adds a commit with the same files as the head.
+    third = fake.push(SAMPLE_APP_ID)
+    assert third not in {commit_sha(SAMPLE_APP_ID, "initial"), second}
+    assert fake.resolve_commit(5001, SAMPLE_APP, "main") == third
+    assert _file_paths(_members(fake, SAMPLE_APP)) == second_files
+    assert fake.push(SAMPLE_APP_ID) not in {second, third}
+
+    with pytest.raises(ValueError):
+        fake.push(EMPTY_ID)
+
+
+def test_rename_default_branch(fake: FakeGitHub) -> None:
+    initial = commit_sha(SAMPLE_APP_ID, "initial")
+
+    fake.rename_default_branch(SAMPLE_APP_ID, "trunk")
+
+    assert fake.get_repository(OCTOCAT, SAMPLE_APP_ID).default_branch == "trunk"
+    assert fake.resolve_commit(5001, SAMPLE_APP, "trunk") == initial
+    with pytest.raises(BranchNotFound):
+        fake.resolve_commit(5001, SAMPLE_APP, "main")
+
+    second = fake.push(SAMPLE_APP_ID)
+    assert second == commit_sha(SAMPLE_APP_ID, "second")
+    assert fake.resolve_commit(5001, SAMPLE_APP, "trunk") == second
+
+
+def test_suspend(fake: FakeGitHub) -> None:
+    fake.suspend(SAMPLE_APP_ID)
+
+    # The real client skips suspended installations in both listings.
+    assert fake.list_installation_ids(OCTOCAT) == {5002}
+    assert fake.list_installation_ids(HUBOT) == {5003}
+    assert {repo.id for repo in fake.list_accessible_repositories(HUBOT)} == {HUBOT_TOOLS_ID}
+    # GitHub still reports the suspended installation for the repository.
+    assert fake.get_installation_id(SAMPLE_APP) == 5001
+    with pytest.raises(GitHubAccessDenied) as caught:
+        fake.resolve_commit(5001, SAMPLE_APP, "main")
+    assert not isinstance(caught.value, UserAuthorizationInvalid)
+    with pytest.raises(GitHubAccessDenied):
+        fake.open_tarball(5001, SAMPLE_APP, commit_sha(SAMPLE_APP_ID, "initial"))
+    assert fake.resolve_commit(5003, "hubot/tools", "main")
+
+
+def test_remove_from_installation(fake: FakeGitHub) -> None:
+    fake.remove_from_installation(SAMPLE_APP_ID)
+
+    with pytest.raises(GitHubNotFound):
+        fake.get_installation_id(SAMPLE_APP)
+    assert SAMPLE_APP_ID not in {repo.id for repo in fake.list_accessible_repositories(OCTOCAT)}
+    with pytest.raises(GitHubAccessDenied):
+        fake.resolve_commit(5001, SAMPLE_APP, "main")
+    # Other repositories of the same owner stay in the installation.
+    assert fake.get_installation_id("octo-org/no-code") == 5001
+    assert fake.resolve_commit(5001, "octo-org/no-code", "main")
+    assert fake.list_installation_ids(OCTOCAT) == {5001, 5002}
+
+    # Reinstalling the App on the owner's account covers the repository again.
+    new_id = fake.reinstall(SAMPLE_APP_ID)
+    assert fake.get_installation_id(SAMPLE_APP) == new_id
+    assert fake.resolve_commit(new_id, SAMPLE_APP, "main")
+
+
+USER_TOKEN_CALLS: dict[str, Callable[[FakeGitHub, str], object]] = {
+    "get_authenticated_user": lambda fake, token: fake.get_authenticated_user(token),
+    "list_accessible_repositories": lambda fake, token: fake.list_accessible_repositories(token),
+    "get_repository": lambda fake, token: fake.get_repository(token, SAMPLE_APP_ID),
+    "list_installation_ids": lambda fake, token: fake.list_installation_ids(token),
+}
+
+
+def test_revoke_authorization(fake: FakeGitHub) -> None:
+    fake.revoke_authorization("octocat")
+
+    for name, call in USER_TOKEN_CALLS.items():
+        with pytest.raises(UserAuthorizationInvalid):
+            call(fake, OCTOCAT)
+        assert call(fake, HUBOT), name
+    with pytest.raises(UserAuthorizationInvalid):
+        fake.refresh_user_token("fake-refresh-octocat")
+    assert fake.refresh_user_token("fake-refresh-hubot").access_token == HUBOT
+
+    # Signing in again authorizes the App anew.
+    tokens = fake.exchange_code("fake:octocat")
+    assert fake.get_authenticated_user(tokens.access_token).login == "octocat"
+
+
+def test_make_private(fake: FakeGitHub) -> None:
+    fake.make_private(SAMPLE_APP_ID)
+
+    # octocat and hubot both reach sample-app through the octo-org installation.
+    assert fake.get_repository(OCTOCAT, SAMPLE_APP_ID).private is True
+    listed = {repo.id: repo for repo in fake.list_accessible_repositories(HUBOT)}
+    assert listed[SAMPLE_APP_ID].private is True
+
+    fake.revoke_access("hubot", SAMPLE_APP_ID)
+    with pytest.raises(GitHubNotFound):
+        fake.get_repository(HUBOT, SAMPLE_APP_ID)
+
+
+# Every `GitHubGateway` method that calls GitHub. `authorize_url` only builds a URL.
+GATEWAY_CALLS: dict[str, Callable[[FakeGitHub], object]] = {
+    "exchange_code": lambda fake: fake.exchange_code("fake:octocat"),
+    "refresh_user_token": lambda fake: fake.refresh_user_token("fake-refresh-octocat"),
+    "get_authenticated_user": lambda fake: fake.get_authenticated_user(OCTOCAT),
+    "list_accessible_repositories": lambda fake: fake.list_accessible_repositories(OCTOCAT),
+    "get_repository": lambda fake: fake.get_repository(OCTOCAT, SAMPLE_APP_ID),
+    "list_installation_ids": lambda fake: fake.list_installation_ids(OCTOCAT),
+    "get_installation_id": lambda fake: fake.get_installation_id(SAMPLE_APP),
+    "resolve_commit": lambda fake: fake.resolve_commit(5001, SAMPLE_APP, "main"),
+    "open_tarball": lambda fake: fake.open_tarball(
+        5001, SAMPLE_APP, commit_sha(SAMPLE_APP_ID, "initial")
+    ),
+}
+
+
+def test_gateway_calls_cover_the_protocol() -> None:
+    protocol_methods = {name for name in vars(GitHubGateway) if not name.startswith("_")}
+    assert set(GATEWAY_CALLS) == protocol_methods - {"authorize_url"}
+
+
+def test_set_unavailable(fake: FakeGitHub) -> None:
+    fake.set_unavailable(True)
+
+    for name, call in GATEWAY_CALLS.items():
+        with pytest.raises(GitHubUnavailable):
+            call(fake)
+        assert fake.calls[name] == 1
+    assert fake.authorize_url("state")
+
+    fake.set_unavailable(False)
+    for call in GATEWAY_CALLS.values():
+        assert call(fake)
+
+
+def test_reset_undoes_every_switch(fake: FakeGitHub) -> None:
+    fake.push(SAMPLE_APP_ID)
+    fake.rename_default_branch(SAMPLE_APP_ID, "trunk")
+    fake.make_private(SAMPLE_APP_ID)
+    fake.suspend(HUBOT_TOOLS_ID)
+    fake.remove_from_installation(SOLO_ID)
+    fake.revoke_authorization("octocat")
+    fake.set_unavailable(True)
+
+    reset_fake_github()
+
+    repository = fake.get_repository(OCTOCAT, SAMPLE_APP_ID)
+    assert (repository.default_branch, repository.private) == ("main", False)
+    assert fake.resolve_commit(5001, SAMPLE_APP, "main") == commit_sha(SAMPLE_APP_ID, "initial")
+    assert fake.list_installation_ids(HUBOT) == {5001, 5003}
+    assert fake.get_installation_id("octocat/solo") == 5002
+    assert fake.refresh_user_token("fake-refresh-octocat").access_token == OCTOCAT

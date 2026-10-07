@@ -3,7 +3,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { ApiError, errorMessage } from "@/lib/api/client";
+import { AccessLostNotice } from "@/components/AccessLostNotice";
+import { ApiError, errorMessage, isAccessLost } from "@/lib/api/client";
 import { shortSha, useRepository, useSnapshot } from "@/lib/api/repositories";
 
 type View = "browse" | "search";
@@ -20,7 +21,8 @@ function RepositoryName({ repositoryId }: { repositoryId: string }) {
 
 /**
  * The header of a snapshot page: the repository, the commit, and links between browsing and
- * searching. Renders `children` only once the snapshot is known to be readable.
+ * searching. Renders `children` only once the snapshot is known to be readable. If GitHub access
+ * to the repository is lost, even after the snapshot loaded, it shows a notice instead.
  */
 export function SnapshotFrame({
   snapshotId,
@@ -32,6 +34,8 @@ export function SnapshotFrame({
   children: ReactNode;
 }) {
   const { data: snapshot, error } = useSnapshot(snapshotId);
+
+  if (isAccessLost(error)) return <AccessLostNotice error={error} subject="This version" />;
 
   if (!snapshot) {
     if (error) {

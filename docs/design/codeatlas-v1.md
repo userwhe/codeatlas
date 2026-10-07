@@ -7,7 +7,10 @@
 > **Superseded in part (2026-10-05).** For the first increment (`specs/001-repository-qa`), ADRs
 > 0002, 0003, and 0006 replace parts of this design. PostgreSQL stores file contents (no S3) and
 > runs the job queue (no SQS or outbox). Progress uses polling instead of SSE. Answers use
-> Gemini 3.8 Flash. Where this document and an ADR disagree, the ADR applies.
+> Gemini 3.8 Flash. For the second increment (`specs/002-push-reindexing`), ADR 0007 applies:
+> webhook deliveries commit with their jobs without an outbox, and installation status lives on
+> repository rows rather than in an installation table. Where this document and an ADR disagree,
+> the ADR applies.
 
 CodeAtlas is a web application that helps developers understand a GitHub repository and investigate a pull request or failed CI run using traceable evidence. This document defines the proposed first release, its implementation boundaries, and the checks required before a pilot deployment.
 

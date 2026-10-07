@@ -196,7 +196,8 @@ def test_failed_reindex_keeps_previous_snapshot(
     assert (job.status, job.error_code) == ("failed", "access_denied")
     repository = client.get(f"/v1/repositories/{repository_id}").json()
     assert repository["active_snapshot"] == active_before
-    assert repository["state"] == "ready"
+    # The failed access check also marks the repository lost (specs/002-push-reindexing, FR-014).
+    assert repository["state"] == "access_lost"
     denied = db.scalars(select(AuditEvent).where(AuditEvent.action == "access_denied")).all()
     assert denied
 

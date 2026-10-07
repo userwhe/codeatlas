@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     github_app_client_id: str = ""
     github_app_client_secret: str = ""
     github_app_private_key_path: str = ""
+    # Verifies GitHub webhook deliveries (research R2); required in production.
+    github_webhook_secret: str = ""
     token_encryption_key: str = ""
 
     gemini_api_key: str = ""
@@ -68,6 +70,12 @@ class Settings(BaseSettings):
     def _fakes_only_outside_production(self) -> Self:
         if self.fake_externals and self.env not in ("test", "development"):
             raise ValueError("CODEATLAS_FAKE_EXTERNALS is allowed only in test or development")
+        return self
+
+    @model_validator(mode="after")
+    def _webhook_secret_in_production(self) -> Self:
+        if self.env == "production" and not self.github_webhook_secret:
+            raise ValueError("GITHUB_WEBHOOK_SECRET is required in production")
         return self
 
 

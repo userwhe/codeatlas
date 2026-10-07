@@ -1,4 +1,8 @@
-"""Database tables. See specs/001-repository-qa/data-model.md for the rules behind each field."""
+"""Database tables.
+
+See specs/001-repository-qa/data-model.md for the rules behind each field, and
+specs/002-push-reindexing/data-model.md for the access-state, trigger, and webhook additions.
+"""
 
 import uuid
 from datetime import date, datetime
@@ -43,6 +47,10 @@ SYMBOL_KINDS = ("class", "function", "method", "interface", "type_alias", "enum"
 JOB_KINDS = ("index_repository", "answer_question")
 JOB_STATUSES = ("queued", "running", "retry_wait", "succeeded", "failed", "canceled")
 ACTIVE_JOB_STATUSES = ("queued", "running", "retry_wait")
+WAITING_JOB_STATUSES = ("queued", "retry_wait")
+JOB_TRIGGERS = ("user", "push", "check")
+ACCESS_STATES = ("active", "paused", "access_lost")
+WEBHOOK_OUTCOMES = ("processed", "ignored")
 JOB_EVENT_TYPES = (
     "queued",
     "stage_started",
@@ -62,6 +70,11 @@ AUDIT_ACTIONS = (
     "repository_disconnect",
     "question_submit",
     "access_denied",
+    "webhook_rejected",
+    "repository_access_lost",
+    "repository_access_restored",
+    "automatic_updates_paused",
+    "automatic_updates_resumed",
 )
 AUDIT_OUTCOMES = ("success", "denied", "failure")
 
@@ -145,6 +158,13 @@ class Repository(Base):
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        CheckConstraint(_in("access_state", ACCESS_STATES), name="access_state"),
+        CheckConstraint(
+            "(access_state = 'active') = (access_reason IS NULL)", name="access_reason"
+        ),
+        CheckConstraint(
+            "(access_state = 'access_lost') = (access_lost_at IS NOT NULL)", name="access_lost_at"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -163,6 +183,17 @@ class Repository(Base):
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     deleted_at: Mapped[datetime | None]
+    # Access to the repository on GitHub (specs/002-push-reindexing, research R7 and R8).
+    access_state: Mapped[str] = mapped_column(Text, default="active", server_default="active")
+    access_reason: Mapped[str | None] = mapped_column(Text)
+    access_lost_at: Mapped[datetime | None]
+    access_checked_at: Mapped[datetime | None]
+    # The latest default-branch push received, and the job that covers it.
+    latest_push_sha: Mapped[str | None] = mapped_column(Text)
+    latest_push_at: Mapped[datetime | None]
+    latest_push_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="SET NULL", use_alter=True)
+    )
 
 
 class Snapshot(Base):
@@ -322,6 +353,7 @@ class Job(Base):
         ),
         CheckConstraint(_in("kind", JOB_KINDS), name="kind"),
         CheckConstraint(_in("status", JOB_STATUSES), name="status"),
+        CheckConstraint(_in("trigger", JOB_TRIGGERS), name="trigger"),
         Index(
             "uq_jobs_one_running_per_kind",
             "workspace_id",
@@ -329,12 +361,13 @@ class Job(Base):
             unique=True,
             postgresql_where=text("status = 'running'"),
         ),
+        # Waiting jobs only: a running job and one waiting job may share a key (research R3).
         Index(
-            "uq_jobs_active_dedupe_key",
+            "uq_jobs_waiting_dedupe_key",
             "workspace_id",
             "dedupe_key",
             unique=True,
-            postgresql_where=text(_in("status", ACTIVE_JOB_STATUSES)),
+            postgresql_where=text(_in("status", WAITING_JOB_STATUSES)),
         ),
         Index("ix_jobs_claim", "status", "run_after"),
     )
@@ -348,6 +381,8 @@ class Job(Base):
     )
     payload: Mapped[dict[str, Any]] = mapped_column(default=dict)
     dedupe_key: Mapped[str | None] = mapped_column(Text)
+    # What started the job: `user`, `push`, or `check` (specs/002-push-reindexing, research R3).
+    trigger: Mapped[str] = mapped_column(Text, default="user", server_default="user")
     status: Mapped[str] = mapped_column(Text, default="queued")
     attempt: Mapped[int] = mapped_column(default=0)
     max_attempts: Mapped[int] = mapped_column(default=3)
@@ -503,3 +538,26 @@ class AuditEvent(Base):
     request_id: Mapped[str | None] = mapped_column(Text)
     detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class WebhookDelivery(Base):
+    """A verified GitHub webhook delivery, kept 14 days to recognize redeliveries.
+
+    Not tenant-owned and never returned by the API. Unverified requests are only audited
+    (specs/002-push-reindexing, research R2).
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        CheckConstraint(_in("outcome", WEBHOOK_OUTCOMES), name="outcome"),
+        Index("ix_webhook_deliveries_received_at", "received_at"),
+    )
+
+    delivery_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    event: Mapped[str] = mapped_column(Text)
+    action: Mapped[str | None] = mapped_column(Text)
+    github_installation_id: Mapped[int | None] = mapped_column(BigInteger)
+    github_repository_id: Mapped[int | None] = mapped_column(BigInteger)
+    outcome: Mapped[str] = mapped_column(Text)
+    detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    received_at: Mapped[datetime] = mapped_column(server_default=func.now())

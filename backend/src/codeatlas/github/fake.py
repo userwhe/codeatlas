@@ -1,8 +1,14 @@
 """In-memory GitHub gateway for tests and local development (research R13).
 
 Serves the fixture repositories in `backend/tests/fixtures/repos/` plus a few generated ones.
-Tests change its state through the switch methods (`revoke_access`, `rename`, `reinstall`,
-`advance`) and read `calls`; `reset_fake_github()` undoes all of that.
+Tests change its state through the switch methods and read `calls`; `reset_fake_github()` undoes
+all of that. The switches:
+
+- commits: `push` (also named `advance`) and `rename_default_branch`;
+- repositories: `rename` and `make_private`;
+- installations: `uninstall`, `reinstall`, `suspend`, and `remove_from_installation`;
+- users: `revoke_access` and `revoke_authorization`;
+- GitHub itself: `set_unavailable`.
 """
 
 import hashlib
@@ -23,8 +29,10 @@ from codeatlas.github.gateway import (
     GitHubAccessDenied,
     GitHubNotFound,
     GitHubRepository,
+    GitHubUnavailable,
     GitHubUser,
     RepositoryEmpty,
+    UserAuthorizationInvalid,
     UserTokens,
 )
 
@@ -280,6 +288,10 @@ class FakeGitHub:
         self._installations = dict(_INITIAL_INSTALLATIONS)
         self._access = {login: set(ids) for login, ids in _INITIAL_ACCESS.items()}
         self._next_installation_id = _FIRST_REINSTALL_ID
+        self._suspended: set[int] = set()  # installation IDs
+        self._removed: set[int] = set()  # repositories taken out of their owner's installation
+        self._revoked: set[str] = set()  # logins that revoked their authorization of the App
+        self._unavailable = False
 
     # Test switches -----------------------------------------------------------------------
 
@@ -302,20 +314,73 @@ class FakeGitHub:
             self._installations[repository.owner] = self._allocate_installation_id()
 
     def reinstall(self, github_repository_id: int) -> int:
-        """Reinstall the App on the repository owner's account; returns the new installation ID."""
+        """Reinstall the App on the repository owner's account; returns the new installation ID.
+
+        The new installation is active and covers every repository of the owner.
+        """
         owner = self._repositories[github_repository_id].owner
         self._installations[owner] = self._allocate_installation_id()
+        self._removed -= {r.id for r in self._repositories.values() if r.owner == owner}
         return self._installations[owner]
 
-    def advance(self, github_repository_id: int) -> str:
-        """Move `main` to the next commit and return its SHA (only sample-app has one)."""
+    def suspend(self, github_repository_id: int) -> None:
+        """Suspend the App's installation on the repository owner's account.
+
+        GitHub still reports the installation for the repository, but leaves it out of the user's
+        installations, and the installation can no longer read.
+        """
+        self._suspended.add(self._installations[self._repositories[github_repository_id].owner])
+
+    def remove_from_installation(self, github_repository_id: int) -> None:
+        """Remove the repository from its owner's installation; other repositories stay."""
+        self._removed.add(github_repository_id)
+
+    def make_private(self, github_repository_id: int) -> None:
+        """Make the repository private; only users with access through the App still see it."""
+        self._repositories[github_repository_id].private = True
+
+    def revoke_authorization(self, login: str) -> None:
+        """The user revokes their authorization of the App: their tokens stop working.
+
+        Signing in again (`exchange_code`) authorizes the App anew.
+        """
+        self._revoked.add(login)
+
+    def set_unavailable(self, unavailable: bool) -> None:
+        """While set, every method that calls GitHub raises `GitHubUnavailable`.
+
+        `authorize_url` only builds a URL, so it keeps working.
+        """
+        self._unavailable = unavailable
+
+    def push(self, github_repository_id: int) -> str:
+        """Move the default branch to the next commit and return its SHA.
+
+        Past the fixture commits (sample-app has two), each push adds a commit with the same files
+        as the head.
+        """
         repository = self._repositories[github_repository_id]
+        if not repository.branches:
+            raise ValueError(f"repository {github_repository_id} has no commits to push onto")
         names = [name for name, _ in repository.commits]
-        position = names.index(repository.branches["main"]) if repository.branches else -1
-        if position + 1 >= len(names):
-            raise ValueError(f"repository {github_repository_id} has no commit to advance to")
-        repository.branches["main"] = names[position + 1]
+        position = names.index(repository.branches[repository.default_branch])
+        if position + 1 == len(names):
+            name = f"push-{len(names) + 1}"
+            repository.commits.append((name, repository.commits[position][1]))
+            names.append(name)
+        repository.branches[repository.default_branch] = names[position + 1]
         return commit_sha(github_repository_id, names[position + 1])
+
+    def advance(self, github_repository_id: int) -> str:
+        """The earlier name of `push`."""
+        return self.push(github_repository_id)
+
+    def rename_default_branch(self, github_repository_id: int, new_name: str) -> None:
+        """Rename the default branch; the old name stops resolving."""
+        repository = self._repositories[github_repository_id]
+        if repository.branches:
+            repository.branches[new_name] = repository.branches.pop(repository.default_branch)
+        repository.default_branch = new_name
 
     # GitHubGateway -----------------------------------------------------------------------
 
@@ -324,31 +389,35 @@ class FakeGitHub:
         return f"/auth/github/callback?code={CODE_PREFIX}octocat&state={quote(state, safe='')}"
 
     def exchange_code(self, code: str) -> UserTokens:
-        self.calls["exchange_code"] += 1
+        self._call("exchange_code")
         login = code.removeprefix(CODE_PREFIX)
         if not code.startswith(CODE_PREFIX) or login not in _USERS:
-            raise GitHubAccessDenied("unknown authorization code")
+            raise UserAuthorizationInvalid("unknown authorization code")
+        # Signing in again authorizes the App anew, which ends an earlier revocation.
+        self._revoked.discard(login)
         return _tokens_for(login)
 
     def refresh_user_token(self, refresh_token: str) -> UserTokens:
-        self.calls["refresh_user_token"] += 1
+        self._call("refresh_user_token")
         login = refresh_token.removeprefix(REFRESH_PREFIX)
         if not refresh_token.startswith(REFRESH_PREFIX) or login not in _USERS:
-            raise GitHubAccessDenied("unknown refresh token")
+            raise UserAuthorizationInvalid("unknown refresh token")
+        if login in self._revoked:
+            raise UserAuthorizationInvalid("the refresh token was revoked")
         return _tokens_for(login)
 
     def get_authenticated_user(self, user_token: str) -> GitHubUser:
-        self.calls["get_authenticated_user"] += 1
-        return _USERS[_login_for(user_token)]
+        self._call("get_authenticated_user")
+        return _USERS[self._login_for(user_token)]
 
     def list_accessible_repositories(self, user_token: str) -> list[GitHubRepository]:
-        self.calls["list_accessible_repositories"] += 1
+        self._call("list_accessible_repositories")
         return [self._describe(repository) for repository in self._reachable(user_token)]
 
     def get_repository(self, user_token: str, github_repository_id: int) -> GitHubRepository:
-        self.calls["get_repository"] += 1
+        self._call("get_repository")
         repository = self._repositories.get(github_repository_id)
-        login = _login_for(user_token)
+        login = self._login_for(user_token)
         if repository is None or (
             repository.private and github_repository_id not in self._access[login]
         ):
@@ -356,18 +425,18 @@ class FakeGitHub:
         return self._describe(repository)
 
     def list_installation_ids(self, user_token: str) -> set[int]:
-        self.calls["list_installation_ids"] += 1
+        self._call("list_installation_ids")
         return {self._installations[r.owner] for r in self._reachable(user_token)}
 
     def get_installation_id(self, full_name: str) -> int:
-        self.calls["get_installation_id"] += 1
-        owner = self._by_name(full_name).owner
-        if owner not in self._installations:
+        self._call("get_installation_id")
+        repository = self._by_name(full_name)
+        if repository.owner not in self._installations or repository.id in self._removed:
             raise GitHubNotFound(f"the App is not installed on {full_name}")
-        return self._installations[owner]
+        return self._installations[repository.owner]
 
     def resolve_commit(self, installation_id: int, full_name: str, branch: str) -> str:
-        self.calls["resolve_commit"] += 1
+        self._call("resolve_commit")
         repository = self._installed(installation_id, full_name)
         if not repository.branches:
             raise RepositoryEmpty(f"{full_name} has no branches")
@@ -378,7 +447,7 @@ class FakeGitHub:
     def open_tarball(
         self, installation_id: int, full_name: str, sha: str
     ) -> AbstractContextManager[IO[bytes]]:
-        self.calls["open_tarball"] += 1
+        self._call("open_tarball")
         repository = self._installed(installation_id, full_name)
         builder = repository.archive_builder(sha)
         if builder is None:
@@ -388,14 +457,36 @@ class FakeGitHub:
 
     # Helpers -----------------------------------------------------------------------------
 
+    def _call(self, name: str) -> None:
+        """Count a call to GitHub; raise `GitHubUnavailable` while GitHub is unavailable."""
+        self.calls[name] += 1
+        if self._unavailable:
+            raise GitHubUnavailable(f"GitHub is unavailable ({name})")
+
+    def _login_for(self, user_token: str) -> str:
+        login = user_token.removeprefix(ACCESS_PREFIX)
+        if not user_token.startswith(ACCESS_PREFIX) or login not in _USERS:
+            raise UserAuthorizationInvalid("invalid user token")
+        if login in self._revoked:
+            raise UserAuthorizationInvalid("the user token was revoked")
+        return login
+
     def _allocate_installation_id(self) -> int:
         self._next_installation_id += 1
         return self._next_installation_id - 1
 
     def _reachable(self, user_token: str) -> list[_Repository]:
-        """Repositories the user reaches through installations of the App, by ID."""
-        repositories = [self._repositories[i] for i in sorted(self._access[_login_for(user_token)])]
-        return [r for r in repositories if r.owner in self._installations]
+        """Repositories the user reaches through active installations of the App, by ID."""
+        login = self._login_for(user_token)
+        repositories = [self._repositories[i] for i in sorted(self._access[login])]
+        return [r for r in repositories if self._covering(r) is not None]
+
+    def _covering(self, repository: _Repository) -> int | None:
+        """The ID of the active installation that covers the repository, if any."""
+        installation_id = self._installations.get(repository.owner)
+        if installation_id in self._suspended or repository.id in self._removed:
+            return None
+        return installation_id
 
     def _describe(self, repository: _Repository) -> GitHubRepository:
         return GitHubRepository(
@@ -414,16 +505,9 @@ class FakeGitHub:
 
     def _installed(self, installation_id: int, full_name: str) -> _Repository:
         repository = self._by_name(full_name)
-        if self._installations.get(repository.owner) != installation_id:
+        if self._covering(repository) != installation_id:
             raise GitHubAccessDenied(f"installation {installation_id} cannot access {full_name}")
         return repository
-
-
-def _login_for(user_token: str) -> str:
-    login = user_token.removeprefix(ACCESS_PREFIX)
-    if not user_token.startswith(ACCESS_PREFIX) or login not in _USERS:
-        raise GitHubAccessDenied("invalid user token")
-    return login
 
 
 def _tokens_for(login: str) -> UserTokens:

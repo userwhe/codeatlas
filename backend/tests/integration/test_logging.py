@@ -1,4 +1,8 @@
-"""Log hygiene (research R16): logs never contain tokens, source text, prompts, or model output."""
+"""Log hygiene (research R16): logs never contain tokens, source text, prompts, or model output.
+
+Webhook deliveries add their own rule (002 research R2): logs never contain request bodies, so no
+commit messages, author data, or file names, nor the webhook secret or the signature.
+"""
 
 import json
 import logging
@@ -10,10 +14,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codeatlas.auth.sessions import COOKIE_NAME
-from codeatlas.github.fake import ACCESS_PREFIX, REFRESH_PREFIX, SAMPLE_APP_ID
+from codeatlas.github.fake import ACCESS_PREFIX, REFRESH_PREFIX, SAMPLE_APP_ID, get_fake_github
 from codeatlas.logging import JsonFormatter
 from codeatlas.qa.prompt import SYSTEM_PROMPT
 from tests.conftest import FIXTURE_REPOS_DIR
+from tests.webhooks import (
+    AUTHOR_EMAIL,
+    COMMIT_MESSAGE,
+    delivery_headers,
+    post_delivery,
+    push_payload,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -25,6 +36,7 @@ MODEL_OUTPUT = [
     "The first evidence item answers the question.",
     "The second evidence item supports the answer.",
 ]
+SIGNATURE_HEADER = "X-Hub-Signature-256"
 
 
 class _Capture(logging.Handler):
@@ -75,6 +87,16 @@ def _lines(text: str, min_length: int = 24) -> list[str]:
     return [line.strip() for line in text.splitlines() if len(line.strip()) >= min_length]
 
 
+def _leaks(captured: _Capture, forbidden: dict[str, list[str]]) -> list[str]:
+    texts = captured.texts()
+    return [
+        f"{kind}: {needle!r}"
+        for kind, needles in forbidden.items()
+        for needle in needles
+        if any(needle in text for text in texts)
+    ]
+
+
 def test_logs_hold_no_secrets_source_prompts_or_model_output(
     signed_in: Callable[[str], TestClient], run_worker_once: Callable[[], bool]
 ) -> None:
@@ -116,11 +138,53 @@ def test_logs_hold_no_secrets_source_prompts_or_model_output(
         "question": [QUESTION],
         "model output": MODEL_OUTPUT,
     }
-    texts = captured.texts()
-    leaks = [
-        f"{kind}: {needle!r}"
-        for kind, needles in forbidden.items()
-        for needle in needles
-        if any(needle in text for text in texts)
+    leaks = _leaks(captured, forbidden)
+    assert leaks == [], "\n".join(leaks)
+
+
+def test_logs_hold_no_webhook_payload_secret_or_signature(
+    signed_in: Callable[[str], TestClient], run_worker_once: Callable[[], bool]
+) -> None:
+    client = signed_in("octocat")
+    connected = client.post("/v1/repositories", json={"github_repository_id": SAMPLE_APP_ID})
+    assert connected.status_code == 202, connected.text
+    _drain(run_worker_once)
+    sha = get_fake_github().push(SAMPLE_APP_ID)
+    payload = push_payload(SAMPLE_APP_ID, sha)
+    body = json.dumps(payload).encode()
+    signed = delivery_headers("push", body)
+    forged = delivery_headers("push", body, secret="not-the-webhook-secret")
+
+    with _capture_logs() as captured:
+        rejected = post_delivery(client, body, forged)
+        accepted = post_delivery(client, body, signed)
+        _drain(run_worker_once)
+
+    # The forged delivery was rejected, and the signed one was indexed by a push run.
+    assert rejected.status_code == 401, rejected.text
+    assert accepted.json() == {"outcome": "processed"}, accepted.text
+    repository = client.get(f"/v1/repositories/{connected.json()['repository']['id']}").json()
+    assert repository["active_snapshot"]["commit_sha"] == sha
+    push_job = repository["latest_push"]["job"]
+    assert (push_job["status"], push_job["trigger"]) == ("succeeded", "push")
+    # Logs were captured, including the push run's, with its job ID from the context.
+    claimed = [
+        line.get("job_id")
+        for line in captured.json_lines
+        if str(line["message"]).startswith("claimed index_repository job")
     ]
+    assert claimed == [push_job["id"]], captured.json_lines
+
+    commit = payload["head_commit"]
+    file_names = sorted({*commit["added"], *commit["removed"], *commit["modified"]})
+    assert file_names
+    signatures = [signed[SIGNATURE_HEADER], forged[SIGNATURE_HEADER]]
+    forbidden = {
+        "commit message": [COMMIT_MESSAGE],
+        "author": [AUTHOR_EMAIL, commit["author"]["name"]],
+        "file name": file_names,
+        "webhook secret": [os.environ["GITHUB_WEBHOOK_SECRET"]],
+        "signature": signatures + [value.removeprefix("sha256=") for value in signatures],
+    }
+    leaks = _leaks(captured, forbidden)
     assert leaks == [], "\n".join(leaks)

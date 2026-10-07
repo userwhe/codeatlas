@@ -9,7 +9,9 @@ import { defineConfig, devices } from "@playwright/test";
  * `docker compose up -d --build` from the repository root. The README in this directory has the
  * steps. The global setup stops the run early when the web app is unreachable or not in fake mode.
  *
- * `E2E_BASE_URL` points the tests at another web origin (default `http://localhost:3000`).
+ * `E2E_BASE_URL` points the tests at another web origin (default `http://localhost:3000`), and
+ * `E2E_API_URL` at another API origin for webhook deliveries (default `http://localhost:8000`).
+ * `GITHUB_WEBHOOK_SECRET` must match the stack's secret, because the tests sign deliveries.
  */
 export default defineConfig({
   testDir: "./tests/e2e",

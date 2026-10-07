@@ -12,12 +12,15 @@ from codeatlas.api.deps import CurrentUser, CurrentWorkspace, DbSession, Request
 from codeatlas.api.errors import not_found
 from codeatlas.jobs.queue import queued_behind
 from codeatlas.models import Job, JobEvent, Repository, User, Workspace
+from codeatlas.workspace.access import ensure_readable
 from codeatlas.workspace.audit import deny
 
 router = APIRouter(tags=["jobs"])
 
 JobKind = Literal["index_repository", "answer_question"]
 JobStatus = Literal["queued", "running", "retry_wait", "succeeded", "failed", "canceled"]
+# What started a job (specs/002-push-reindexing/contracts/http-api.md).
+JobTrigger = Literal["user", "push", "check"]
 JobEventType = Literal[
     "queued",
     "stage_started",
@@ -40,6 +43,7 @@ class JobResponse(BaseModel):
     id: uuid.UUID
     kind: JobKind
     status: JobStatus
+    trigger: JobTrigger
     attempt: int
     queued_behind: int | None
     error: JobError | None
@@ -76,19 +80,22 @@ def job_error(job: Job) -> JobError | None:
 def _get_scoped_job(
     db: DbSession, user: User, workspace: Workspace, job_id: str, request_id: str | None
 ) -> Job:
+    """A job of this workspace's connected repository; 404 otherwise (FR-004), and 403 while
+    the repository's access is lost (FR-014).
+    """
     try:
         parsed = uuid.UUID(job_id)
     except ValueError:
         raise not_found() from None
     row = db.execute(
-        select(Job, Repository.deleted_at)
+        select(Job, Repository)
         .join(Repository, Repository.id == Job.repository_id)
         .where(Job.id == parsed)
     ).first()
     if row is None:
         raise not_found()
-    job, repository_deleted_at = row
-    if job.workspace_id != workspace.id or repository_deleted_at is not None:
+    job, repository = row
+    if job.workspace_id != workspace.id or repository.deleted_at is not None:
         raise deny(
             actor_user_id=user.id,
             workspace_id=workspace.id,
@@ -96,6 +103,7 @@ def _get_scoped_job(
             resource_id=str(parsed),
             request_id=request_id,
         )
+    ensure_readable(repository)
     return job
 
 
@@ -112,6 +120,7 @@ def get_job(
         id=job.id,
         kind=cast(JobKind, job.kind),
         status=cast(JobStatus, job.status),
+        trigger=cast(JobTrigger, job.trigger),
         attempt=job.attempt,
         queued_behind=queued_behind(db, job) if job.status == "queued" else None,
         error=job_error(job),
