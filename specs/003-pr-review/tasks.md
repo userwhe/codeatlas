@@ -893,7 +893,7 @@ the following:
 **Purpose**: Isolation, credential handling, log hygiene, end-to-end coverage, evaluation,
 documentation, real-GitHub checks, and final validation
 
-- [ ] T054 [P] Extend backend/tests/integration/test_isolation.py:
+- [X] T054 [P] Extend backend/tests/integration/test_isolation.py:
   - For octocat's reviews, hubot receives 404 on the run, the freshness check, the Markdown
     export, the run list, and the review job's `GET /v1/jobs/{id}` and `/events`. The pull
     request list of octocat's repository returns 404 to hubot.
