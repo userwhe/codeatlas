@@ -97,10 +97,9 @@ Errors for this kind:
 
 ## `GET /v1/analysis-runs?repository_id=<id>` (paginated; changed)
 
-- New optional filters: `kind` (`repository_qa` or `pull_request_review`) and
-  `pull_request_number`.
-- Items gain `kind`, plus `pull_request_number`, `pull_request_title`, `head_sha`, and
-  `overall_risk_level` for reviews. `question` is null for reviews.
+- New optional filter: `kind` (`repository_qa` or `pull_request_review`). The question history
+  sends `kind=repository_qa`, so reviews never appear in it.
+- Items gain `kind`. `question` is null for reviews.
 
 ## `GET /v1/analysis-runs/{run_id}` (changed)
 
@@ -123,7 +122,7 @@ For `kind = "pull_request_review"` (`repository_qa` responses are unchanged):
   "review": {
     "overall_risk": { "level": "high", "partial": false },
     "overview": "...",
-    "summary": [ { "area": "app/auth", "points": [ { "change": "modified", "text": "...", "citations": ["E1", "E2"] } ] } ],
+    "summary": [ { "area": "app/auth", "points": [ { "change": "modified", "text": "...", "citations": ["E1", "E2"], "origin": "model" } ] } ],
     "risks": [ { "id": "R1", "title": "...", "severity": "high", "category": "security", "basis": "observed",
                  "explanation": "...", "suggested_check": "...", "citations": ["E2"], "origin": "model", "path": null } ],
     "checklist": [ { "text": "...", "paths": ["app/auth/access.py"], "risk_ids": ["R1"] } ],
@@ -156,6 +155,10 @@ For `kind = "pull_request_review"` (`repository_qa` responses are unchanged):
 - `quality_state` is `reviewed`, `nothing_to_review`, or null.
 - `citations` contains only the evidence items that the review cites. The server builds each
   `github_url` from stored evidence, never from model output (FR-016).
+- The stored result's `evidence_ids` become `citations` here. Its `coverage` is returned at the top
+  level, and its other fields under `review`.
+- A `nothing_to_review` review has an empty `summary`, `checklist`, and `tests.new_cases`, and only
+  rule risks.
 - The response reads only the database. Freshness has its own endpoint.
 
 ## `GET /v1/analysis-runs/{run_id}/freshness` (new)

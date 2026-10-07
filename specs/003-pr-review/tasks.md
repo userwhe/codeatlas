@@ -18,8 +18,8 @@ that they fail before implementing.
 an increment.
 
 **Environment note**: T004 adds the `Pull requests: Read-only` permission to the development
-GitHub App. It is needed only for the real-mode checks in T061 and T062. Everything else runs
-against the fake gateway and the fake review model.
+GitHub App. It is needed for every real-mode check: the MVP validation, T061, and T062.
+Everything else runs against the fake gateway and the fake review model.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -38,8 +38,8 @@ against the fake gateway and the fake review model.
   - `daily_review_limit: int = 10` (FR-027).
   - `review_deadline: timedelta = timedelta(minutes=5)` (FR-028).
   - The review limits (FR-018, research R4 and R6): `review_max_files: int = 100`,
-    `review_max_changed_lines: int = 2000`, `review_max_diff_tokens: int = 40000`, and
-    `review_max_input_tokens: int = 48000`.
+    `review_max_changed_lines: int = 2000`, `review_max_hunks: int = 80`,
+    `review_max_diff_tokens: int = 40000`, and `review_max_input_tokens: int = 48000`.
   - `FakeReviewModelMode = Literal["ok", "no_risks", "partly_invalid", "unavailable", "invalid_citations", "refusal"]`,
     and `fake_review_model_mode: FakeReviewModelMode = "ok"`.
   - In backend/tests/conftest.py, set `DAILY_REVIEW_LIMIT=10` next to `DAILY_QUESTION_LIMIT`.
@@ -91,8 +91,8 @@ against the fake gateway and the fake review model.
 
   - On `octo-org/review-app-private`, only #1 exists.
   - Add backend/tests/fixtures/pull-requests/README.md with the table above.
-- [ ] T004 Developer action, needed only before T061 and T062 (quickstart.md, "GitHub App
-  changes"):
+- [ ] T004 Developer action, needed before any real-mode check (the MVP validation, T061, and
+  T062; quickstart.md, "GitHub App changes"). An agent does not change GitHub settings:
   - In the development GitHub App, add the repository permission **Pull requests**:
     `Read-only`. Add no other permission and no event.
   - Approve the update on the test installation. Keep a second test installation unapproved for
@@ -152,6 +152,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - **Pushing**: `push_to_pull_request(2011, 1)` returns a new head SHA, `commit_sha(2011, "pr-1-2")`,
     whose tree adds one line to the overlay. List and get then report it.
   - **State**: `close_pull_request(2011, 2)` and `merge_pull_request(2011, 2)` change the state.
+    `set_pull_request_body(2011, 1, body)` changes what list and get return as the body.
   - **Withheld permission**: after `withhold_permission(2012, "pull_requests")`:
     - `list_pull_requests` on 2012 raises `GitHubAccessDenied`;
     - `get_pull_request` still works;
@@ -166,7 +167,7 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - A complete review row is accepted.
   - These raise `IntegrityError`:
     - a review with a `question`;
-    - a review with a `snapshot_id`;
+    - a review with a `snapshot_id` or an `index_version`;
     - a review whose `commit_sha` differs from `head_sha`;
     - a `repository_qa` row without `snapshot_id`;
     - `quality_state = 'reviewed'` on a `repository_qa` row;
@@ -200,7 +201,9 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
       `ProviderRefused`, and exhausted retries raise `ProviderUnavailable`.
   - **`answer()`** is unchanged; the existing tests pass.
   - **Fake review modes** (research R13):
-    - `ok` cites the first `change` label in the prompt;
+    - `ok` cites the first `change` label in a summary point and a new test case. Its one risk has
+      category `security`; it cites the first `before` label with severity `high` when the prompt
+      has one, and otherwise the first `change` label with severity `low`;
     - `no_risks` returns an overview and one summary point, with no risks;
     - `partly_invalid` adds one risk citing `E999`;
     - `invalid_citations` cites `E999` everywhere;
@@ -227,8 +230,8 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
     - "`kind = 'repository_qa'` requires `snapshot_id`, `index_version`, and `question` to be
       non-null, and the pull request columns to be null."
     - "`kind = 'pull_request_review'` requires `pull_request_number`, `base_sha`, `head_sha`, and
-      `pull_request` to be non-null, `snapshot_id` and `question` to be null, and
-      `commit_sha = head_sha`."
+      `pull_request` to be non-null, `snapshot_id`, `index_version`, and `question` to be null,
+      and `commit_sha = head_sha`."
     - `quality_state` is "null, or `answered` and `insufficient_evidence` for `repository_qa`,
       or `reviewed` and `nothing_to_review` for reviews".
     - Keep the question-length check, applied when `question` is not null.
@@ -253,7 +256,8 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
 - [ ] T014 Add the pull request calls in backend/src/codeatlas/github/gateway.py and
   backend/src/codeatlas/github/client.py (research R1, R2):
   - **Dataclasses** in gateway.py:
-    - `PullRequest(number, title, body, author, state: Literal["open", "closed", "merged"], draft, base_ref, base_sha, head_ref, head_sha, head_repository: str | None, is_fork, html_url, updated_at)`;
+    - `PullRequest(number, title, body, author, state: Literal["open", "closed", "merged"], draft, base_ref, base_sha, head_ref, head_sha, head_repository: str | None, is_fork, html_url, updated_at, additions: int | None, deletions: int | None, changed_files: int | None)`.
+      The last three come from "Get a pull request" and are None in list results;
     - `PullRequestPage(items, next_page: int | None)`;
     - `Comparison(merge_base_sha, renamed: dict[str, str], listed_files: int)`;
     - `InstallationPermissions(installation_id, permissions: dict[str, str], html_url)`.
@@ -285,8 +289,8 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
     so `set_unavailable` applies. `get_installation_permissions` returns `contents`, `metadata`,
     and `pull_requests` as `read`, unless the permission is withheld.
   - Switches: `push_to_pull_request`, `close_pull_request`, `merge_pull_request`,
-    `withhold_permission`, `drop_commit`, and `unrelated_history`, as tested in T007.
-    `reset()` restores them all.
+    `set_pull_request_body`, `withhold_permission`, `drop_commit`, and `unrelated_history`, as
+    tested in T007. `reset()` restores them all. `make_private` works on 2011 as on 2001.
   - Make T007 pass. The 001 and 002 fake tests must still pass.
 - [ ] T016 [P] Per-kind deadlines in backend/src/codeatlas/jobs/queue.py:
   - Replace the `answer_question` branches in `_deadline` and `timeout_failure` with one mapping
@@ -315,8 +319,8 @@ deadlines, the review allowance, shared access helpers for jobs, and the review 
   - `_publishable_repository` (renamed `publishable_repository`) and `_cancel` (renamed
     `cancel_run`);
   - the failure helpers they use (`_access_lost`, `_sign_in_required`, `_app_misconfigured`,
-    `_access_denied`, and `_github_unavailable`), and `DISCONNECTED_MESSAGE` and
-    `ACCESS_LOST_MESSAGE`.
+    `_access_denied`, `_record_denied`, and `_github_unavailable`), `_disclosure_not_accepted`
+    (renamed `disclosure_not_accepted`), and `DISCONNECTED_MESSAGE` and `ACCESS_LOST_MESSAGE`.
   - pipeline.py imports them. There is no behavior change, and every 001 and 002 test passes
     unchanged.
 - [ ] T019 The review output schema and model call (research R7):
@@ -364,7 +368,8 @@ fixture lines.
   - **`read_tree`**:
     - keeps every member's hash and filter outcome;
     - with `skip`, drops members whose hash equals the head's at the same path, before
-      filtering;
+      filtering, but never the root `.gitattributes`, so a removed `linguist-generated` file is
+      still classified `generated`;
     - raises `LimitExceeded` over 001's limits.
   - **`changed_files`**:
     - reports added, modified, and removed paths;
@@ -380,7 +385,10 @@ fixture lines.
     `after_start..after_end`; a pure addition has no before range.
   - **Selection**:
     - order is source and configuration, then tests, then documentation, each by path;
-    - whole files are taken until 100 files, 2,000 changed lines, or 40,000 estimated tokens;
+    - whole files are taken until 100 files, 2,000 changed lines, 80 hunks, or 40,000 estimated
+      tokens;
+    - 100 files of 2 lines each but 3 hunks each stop at 80 hunks, with the rest `review_limit`;
+    - a file renamed without changes is reviewed with no hunks;
     - a file that does not fit gets `review_limit`, and a later smaller file still fits;
     - `partial` is set;
     - with no eligible change, nothing is selected.
@@ -407,7 +415,8 @@ fixture lines.
   - Related-code items are `reference` items with side `after`.
   - With a small `max_input_tokens`, related-code items are dropped lowest rank first, and change
     items are never dropped.
-  - At most 200 labels.
+  - At most 200 labels: with 80 two-sided hunks, 8 related-code items, and 5 test items, the
+    count is 173.
 - [ ] T023 [P] [US1] Unit tests for the prompt in backend/tests/unit/test_review_prompt.py:
   - The user content has, in order:
     - `<pull_request>` with the title and description;
@@ -438,6 +447,9 @@ fixture lines.
       `(root)`;
     - each changed credential file gets a rule risk (`high`, `security`, `observed`, `origin`
       `rule`, `path` set, no evidence IDs);
+    - each file renamed without changes gets a rule summary point ("Renamed `old` to `new`
+      without changes", `change` `renamed`, `origin` `rule`, no evidence IDs), grouped by its new
+      path;
     - the `nothing_to_review` result has empty text sections and the rule risks only.
 - [ ] T025 [P] [US1] Integration tests for the pull request list in
   backend/tests/integration/test_pull_request_list.py, with octocat connected to 2011:
@@ -468,7 +480,8 @@ fixture lines.
       `commit_sha = head_sha`;
     - `merge_base_sha` null;
     - the `pull_request` JSON, with the body truncated to 8,000 characters (test with a
-      10,000-character body set on the fake).
+      10,000-character body set through `set_pull_request_body`), and `additions`, `deletions`,
+      and `changed_files` from GitHub.
   - The job has kind `review_pull_request` and dedupe key `run:{run_id}`.
   - One `pull_request_review_submit` audit event is recorded.
   - **Refusals**:
@@ -480,7 +493,7 @@ fixture lines.
     - a repository paused with `external_processing_not_accepted` returns 422.
   - **Allowance**: the 11th review of the day returns 429 with `details.allowance = "reviews"`.
   - **Repeats and queueing**:
-    - the same `Idempotency-Key` twice creates one run;
+    - the same `Idempotency-Key` sent 100 times creates one run (SC-011);
     - a second review requested while one is running stays `queued` with `queued_behind: 1`;
     - the submission makes exactly one `get_pull_request` call.
 - [ ] T027 [P] [US1] Integration tests for the review job in
@@ -493,8 +506,8 @@ fixture lines.
     - `quality_state` is `reviewed`.
     - Evidence: `change` items on both sides, with their commits, and excerpts equal to the
       fixture lines. `reference` items include `app/repositories.py`, which calls `can_write`.
-    - The result has a risk citing a `change` label, a summary area `app/auth`, and coverage
-      listing `app/auth/permissions.py` as reviewed.
+    - The result has a `security` risk citing a `before` change item, a summary area `app/auth`,
+      and coverage listing `app/auth/permissions.py` as reviewed.
     - The repository's `active_snapshot_id` is unchanged.
   - **Other pull requests**:
     - #2 targets `release` and completes.
@@ -515,6 +528,9 @@ fixture lines.
     - `unrelated_history` fails with `no_common_history`.
     - `revoke_access("octocat", 2011)` before the job runs marks the repository `access_lost`,
       and the job fails before any archive is opened.
+    - `make_private(2011)` before the job runs pauses the repository with
+      `external_processing_not_accepted`. The job fails with that code, opens no archive, and
+      makes no model call (FR-003, FR-030).
   - **Disconnect**: disconnecting while the job runs cancels it, and nothing is published.
   - **Fencing**: an attempt interrupted after `generating_review` publishes exactly once, as in
     `test_interrupted_answer_publishes_exactly_once`.
@@ -533,39 +549,45 @@ fixture lines.
 
 - [ ] T029 [US1] Implement backend/src/codeatlas/review/diff.py, a pure module (research R4):
   - `Tree`, `read_tree(stream, settings, *, skip=None) -> Tree`: `skip(path, sha256)` drops a
-    member before `filter_members`. The tree keeps every member's hash and every filter outcome.
+    member before `filter_members`, except the root `.gitattributes`. The tree keeps every
+    member's hash and every filter outcome.
   - `is_test_path(path)`, using the patterns in research R5.
   - `Hunk`, `ChangedFile`, and `changed_files(head, base, rename_hints) -> list[ChangedFile]`,
     with `difflib.SequenceMatcher(...).get_grouped_opcodes(3)`.
   - `CoverageEntry`, `Selection`, and
-    `select_for_review(files, *, max_files, max_changed_lines, max_diff_tokens) -> Selection`.
+    `select_for_review(files, *, max_files, max_changed_lines, max_hunks, max_diff_tokens) -> Selection`.
+    A file renamed without changes is selected with no hunks.
   - Make T020 pass.
-- [ ] T030 [P] [US1] Implement backend/src/codeatlas/review/context.py, a pure module (research
-  R5): `changed_declarations`, `module_names`, and `related_code`, using 001's
-  `parse_declarations` from backend/src/codeatlas/ingestion/parse.py. Make T021 pass.
+- [ ] T030 [US1] Implement backend/src/codeatlas/review/context.py, a pure module (research R5),
+  after T029, whose `ChangedFile` and `Tree` it takes: `changed_declarations`, `module_names`, and
+  `related_code`, using 001's `parse_declarations` from
+  backend/src/codeatlas/ingestion/parse.py. Make T021 pass.
 - [ ] T031 [US1] Implement backend/src/codeatlas/review/evidence.py, a pure module (research R6),
   after T029 and T030:
   - `ReviewEvidence(label, source_type, side, path, commit_sha, start_line, end_line, excerpt, excerpt_sha256, rank)`.
   - `build_evidence(selection, related, *, head_sha, merge_base_sha, max_input_tokens)`. It
     returns the items and, for each hunk, its labels.
   - Make T022 pass.
-- [ ] T032 [P] [US1] Implement backend/src/codeatlas/review/prompt.py: `PROMPT_VERSION`,
+- [ ] T032 [P] [US1] After T031, whose hunk labels it renders, implement
+  backend/src/codeatlas/review/prompt.py: `PROMPT_VERSION`,
   `SYSTEM_PROMPT`, `build_user_content(...)`, and `build_repair_content(...)`, reusing the
   escaping helper from backend/src/codeatlas/qa/prompt.py. Make T023 pass.
-- [ ] T033 [P] [US1] Implement the two pure modules for the model output (research R7, R8). Make
-  T024 pass.
+- [ ] T033 [P] [US1] After T031, whose `Selection` and `ReviewEvidence` types they take,
+  implement the two pure modules for the model output (research R7, R8). Make T024 pass.
   - backend/src/codeatlas/review/validate.py:
     `validate(output, *, labels, change_labels, parse_error) -> list[str]`, plus
     `drop_invalid(output, ...) -> tuple[ReviewOutput, int]` and `usable(output) -> bool`.
   - backend/src/codeatlas/review/result.py:
-    - `rule_risks(selection)`;
+    - `rule_risks(selection)` and `rule_summary_points(selection)`;
     - `build_result(output, *, evidence, selection, rule_risks, omitted_items) -> dict`, with the
       shape in data-model.md;
     - `nothing_to_review_result(selection, rule_risks) -> dict`.
-- [ ] T034 [US1] Implement the pull request list in backend/src/codeatlas/review/pulls.py:
+- [ ] T034 [P] [US1] Implement the pull request list in backend/src/codeatlas/review/pulls.py. It
+  does not depend on T029 to T033:
   - `list_open(db, *, user, workspace, repository_id, cursor, gateway, request_id)`:
     - scope and readability through `repos.get_scoped(..., content=True)`;
-    - 409 `repository_rejected`;
+    - 409 `repository_rejected` when `derive_state` in
+      backend/src/codeatlas/workspace/repositories.py returns `rejected`;
     - the user token from `get_user_token`, with `UserAuthorizationInvalid` mapped to 401
       `github_sign_in_required`;
     - `gateway.list_pull_requests`. On `GitHubAccessDenied` or `GitHubNotFound`, it reads
@@ -575,18 +597,22 @@ fixture lines.
       query over `ix_analysis_runs_pull_request`, and derives `state` as in data-model.md.
   - The cursor is the next GitHub page number, encoded opaquely.
   - Make T025 pass, together with T037.
-- [ ] T035 [US1] Implement submission and reads in backend/src/codeatlas/review/runs.py
-  (research R9, steps 1 to 3, 4, 6, and 7; reuse comes in US3):
+- [ ] T035 [P] [US1] Implement submission and reads in backend/src/codeatlas/review/runs.py
+  (research R9, steps 1 to 3, 4, 6, and 7; reuse comes in US3). It does not depend on T029 to
+  T034:
   - `submit(db, *, user, workspace, repository_id, pull_request_number, request_id, gateway) -> tuple[AnalysisRun, Job]`:
-    - copies the pull request fields into the run, truncating the body to 8,000 characters;
+    - refuses rejected repositories using `derive_state`, as T034 does;
+    - copies the pull request fields into the run, including `additions`, `deletions`, and
+      `changed_files`, and truncates the body to 8,000 characters;
     - sets `model`, `thinking_level`, `prompt_version = "review-v1"`, and
       `expires_at = now + 30 days`;
     - locks the repository row (`with_for_update`) before `reserve_review`;
     - enqueues the job and records the audit event with `{"pull_request_number": n}`.
   - `citations(db, run)`: built from stored evidence items for the labels the result cites, with
     `github_url` built as in research R6.
-  - `review_out(db, run)`: builds the contract's review response. Use 001's
-    `qa.runs.get_scoped` for scope and readability.
+  - `review_out(db, run)`: builds the contract's review response. It returns the stored
+    `evidence_ids` as `citations`, `coverage` at the top level, and the other result fields under
+    `review`. Use 001's `qa.runs.get_scoped` for scope and readability.
   - Make T026 pass, together with T037.
 - [ ] T036 [US1] Implement the job in backend/src/codeatlas/review/review.py, and add
   `"codeatlas.review.review"` to `HANDLER_MODULES` in backend/src/codeatlas/jobs/worker.py:
@@ -600,9 +626,13 @@ fixture lines.
   - **`handle_review(ctx)`**:
     1. Cancel if the run or repository is gone.
     2. `checking_access`: `owner_token` and `verify_access` inside `github_answers(denied=None)`
-       (T018).
+       (T018). Then, in a short transaction guarded by `fenced(db, ctx.job_id, ctx.fencing_token)`,
+       lock the repository and cancel the run if it was disconnected. Set `is_private` from
+       GitHub's answer. If the repository is private and `external_processing_accepted_at` is
+       null, call `pause(db, repository, "external_processing_not_accepted")`, and after the
+       commit raise `disclosure_not_accepted()` (FR-003, FR-030).
     3. `resolving_commits`: `compare_commits`, then store `merge_base_sha` in a short
-       transaction guarded by `fenced(db, ctx.job_id, ctx.fencing_token)`.
+       transaction guarded by `fenced`.
     4. `fetching_source`: the head archive, then the merge-base archive with `skip` (research R3).
        After the access check, `CommitUnavailable` and `GitHubNotFound` become
        `JobFailure("commit_unavailable", permanent=True)`, and `NoCommonHistory` becomes
@@ -613,8 +643,8 @@ fixture lines.
        disconnected or lost). Write the evidence items, `result`, `quality_state`, `usage`
        (calls, tokens, `omitted_items`), and `completed_at`. For `nothing_to_review`, call
        `refund_review` for the run's creation date.
-  - Make T027 and T028 pass.
-- [ ] T037 [US1] Wire the API routes:
+  - Make T027 pass.
+- [ ] T037 [US1] Wire the API routes, after T034 to T036:
   - **backend/src/codeatlas/api/routes/repositories.py**:
     `GET /v1/repositories/{repository_id}/pull-requests`, with response models from
     contracts/http-api.md.
@@ -627,9 +657,9 @@ fixture lines.
       `head_sha`.
     - `GET /v1/analysis-runs/{run_id}` returns `RunOut` or `ReviewRunOut`, discriminated by
       `kind`. The existing `run_out` stays for `repository_qa`.
-    - `GET /v1/analysis-runs` gains the `kind` and `pull_request_number` filters, and the summary
-      fields in the contract.
+    - `GET /v1/analysis-runs` gains the `kind` filter, and its items gain `kind`.
   - Regenerate frontend/src/lib/api/schema.d.ts with `npm run gen:api`.
+  - Make T025, T026, and T028 pass.
 - [ ] T038 [US1] Frontend API layer:
   - Create frontend/src/lib/api/reviews.ts with `usePullRequests(repositoryId)`,
     `useRequestReview()` (sends an `Idempotency-Key` as `useAskQuestion` does), and
@@ -649,7 +679,9 @@ fixture lines.
     - "Review again" for `outdated` or `failed` (until US3 adds reuse, it posts a new review).
   - It has "Next page" paging, and the permission notice with a link to `settings_url`.
   - In frontend/src/app/repositories/[id]/repository-detail.tsx, add a "Pull requests" section
-    after "Questions", wrapped in `HiddenWhileLost`.
+    after "Questions". Like the sections around it, it renders
+    `<HiddenWhileLost>Reviewing pull requests</HiddenWhileLost>` instead of the list while access
+    is lost.
   - frontend/src/components/UsageIndicator.tsx shows reviews used out of the limit.
 - [ ] T040 [US1] Create the review page: frontend/src/app/reviews/[id]/page.tsx and
   review-detail.tsx, plus frontend/src/components/RiskLevelBadge.tsx and
@@ -665,12 +697,16 @@ fixture lines.
     - risks, each with severity, category, an observed or possible label, the explanation, the
       suggested check, and citations;
     - when there are no risks, "No risks found" with what was examined (FR-009);
+    - for a `nothing_to_review` result, "Nothing to review: no changed file could be reviewed",
+      then the rule risks and the coverage (FR-020);
+    - rule summary points for files renamed without changes, which have no citations;
     - the coverage table, reusing the reason labels of `CoverageTable` where they match;
     - "N items were removed because their citations could not be verified" when
       `omitted_items > 0`.
   - `ReviewCitation` expands to the excerpt with `CodeLines` from
     frontend/src/components/CodeView.tsx, a side label ("Before · merge base 1a9e4c2" or
-    "After · head 8d3f1c2"), and a "View on GitHub" link to `github_url`.
+    "After · head 8d3f1c2"), and a "View on GitHub" link to `github_url`. A `reference` citation
+    is also labeled "Related code (candidate, found by name)" (FR-012).
   - Rule risks show their path without citations.
 - [ ] T041 [P] [US1] Disclosure text (FR-030): in
   frontend/src/components/ExternalProcessingAcceptance.tsx, set
@@ -710,7 +746,10 @@ the sections and links.
     - a new test case without a `change` label is reported;
     - more than 12 checklist items or 8 new test cases fail validation.
   - **backend/tests/unit/test_review_result.py**:
-    - checklist risk indexes map to `R` identifiers after sorting;
+    - checklist risk indexes refer to the model's original risk list, and map to `R` identifiers
+      after sorting;
+    - when a risk is dropped, indexes pointing to it are removed from checklist items. An item
+      left with no reviewed path and no valid risk is dropped and counted in `omitted_items`;
     - `tests.changed` and `tests.candidates` come from the context, not the model.
 - [ ] T043 [P] [US2] Unit tests for the Markdown export in
   backend/tests/unit/test_review_markdown.py:
@@ -720,14 +759,20 @@ the sections and links.
   - Citations are links to `github_url`.
   - `@octocat` and `#12` in review text become `` `@octocat` `` and `` `#12` ``, and `<script>` is
     escaped.
-  - A `nothing_to_review` result renders its rule risks and coverage.
+  - A `nothing_to_review` result renders "Nothing to review: no changed file could be
+    reviewed", its rule risks, and its coverage.
+  - A partial review states it under the overall risk level, naming how many files were not
+    reviewed.
+  - A review without risks says "No risks found" and what was examined.
+  - Related-code citations carry "related code (candidate)".
 - [ ] T044 [P] [US2] Extend backend/tests/integration/test_review_job.py, and add a Markdown test
   to backend/tests/integration/test_review_submit.py:
   - #1 lists `tests/test_permissions.py` as a candidate, has a new test case citing a `change`
     label, and has a checklist item naming `app/auth/permissions.py`.
   - #2 lists `web/src/format.test.ts` under `tests.changed`.
   - `GET /v1/analysis-runs/{id}/markdown` returns 409 `review_not_finished` before the run
-    succeeds, then the Markdown. A `repository_qa` run returns 404.
+    succeeds, then the Markdown. For #4, it contains "Nothing to review". A `repository_qa` run
+    returns 404.
 
 ### Implementation for User Story 2
 
@@ -748,7 +793,8 @@ the sections and links.
   backend/src/codeatlas/review/review.py.
 - [ ] T047 [US2] Extend backend/src/codeatlas/review/validate.py and
   backend/src/codeatlas/review/result.py for the checklist, new test cases, `tests.changed`, and
-  `tests.candidates`. Make T042 pass.
+  `tests.candidates`. Resolve checklist risk indexes against the model's original risk list,
+  before dropping, as research R7 describes. Make T042 pass.
 - [ ] T048 [US2] Create backend/src/codeatlas/review/markdown.py with
   `render(run, result, citations) -> str` (research R11). Add
   `GET /v1/analysis-runs/{run_id}/markdown` to backend/src/codeatlas/api/routes/analysis_runs.py.
@@ -797,6 +843,8 @@ the following:
       for a review that is queued, running, or succeeded. The allowance does not change.
     - Failed and expired reviews are not reused.
     - The audit event records `"reused": true`.
+  - **Concurrency**: two `mode: "reuse"` requests for the same head, with different idempotency
+    keys, sent at the same time from two threads, create one run.
   - **`mode: "new"`** creates a separate run and counts against the allowance.
   - **New head**: after a push, `mode: "reuse"` creates a review of the new head.
   - **Closed and merged**: after `merge_pull_request`, the earlier review stays readable, and a
@@ -820,6 +868,8 @@ the following:
   - The route returns 200 for reused runs and 202 otherwise. The idempotency record stores
     whichever status was returned.
   - The audit detail gains `mode` and `reused`.
+  - Regenerate frontend/src/lib/api/schema.d.ts with `npm run gen:api`, so T053 has the
+    freshness and `mode` types.
   - Make T050 pass.
 - [ ] T053 [US3] Frontend:
   - Add `useFreshness(runId)` to frontend/src/lib/api/reviews.ts. It is fetched once the run is
@@ -845,8 +895,8 @@ documentation, real-GitHub checks, and final validation
 
 - [ ] T054 [P] Extend backend/tests/integration/test_isolation.py:
   - For octocat's reviews, hubot receives 404 on the run, the freshness check, the Markdown
-    export, and the run list. The pull request list of octocat's repository returns 404 to
-    hubot.
+    export, the run list, and the review job's `GET /v1/jobs/{id}` and `/events`. The pull
+    request list of octocat's repository returns 404 to hubot.
   - When both users connect 2011 and review #1, each sees only their own review, and their
     allowances are separate (SC-010).
 - [ ] T055 [P] Extend backend/tests/integration/test_logging.py:
@@ -888,8 +938,9 @@ documentation, real-GitHub checks, and final validation
     - the overlay (`files/`, `remove`, `rename`);
     - `labels`: either `{"kind": "seeded", "defects": [{"path", "side", "start_line", "end_line", "category"}]}`,
       `{"kind": "safe"}`, or `{"kind": "injection", "defects": [...]}`.
-  - Composition: at least 20 seeded defects spread over the categories, at least 5 safe changes
-    that include tests, and at least 5 injection variants of seeded items.
+  - Composition: at least 20 seeded-defect pull requests spread over the categories, each with at
+    least one labeled defect; at least 5 safe changes that include tests; and at least 5 injection
+    variants of seeded items.
   - Document the format in backend/evals/README.md.
 - [ ] T059 Write the evaluation runner, backend/evals/run_review_eval.py, with options `--set`,
   `--limit`, `--fixtures`, and `--out`:
@@ -905,8 +956,9 @@ documentation, real-GitHub checks, and final validation
     - SC-005: citation validity, checklist references, and overall-level consistency; target
       100%;
     - SC-007: injection-item recall; target 100%.
-  - It writes `review-eval-<time>.md` and `-audit.csv` (SC-004), with per-item durations and
-    token usage.
+  - It writes `review-eval-<time>.md` and `-audit.csv`, with per-item durations and token usage.
+    The audit CSV samples at least 30 risks from at least 10 reviews for a person to judge against
+    their citations (SC-004).
   - Exit codes: 0 when every target passes, 1 when any fails, 2 on setup errors.
   - Unit-test the scoring functions in backend/tests/unit/test_review_eval_metrics.py.
 - [ ] T060 [P] Documentation:
@@ -917,7 +969,10 @@ documentation, real-GitHub checks, and final validation
     `specs/003-pr-review`, ADRs 0008 and 0009 apply. Reviews read commit archives instead of
     pull-request snapshots, and related code comes from text search until the dependency graph
     lands.
-- [ ] T061 Real-GitHub checks for the open questions in research R1 and R2 (needs T004):
+- [ ] T061 Real-GitHub checks for the open questions in research R1 and R2 (needs T004). Every
+  step that writes to GitHub (forking, opening, pushing, or force-pushing) is a developer action:
+  an agent may draft the exact `git` or `gh` commands, and runs them only after the developer
+  confirms that draft. Reading GitHub's answers needs no confirmation.
   - With a real fork pull request, confirm that `compare/{base_sha}...{head_sha}` works, or that
     the fork retry is needed. Record which form succeeded.
   - Force-push a pull request after a review, wait for GitHub to drop the old commit (or use a
@@ -929,7 +984,10 @@ documentation, real-GitHub checks, and final validation
     research R1 and R2.
 - [ ] T062 Run final validation:
   - Every automated check in specs/003-pr-review/quickstart.md.
-  - Validation scenarios 1 to 16 with the real GitHub App (needs T004).
+  - Validation scenarios 1 to 16 with the real GitHub App (needs T004). Their GitHub writes
+    (opening, pushing to, merging, and closing pull requests, and forking) are developer actions,
+    as in quickstart.md: an agent may draft the commands, and runs them only after the developer
+    confirms.
   - The review evaluation, with every target met (SC-002, SC-003, SC-005, SC-007). Record the
     audit sample for SC-004.
   - The SC-006 latency query: a p95 of 120 seconds or less.
@@ -965,10 +1023,13 @@ documentation, real-GitHub checks, and final validation
 - backend/src/codeatlas/review/runs.py: T035, then T052.
 - backend/src/codeatlas/review/pulls.py: T034, then T051.
 - backend/src/codeatlas/providers/answer_model.py: T019, then T045.
-- backend/src/codeatlas/api/routes/analysis_runs.py: T037, then T048, T049, T051, T052.
-- frontend/src/app/reviews/[id]/review-detail.tsx: T040, then T049, T053.
+- backend/src/codeatlas/api/routes/analysis_runs.py: T037, then T048 and T049 (US2) and T051
+  and T052 (US3), in the order the stories are done.
+- frontend/src/app/reviews/[id]/review-detail.tsx: T040, then T049 (US2) and T053 (US3), in the
+  order the stories are done.
 - frontend/src/components/PullRequestList.tsx: T039, then T053.
-- frontend/src/lib/api/reviews.ts: T038, then T049, T053.
+- frontend/src/lib/api/reviews.ts: T038, then T049 (US2) and T053 (US3), in the order the stories
+  are done.
 - backend/tests/integration/test_review_job.py: T027, then T044.
 
 ### Within Each User Story
@@ -988,8 +1049,9 @@ documentation, real-GitHub checks, and final validation
   - T018 is independent of T012 to T017.
   - T019 after T001.
 - **US1 tests**: T020 to T028 in parallel.
-- **US1 implementation**: T029, T030, T032, and T033 in parallel. T031 needs T029 and T030. T036
-  needs T029 to T033. T041 is independent.
+- **US1 implementation**: T029, then T030, then T031, then T032 and T033 in parallel. T034 and
+  T035 run alongside them. T036 needs T029 to T033, and T037 needs T034 to T036. T041 is
+  independent.
 - **US2 tests**: T042, T043, and T044 in parallel.
 - **Polish**: T054, T055, T056, T058, and T060 in parallel.
 
@@ -1018,9 +1080,12 @@ Task: "Unit tests for the prompt in backend/tests/unit/test_review_prompt.py"
 Task: "Integration tests for the pull request list in backend/tests/integration/test_pull_request_list.py"
 Task: "Integration tests for the review job in backend/tests/integration/test_review_job.py"
 
-# Pure modules
-Task: "Implement backend/src/codeatlas/review/diff.py"
-Task: "Implement backend/src/codeatlas/review/context.py"
+# Alongside the pure modules (diff.py, then context.py, then evidence.py)
+Task: "Implement the pull request list in backend/src/codeatlas/review/pulls.py"
+Task: "Implement submission and reads in backend/src/codeatlas/review/runs.py"
+Task: "Disclosure text in frontend/src/components/ExternalProcessingAcceptance.tsx"
+
+# After evidence.py
 Task: "Implement backend/src/codeatlas/review/prompt.py"
 Task: "Implement backend/src/codeatlas/review/validate.py and result.py"
 ```
@@ -1057,5 +1122,6 @@ with verifiable citations.
 - Commit after each task or logical group, in Conventional Commits format with the task ID, for
   example `feat(review): diff commit archives (T029)`.
 - tasks.md is committed with the spec, like the 001 and 002 task lists.
-- No task writes to GitHub. T004 is configured by the developer in GitHub's settings, and the
-  Markdown copy is pasted by the user.
+- No product code writes to GitHub, and the Markdown copy is pasted by the user. Steps that write
+  to GitHub (T004, and the real-GitHub steps in T061 and T062) are developer actions: an agent
+  may draft the commands, and runs them only after the developer confirms that draft.

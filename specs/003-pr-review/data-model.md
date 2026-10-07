@@ -27,8 +27,8 @@ changes below. No table is added.
 | pull_request_number | New. Integer; required for reviews, null otherwise |
 | base_sha | New. Text, 40 hex characters; the base branch tip at submission |
 | head_sha | New. Text, 40 hex characters; the head commit at submission |
-| merge_base_sha | New. Text, 40 hex characters; null until the job's first stage resolves it (research R2) |
-| pull_request | New. jsonb, copied at submission: `title`, `body` (at most 8,000 characters), `author`, `base_ref`, `head_ref`, `head_repository`, `is_fork`, `draft`, `html_url` |
+| merge_base_sha | New. Text, 40 hex characters; null until the job's `resolving_commits` stage resolves it (research R2) |
+| pull_request | New. jsonb, copied at submission: `title`, `body` (at most 8,000 characters), `author`, `base_ref`, `head_ref`, `head_repository`, `is_fork`, `draft`, `html_url`, `additions`, `deletions`, `changed_files` |
 | quality_state | Adds `reviewed` and `nothing_to_review` |
 | result | For reviews, the validated review (shape below) |
 | prompt_version | `review-v1` for reviews |
@@ -39,7 +39,7 @@ Constraints:
   and the pull request columns to be null. The existing question-length check applies when
   `question` is not null.
 - `kind = 'pull_request_review'` requires `pull_request_number`, `base_sha`, `head_sha`, and
-  `pull_request` to be non-null, `snapshot_id` and `question` to be null, and
+  `pull_request` to be non-null, `snapshot_id`, `index_version`, and `question` to be null, and
   `commit_sha = head_sha`.
 - `quality_state` is null, or `answered` and `insufficient_evidence` for `repository_qa`, or
   `reviewed` and `nothing_to_review` for reviews.
@@ -71,7 +71,7 @@ that pull request:
   "overview": "Removes the permission check from repository reads and adds a cache.",
   "summary": [
     { "area": "app/auth", "points": [
-      { "change": "modified", "text": "check_access no longer verifies the role.", "evidence_ids": ["E1", "E2"] }
+      { "change": "modified", "text": "check_access no longer verifies the role.", "evidence_ids": ["E1", "E2"], "origin": "model" }
     ] }
   ],
   "risks": [
@@ -101,9 +101,15 @@ Rules:
   `partial` is true when any coverage entry has the reason `review_limit` (research R8).
 - `risks` are ordered by severity and numbered `R1` to `Rn`. `origin` is `model` or `rule`. A
   `rule` risk names a credential file in `path` and has no `evidence_ids` (FR-019).
-- `summary[].area` is derived by the server from the first cited path (research R8).
-- Every `evidence_ids` entry names a stored evidence item of the run. Summary points and new test
-  cases cite at least one `change` item.
+- `summary[].area` is derived by the server from the first cited path (research R8). A summary
+  point's `origin` is `model`, or `rule` for a file renamed without changes. A `rule` point has no
+  `evidence_ids`, and its area comes from the new path.
+- Every `evidence_ids` entry names a stored evidence item of the run. Model summary points and
+  new test cases cite at least one `change` item.
+- `omitted_items` counts model items dropped by validation, including checklist items left with no
+  valid path or risk (research R7).
+- The API returns each `evidence_ids` list as `citations`, and `coverage` and `omitted_items` at
+  the levels shown in [contracts/http-api.md](contracts/http-api.md).
 - `coverage.files[].change` is `added`, `modified`, `renamed`, or `removed`. `reason` is null when
   reviewed, and otherwise one of 001's coverage reasons, or `review_limit`. A changed excluded
   directory is one entry with `"entry_type": "directory"` and a `count`.

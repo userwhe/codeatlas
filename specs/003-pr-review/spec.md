@@ -161,12 +161,16 @@ new review covers the new head commit.
   outdated, or failed.
 - **FR-002**: Users MUST be able to request a review of an open pull request. Reviews MUST start
   only on a user's request; opening a pull request or pushing to it MUST NOT start a review.
-- **FR-003**: Before fetching any pull request content, System MUST verify that the workspace owner
-  can still access the repository (002 FR-011), and MUST refuse reviews of repositories marked
-  "access lost" or rejected for a size limit.
-- **FR-004**: Each review MUST record, at submission, the pull request number and its base, head,
-  and merge-base commits, and MUST examine the change from the merge base to the head. Later
-  commits to the pull request or its base branch MUST NOT change what a review examined.
+- **FR-003**: System MUST refuse reviews of repositories marked "access lost" or rejected for a
+  size limit. Pull request details MUST be read with the workspace owner's own GitHub
+  authorization, so that GitHub returns only what the owner can read. Before fetching any code for
+  a review, System MUST verify that the workspace owner can still access the repository (002
+  FR-011), and MUST stop if the repository became private without an accepted external processing
+  disclosure (FR-030).
+- **FR-004**: Each review MUST record, at submission, the pull request number and its base and
+  head commits, and then the merge-base commit of those two. It MUST examine the change from the
+  merge base to the head. Later commits to the pull request or its base branch MUST NOT change
+  what a review examined.
 - **FR-005**: Reviewing MUST NOT change the repository's default version, and MUST NOT require the
   pull request to target the default branch.
 
@@ -174,11 +178,12 @@ new review covers the new head commit.
 
 - **FR-006**: Each review MUST contain a summary of the change, grouped by the parts of the
   repository it touches, that states what the change adds, modifies, renames, and removes. Each
-  summary point MUST cite the changed lines it describes.
+  summary point MUST cite the changed lines it describes. A file renamed without changes has no
+  changed lines; its summary point names the old and new paths instead.
 - **FR-007**: Each review MUST list the risks the change may introduce, ordered by severity. Each
   risk MUST have a severity (high, medium, or low), a category (correctness, security, data and
   migrations, compatibility, performance, dependencies, tests, or other), an explanation, a
-  suggested check, and at least one citation.
+  suggested check, and at least one citation, except for credential-file risks (FR-019).
 - **FR-008**: Each risk MUST state whether the cited lines show the problem directly (observed) or
   only suggest it (possible), as in 001 FR-023.
 - **FR-009**: When no risks are found, the review MUST say so and list what was examined. A review
@@ -209,14 +214,15 @@ new review covers the new head commit.
 - **FR-016**: Every citation MUST name a file, a line range, a commit, and the side of the change
   (before at the merge base, after at the head), and MUST resolve to existing content at that
   commit. Citations MUST come only from the evidence gathered for that review. Items whose
-  citations fail validation MUST NOT be shown. The only exception is a risk about a credential
-  file, which names the file without its content (FR-019).
+  citations fail validation MUST NOT be shown. There are two exceptions: a risk about a
+  credential file, which names the file without its content (FR-019), and a summary point for a
+  file renamed without changes, which names both paths (FR-006).
 - **FR-017**: Each review MUST show coverage: the changed files it reviewed, and each changed file
   it did not review with the reason.
 - **FR-018**: System MUST enforce these default limits per review: at most 100 changed files and
   2,000 changed lines reviewed. When a pull request exceeds them, System MUST review a subset
-  within the limits, list every file not reviewed, and state in the summary that the review is
-  partial. Changed files over 1 MiB, binary files, generated files, and vendored dependency
+  within the limits, show every file not reviewed in the coverage (FR-017), and state in the
+  summary that the review is partial. Changed files over 1 MiB, binary files, generated files, and vendored dependency
   directories MUST be excluded and listed, as in 001 FR-009 and FR-010.
 - **FR-019**: The content of known credential files MUST NOT be sent to the external model provider
   or shown in a review. A change to such a file MUST be reported as a high-severity security risk
@@ -299,8 +305,8 @@ new review covers the new head commit.
   defects, at least 70% of the seeded defects are reported as medium- or high-severity risks.
 - **SC-003**: On at least 5 fixture pull requests that make safe, fully tested changes, zero reviews
   report a high-severity risk.
-- **SC-004**: In a documented human audit of sampled reviews, at least 80% of reported risks are
-  judged correctly explained by their citations.
+- **SC-004**: In a documented human audit of at least 30 reported risks drawn from at least 10
+  reviews, at least 80% are judged correctly explained by their citations.
 - **SC-005**: 100% of citations shown to users resolve to existing content at the cited commit and
   side, 100% of checklist items refer to a changed file or listed risk, and 100% of overall risk
   levels match the most severe listed risk.

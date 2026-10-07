@@ -50,8 +50,12 @@ on the provider.
 
 ## Validation scenarios
 
-"Fixture repository" means a test repository that you own, connected in CodeAtlas. Create the pull
-requests on GitHub as each scenario says.
+"Fixture repository" means a test repository that you own, connected in CodeAtlas.
+
+Every step that writes to GitHub is a developer action: opening, pushing to, force-pushing,
+merging, or closing a pull request, forking, and changing App settings. An agent may draft the
+exact `git` or `gh` commands, but runs them only after the developer confirms that draft, and
+needs a new confirmation for any change to it.
 
 | # | Scenario | Steps | Expected outcome | Covers |
 | --- | --- | --- | --- | --- |
@@ -70,7 +74,7 @@ requests on GitHub as each scenario says.
 | 13 | Nothing to review | Open a pull request that only adds a PNG image; review it | The review says there is nothing to review and lists the image as `binary`. The review allowance is unchanged | FR-020 |
 | 14 | Permission pending | On a second test installation that has not approved the new permission, open a private repository's page | The Pull requests section shows the permission notice with the settings link | Edge cases, R1 |
 | 15 | Allowance | Request reviews until the allowance is used up | The next request is refused with the reset time, and usage shows 10 of 10 reviews | FR-027 |
-| 16 | Latency | After at least 20 reviews of pull requests with up to 500 changed lines, run the query below | The 95th percentile is at most 120 seconds | SC-006 |
+| 16 | Latency | After at least 20 reviews of pull requests with up to 500 changed lines, each requested while no other review was queued, run the query below | The 95th percentile is at most 120 seconds, counting failed and timed-out reviews | SC-006 |
 
 These behaviors run against the fakes in the integration tests, because real services cannot
 easily produce them on demand:
@@ -86,12 +90,14 @@ easily produce them on demand:
 ### Review latency query (SC-006)
 
 ```sql
-SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM r.completed_at - r.created_at)) AS p95_seconds,
+SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM j.finished_at - r.created_at)) AS p95_seconds,
        count(*) AS reviews
 FROM analysis_runs r
+JOIN jobs j ON j.id = r.job_id
 WHERE r.kind = 'pull_request_review'
-  AND r.quality_state = 'reviewed'
-  AND (r.result->'coverage'->>'changed_lines_reviewed')::int <= 500;
+  AND j.status IN ('succeeded', 'failed')
+  AND (r.pull_request->>'additions')::int + (r.pull_request->>'deletions')::int <= 500
+  AND j.started_at - j.created_at < interval '10 seconds';
 ```
 
 ## Pilot session script (SC-001)

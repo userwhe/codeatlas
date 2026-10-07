@@ -74,9 +74,10 @@ is added.
 
 - GitHub access stays read-only (FR-034), and credential-file content never leaves the worker
   (FR-019).
-- Per review: at most 100 files, 2,000 changed lines, and 40,000 estimated tokens of diff text,
-  with about 48,000 estimated input tokens in total.
-- At most 2 model calls, 16,000 output tokens, and a 5-minute deadline per review.
+- Per review: at most 100 files, 2,000 changed lines, 80 hunks, and 40,000 estimated tokens of
+  diff text, with about 48,000 estimated input tokens in total and at most 200 evidence labels.
+- At most 2 model calls per attempt and 3 attempts per review, 16,000 output tokens per call, and
+  a 5-minute deadline per review.
 - 10 reviews per workspace per day, and one running review per workspace.
 
 **Scale/Scope**:
@@ -136,7 +137,7 @@ docs/decisions/
 
 ### Source Code (repository root)
 
-New and changed files. Everything else is unchanged from 002.
+New and changed files. Everything else is unchanged from 002. tasks.md names the task for each.
 
 ```text
 backend/
@@ -152,12 +153,14 @@ backend/
 │   │   └── jobs.py                  # review_pull_request kind
 │   ├── github/
 │   │   ├── gateway.py               # list_pull_requests, get_pull_request, compare_commits, get_installation_permissions
-│   │   ├── client.py                # the four REST calls; permission-missing classification
-│   │   └── fake.py                  # fixture pull requests and their switches
-│   ├── ingestion/extract.py         # ArchiveMember.sha256 for every regular member
+│   │   ├── client.py                # the four REST calls; fork retry; missing-commit errors
+│   │   └── fake.py                  # review-app repositories, fixture pull requests, and switches
+│   ├── ingestion/
+│   │   ├── extract.py               # ArchiveMember.sha256 for every regular member
+│   │   └── pipeline.py              # imports the access helpers moved to jobs/github_access.py
 │   ├── providers/answer_model.py    # structured call generalized over the output model; fake review modes
 │   ├── review/                      # new package, mirroring qa/
-│   │   ├── pulls.py                 # live list with review states; freshness
+│   │   ├── pulls.py                 # live list with review states; permission-missing classification; freshness
 │   │   ├── runs.py                  # submit (reuse, quota, audit), get_scoped, citations
 │   │   ├── review.py                # job handler and stages
 │   │   ├── diff.py                  # pure: changed files, renames, hunks, coverage, selection under limits
@@ -169,6 +172,7 @@ backend/
 │   │   ├── result.py                # pure: overall risk, ordering, areas, rule risks, omitted items
 │   │   └── markdown.py              # pure: export with neutralized mentions and HTML
 │   ├── jobs/
+│   │   ├── github_access.py         # new: owner access check, GitHub error mapping, disclosure pause, publish guard
 │   │   ├── queue.py                 # per-kind deadlines and timeout codes
 │   │   └── worker.py                # register the review handler
 │   └── workspace/
@@ -177,13 +181,17 @@ backend/
 ├── tests/
 │   ├── fixtures/repos/review-app/   # new: fixture repository with tests
 │   ├── fixtures/pull-requests/      # new: overlays and README
-│   ├── unit/                        # test_review_diff.py, test_review_context.py, test_review_evidence.py,
+│   ├── unit/                        # new: test_review_diff.py, test_review_context.py, test_review_evidence.py,
 │   │                                # test_review_validation.py, test_review_result.py, test_review_markdown.py,
-│   │                                # test_review_prompt.py, test_gemini_review_call.py, test_archive_hashes.py
-│   └── integration/                 # test_pull_request_list.py, test_review_submit.py, test_review_job.py,
-│                                    # test_review_access.py, test_review_freshness.py, test_review_isolation.py,
-│                                    # test_review_credentials.py; test_logging.py extended
+│   │                                # test_review_prompt.py, test_gemini_review_call.py, test_archive_hashes.py,
+│   │                                # test_github_pulls_client.py, test_review_eval_metrics.py;
+│   │                                # extended: test_config.py, test_fake_github.py
+│   └── integration/                 # new: test_review_schema.py, test_review_quota.py, test_pull_request_list.py,
+│                                    # test_review_submit.py, test_review_job.py, test_review_access.py,
+│                                    # test_review_freshness.py, test_review_credentials.py;
+│                                    # extended: test_job_queue.py, test_isolation.py, test_logging.py
 └── evals/
+    ├── README.md                    # review set format
     ├── review_v1.jsonl              # new: seeded, safe, and injection items (draft for human review)
     ├── review_fixtures/             # new: overlays per item
     └── run_review_eval.py           # new: metrics for SC-002 to SC-007, audit CSV
@@ -192,6 +200,7 @@ frontend/
 ├── src/
 │   ├── app/
 │   │   ├── repositories/[id]/repository-detail.tsx   # Pull requests section
+│   │   ├── answers/[id]/answer-detail.tsx            # narrows the run type to repository_qa
 │   │   └── reviews/[id]/                             # new: page.tsx, review-detail.tsx
 │   ├── components/
 │   │   ├── PullRequestList.tsx       # new: review states and actions; permission notice
@@ -201,11 +210,13 @@ frontend/
 │   │   └── UsageIndicator.tsx        # review allowance
 │   └── lib/api/
 │       ├── reviews.ts               # new: usePullRequests, useRequestReview, useReview, useFreshness, useReviewMarkdown
+│       ├── questions.ts             # question history requests kind=repository_qa
 │       └── schema.d.ts              # regenerated
 └── tests/e2e/
     └── pull-request-review.spec.ts  # new
 
 README.md                            # documentation links for spec 003 and ADRs 0008 and 0009
+docs/design/codeatlas-v1.md          # superseded-in-part note for spec 003
 ```
 
 **Structure Decision**: The same web application layout as 001 (ADR 0001).

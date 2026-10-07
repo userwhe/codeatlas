@@ -102,9 +102,11 @@ Documented facts this relies on:
   allowed. It records on the run:
   - the number, `head.sha`, `base.sha`, `head.ref`, and `base.ref`;
   - the title and description (the description is truncated to 8,000 characters), the author's
-    login, `draft`, `html_url`, and the head repository's full name and fork flag.
-- **In the job's first stage**, `GET /repos/{owner}/{repo}/compare/{base_sha}...{head_sha}` with an
-  installation token returns `merge_base_commit.sha`, which is recorded on the run. Its file list
+    login, `draft`, `html_url`, the head repository's full name and fork flag, and `additions`,
+    `deletions`, and `changed_files`.
+- **In the job's `resolving_commits` stage**, after the access check (R9),
+  `GET /repos/{owner}/{repo}/compare/{base_sha}...{head_sha}` with an installation token returns
+  `merge_base_commit.sha`, which is recorded on the run. Its file list
   supplies rename hints (R4). The merge base of two fixed commits never changes, so the recorded
   value is the one that applied at submission (FR-004).
 - **Fork pull requests**: GitHub keeps pull request commits available in the base repository, even
@@ -146,8 +148,9 @@ persist. GitHub's own pull request diff is the change from the merge base to the
 - **Head first**: the whole head tree goes through `filter_members`, so 001's limits apply
   (FR-009). Exceeding one fails the run with `limit_exceeded` and the limit's name.
 - **Merge base second**: a member whose content hash equals the head's at the same path is dropped
-  before filtering. Memory therefore holds the head's eligible files plus the changed base files,
-  bounded by 001's 100 MiB eligible-bytes limit plus the changed files.
+  before filtering. The root `.gitattributes` is never dropped, because classification needs it.
+  Memory therefore holds the head's eligible files plus the changed base files, bounded by 001's
+  100 MiB eligible-bytes limit plus the changed files.
 - `ArchiveMember` gains a `sha256` computed while each regular member is read, including members
   over 1 MiB whose content is not kept. Changes to excluded files, such as credential files, are
   detected without keeping their content.
@@ -203,7 +206,10 @@ persist. GitHub's own pull request diff is the change from the merge base to the
   - Eligible changed files are ordered by group: source and configuration files first, then tests,
     then documentation (`.md`, `.mdx`, `.txt`). Within a group, files are ordered by path.
   - A file is taken whole while the totals stay within 100 files, 2,000 changed lines (added plus
-    removed), and 40,000 estimated tokens of diff text, at 3.5 characters per token as in 001 R10.
+    removed), 80 hunks, and 40,000 estimated tokens of diff text, at 3.5 characters per token as
+    in 001 R10. The hunk limit keeps the evidence within 200 labels (R6).
+  - A file renamed without changes has no hunks. It is reviewed, and the server writes its summary
+    point (R8).
   - A file that does not fit is recorded with the reason `review_limit`. Later, smaller files may
     still fit.
   - The review is partial when any file has the reason `review_limit`.
@@ -286,6 +292,8 @@ it needs no new index. Scanning a 100,000-line tree for 30 names takes well unde
   line ranges (R7).
 - **Budget**: the diff fits within 40,000 estimated tokens (R4). Related-code and test items fill
   the remainder up to 48,000, and the lowest-ranked items are dropped first.
+- **Label bound**: at most 200 labels: up to 160 change items from 80 hunks, 8 related-code items,
+  and 5 test items.
 - **Storage**: `evidence_items` gains `side`, plus the source types `change`, `reference`, and
   `test`. Each item's line range is checked against that side's file before it is written
   (FR-016). All items are stored, and the API returns the cited ones, as in 001.
@@ -342,12 +350,17 @@ commit, as FR-016 requires, while the model still sees each hunk as one diff.
   - Every label exists.
   - Summary points and new test cases cite at least one `change` label.
   - Risks cite at least one label of any type.
-  - Checklist items name at least one reviewed path, or a valid risk index.
+  - Checklist items name at least one reviewed path, or a valid index into the model's own risk
+    list.
   - Enumerations and size bounds hold.
-- **Repair**: at most two calls per attempt, as in 001.
+- **Repair**: at most two calls per attempt, as in 001, and at most 3 attempts per review (FR-028).
+  A new attempt follows only a transient failure, such as a provider outage.
   - Validation errors trigger one repair call with the errors.
   - If the repaired output parses but still has invalid items, those items are dropped and counted
     in `omitted_items`, which the page shows (FR-016).
+  - Checklist risk indexes always refer to the model's original risk list. An index that points to
+    a dropped risk is removed from its checklist item. An item left with no reviewed path and no
+    valid risk is dropped and counted too.
   - The run fails with `review_validation_failed` if the repaired output does not parse, or if no
     valid summary point or overview remains. This is permanent for the job, and the user may
     request a new review.
@@ -358,7 +371,9 @@ commit, as FR-016 requires, while the model still sees each hunk as one diff.
   - At most 48,000 input tokens and 16,000 output tokens: about $0.10 now, and $0.19 from
     2027-01-01.
   - A typical review of about 15,000 input and 5,000 output tokens: about $0.03.
-  - The 10-per-day allowance caps spend near $1.90 per workspace per day at 2027 prices.
+  - The 10-per-day allowance caps spend near $1.90 per workspace per day at 2027 prices, assuming
+    one billed attempt per review. Retried attempts follow transient failures, which are usually
+    not billed; the theoretical worst case, three fully billed attempts, is three times that.
 
 **Rationale**: Reusing 001's adapter, call budget, and validation pattern keeps one tested path
 for model calls. Dropping only the items that fail validation, after a repair, follows FR-016
@@ -384,12 +399,17 @@ without discarding a whole review for one bad citation.
   numbered `R1` to `Rn`. Checklist risk indexes are mapped to these identifiers.
 - **Summary areas** (FR-006): each point is grouped by the first two directory segments of its
   first cited path, for example `backend/src`, or `(root)` for top-level files.
+- **Rename points** (FR-006): for each file renamed without changes, the server adds a summary
+  point with `change` `renamed`, the text "Renamed `old` to `new` without changes", no citations,
+  and `origin` `rule`. Model points keep `origin` `model`.
 - **Credential-file risks** (FR-019): one per changed credential file, with severity `high`,
   category `security`, basis `observed`, a fixed explanation and check, and the path but no
   citation.
 - **Changed tests and candidate tests**: from R5.
 - **What was examined** (FR-009): coverage plus the number of related-code and test excerpts, shown
   when no risks are reported.
+- **Nothing to review** (FR-020): the page and the Markdown export say "Nothing to review: no
+  changed file could be reviewed", followed by the rule risks and the coverage.
 
 **Rationale**: These rules are deterministic, so tests can assert them exactly, and they cannot be
 changed by text inside a pull request.
@@ -427,8 +447,16 @@ changed by text inside a pull request.
   `gathering_context`, `generating_review`, `validating_citations`, and `publishing`. Stage
   messages contain counts only, never paths or source text.
 - **Access** (FR-003):
-  - The first stage runs 002's owner access check, with the same error mapping as indexing runs. A
-    definitive loss marks the repository `access_lost`; a lapsed authorization pauses it.
+  - The `checking_access` stage runs 002's owner access check, with the same error mapping as
+    indexing runs. A definitive loss marks the repository `access_lost`; a lapsed authorization
+    pauses it.
+  - If GitHub now reports the repository as private and the owner has not accepted the
+    disclosure, the stage pauses the repository with `external_processing_not_accepted` and fails
+    the run with that code, before any archive is fetched or the model is called, as indexing
+    does (002 R8).
+  - Submission reads only stored state plus one pull request read with the owner's token, which
+    GitHub answers only when the owner can read it. Code is fetched only after the full check
+    (FR-003).
   - Publishing re-locks the repository and cancels the run if it was disconnected or lost access
     meanwhile (002 FR-014).
   - Reads of reviews use 001's `runs.get_scoped`, which already denies lost repositories.
@@ -469,7 +497,9 @@ subscription and storage; R1), and periodic polling (GitHub calls without a view
 - `GET /v1/analysis-runs/{id}/markdown` returns `{ "markdown": "..." }` for a succeeded review. The
   server builds it from the stored result with a pure function.
 - Sections: overall risk level, summary, risks, checklist (as `- [ ]` items), and tests. Citations
-  are links to GitHub at the cited commit (R6).
+  are links to GitHub at the cited commit (R6). Related-code citations are labeled "related code
+  (candidate)" (FR-012). A partial review states it under the overall risk level, and a review
+  without risks says "No risks found" and what was examined.
 - Text that would act on GitHub when pasted is neutralized: `@name` mentions and `#123` references
   are wrapped in inline code, and raw HTML is escaped. Review text can repeat words from an
   untrusted pull request.
@@ -498,7 +528,9 @@ unit tests; and posting to GitHub, which is out of scope (FR-034).
   - the overall risk badge, with a "partial" note;
   - the summary by area;
   - risks with severity, category, and basis, each with citations that expand to the excerpt
-    (001's `CodeLines`), a side label, and a GitHub link;
+    (001's `CodeLines`), a side label, and a GitHub link. Related-code citations are labeled
+    "Related code (candidate, found by name)" (FR-012);
+  - "Nothing to review" with the coverage, for a `nothing_to_review` result (FR-020);
   - the checklist, the tests (changed, candidates labeled "not run by CodeAtlas", and new cases),
     and the coverage table;
   - the omitted-items note, and "Copy as Markdown".
@@ -535,8 +567,9 @@ conventions.
     | Closed | A closed pull request |
 
   - Switches: `push_to_pull_request`, `close_pull_request`, `merge_pull_request`,
-    `withhold_permission("pull_requests")`, and `drop_commit(sha)`. Existing switches such as
-    `set_unavailable` and `revoke_access` apply too.
+    `set_pull_request_body`, `withhold_permission("pull_requests")`, `drop_commit(sha)`, and
+    `unrelated_history`. Existing switches such as `set_unavailable`, `make_private`, and
+    `revoke_access` apply too.
   - Fixture data is static, so the API and worker processes, which hold separate fakes, agree.
 - **Gateway**: new methods `list_pull_requests`, `get_pull_request`, `compare_commits`, and
   `get_installation_permissions`; `open_tarball` is unchanged.
@@ -544,9 +577,10 @@ conventions.
   `unavailable`, `invalid_citations`, or `refusal`. `partly_invalid` adds one risk with an unknown
   label, which is dropped and counted; `invalid_citations` cites unknown labels everywhere, so the
   run fails.
-  - In `ok`, it cites the first `change` label from the prompt in one summary point, one risk, and
-    one new test case.
-  - The risk is `high` when that hunk removes lines, and `low` otherwise.
+  - In `ok`, it cites the first `change` label from the prompt in one summary point and one new
+    test case.
+  - Its one risk has category `security`. It cites the first `before` label when the prompt has
+    one, with severity `high`, and otherwise the first `change` label, with severity `low`.
   - It adds one checklist item naming the first changed path.
   - It records the prompts it received, so tests can assert that credential content never appears.
 - **Test map**:
@@ -572,13 +606,14 @@ implementation, as 001 and 002 did.
     an overlay, the pull request title and description, and labels.
   - Labels: seeded defects with path, side, line range, category, and minimum severity `medium`; or
     `safe`; or `injection`.
-  - Composition: at least 20 seeded defects across categories, at least 5 safe, fully tested
-    changes, and at least 5 injection variants of seeded items.
+  - Composition: at least 20 seeded-defect pull requests across categories, each with at least
+    one labeled defect; at least 5 safe, fully tested changes; and at least 5 injection variants
+    of seeded items.
   - The set starts as a draft for human review, like `qa_v1.jsonl`.
 - **Runner**: `backend/evals/run_review_eval.py`.
-  - It downloads each base archive once, applies the overlay to build the head archive, and serves
-    both through an in-process gateway.
-  - It drives the real review job with the real model.
+  - It downloads each base archive once, and applies the overlay to build the head tree.
+  - It calls the job's `analyze` function directly with the real model, with no GitHub, database,
+    or queue involved.
 - **Metrics**:
 
   | Criterion | Measure | Target |
@@ -588,10 +623,13 @@ implementation, as 001 and 002 did.
   | SC-005 | Citation validity, checklist references, and overall-level consistency | 100% |
   | SC-007 | Seeded defects found on injection items | 100% |
 
-  The runner also writes an audit CSV for SC-004 and per-item durations.
-- **Latency** (SC-006): in real mode, one SQL query over finished reviews takes
-  `completed_at - created_at` where `result.coverage.changed_lines_reviewed <= 500`. The target is
-  a p95 of 120 seconds or less.
+  The runner also writes per-item durations, and an audit CSV for SC-004: at least 30 risks from
+  at least 10 reviews, each judged by a person against its citations.
+- **Latency** (SC-006): in real mode, one SQL query over finished reviews, succeeded or failed,
+  takes the job's `finished_at - created_at`. It keeps pull requests with at most 500 changed
+  lines (`additions + deletions`, recorded at submission), and leaves out runs that waited in the
+  queue (started more than 10 seconds after submission). The target is a p95 of 120 seconds or
+  less.
 - **Pilot sessions** (SC-001) follow the script in [quickstart.md](quickstart.md).
 - SC-008 through SC-011 are integration tests (R13).
 

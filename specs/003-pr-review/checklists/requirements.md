@@ -38,3 +38,13 @@
     merge recommendation.
   - FR-014: reviews use the pull request's title, description, and code changes, and repository
     code; existing review discussion and CI check results are out of scope.
+- Revised on 2026-10-06 after the cross-artifact analysis, with every item still passing:
+  - FR-003: pull request details are read with the owner's authorization, and code is fetched only
+    after the full access check, which also stops for a repository that became private without
+    the disclosure.
+  - FR-004: the merge base is recorded after submission, from the pinned base and head.
+  - FR-006 and FR-016: a file renamed without changes is summarized by its paths, without
+    citations.
+  - FR-007 and FR-018: the credential-file exception and the coverage listing are referenced
+    instead of repeated.
+  - SC-004: the audit covers at least 30 risks from at least 10 reviews.
