@@ -176,6 +176,9 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 /** The pull request as it was when the review was requested, and the three pinned commits. */
 function ReviewHeader({ run }: { run: ReviewRun }) {
   const pullRequest = run.pull_request;
+  // The pull request's state on GitHub, from the same query as the freshness banner.
+  const freshness = useFreshness(run.id, !isActiveJob(run.status));
+  const state = freshness.data?.pull_request_state;
   const pullRequestUrl = externalUrl(pullRequest.html_url);
   // A fork's branch is named with its repository, as GitHub shows it.
   const head =
@@ -212,6 +215,13 @@ function ReviewHeader({ run }: { run: ReviewRun }) {
         >
           {reviewStatusLabel(run.status, run.quality_state)}
         </span>
+        {(state === "merged" || state === "closed") && (
+          <span
+            className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${STATE_STYLES[state]}`}
+          >
+            {state === "merged" ? "Merged" : "Closed"}
+          </span>
+        )}
         <span>
           By <span className="font-medium text-zinc-900 dark:text-zinc-100">{pullRequest.author}</span>
         </span>
@@ -255,6 +265,11 @@ function ReviewHeader({ run }: { run: ReviewRun }) {
 
 const BANNER = "flex flex-col gap-2 rounded-md border px-4 py-3 text-sm";
 const NOTICE_BANNER = `${BANNER} border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100`;
+const STATE_STYLES = {
+  merged: "bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-200",
+  closed: "bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200",
+} as const;
+const MERGED_BANNER = `${BANNER} border-purple-300 bg-purple-50 text-purple-950 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-100`;
 const NEUTRAL_BANNER = `${BANNER} border-zinc-200 bg-zinc-50 text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200`;
 
 /**
@@ -313,7 +328,7 @@ function FreshnessBanner({ run, finished }: { run: ReviewRun; finished: boolean 
   if (current.pull_request_state !== "open") {
     const merged = current.pull_request_state === "merged";
     return (
-      <section aria-label="Freshness" className={NEUTRAL_BANNER}>
+      <section aria-label="Freshness" className={merged ? MERGED_BANNER : NEUTRAL_BANNER}>
         <p>
           <span className="font-medium">{merged ? "Merged" : "Closed"}:</span>{" "}
           {merged
