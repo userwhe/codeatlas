@@ -371,6 +371,10 @@ commit, as FR-016 requires, while the model still sees each hunk as one diff.
   list lengths; any one part alone is accepted. The review schema therefore leaves out `maxItems`.
   The system instruction states the list lengths, and parsing still enforces them, so an output
   over a limit goes to the repair call. The answer schema is smaller and keeps its `maxItems`.
+- **Required fields** (found on 2026-10-07): with only `overview` required, Gemini left out
+  `risks` in every one of 37 evaluation reviews, and risks it did return could lack
+  `evidence_ids`. The review schema sent to Gemini therefore marks every property of every
+  object as required; lists may be empty and `location_hint` may be an empty string.
 - **Validation** (pure function):
   - Every label exists.
   - Summary points and new test cases cite at least one `change` label.

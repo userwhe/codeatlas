@@ -118,11 +118,14 @@ class GeminiClient(Protocol):
     def interactions(self) -> InteractionsAPI: ...
 
 
-def _response_schema(output_model: type[BaseModel], *, max_items: bool = True) -> dict[str, Any]:
+def _response_schema(
+    output_model: type[BaseModel], *, max_items: bool = True, require_all: bool = False
+) -> dict[str, Any]:
     """The output model's JSON schema with references inlined and only keywords Gemini documents.
 
     Dropped keywords (titles, string lengths, and list lengths when `max_items` is false) stay
-    enforced when the output is validated.
+    enforced when the output is validated. With `require_all`, every property is required, even
+    one with a default: Gemini leaves out optional properties.
     """
     keywords = {"type", "description", "properties", "required", "enum", "items"}
     if max_items:
@@ -137,8 +140,12 @@ def _response_schema(output_model: type[BaseModel], *, max_items: bool = True) -
         for key, value in node.items():
             if key == "properties":
                 cleaned[key] = {name: clean(child) for name, child in value.items()}
+                if require_all:
+                    cleaned["required"] = list(value)
             elif key == "items":
                 cleaned[key] = clean(value)
+            elif key == "required" and require_all:
+                continue
             elif key in keywords:
                 cleaned[key] = value
         return cleaned
@@ -148,9 +155,10 @@ def _response_schema(output_model: type[BaseModel], *, max_items: bool = True) -
 
 RESPONSE_SCHEMA = _response_schema(AnswerOutput)
 # Gemini rejects the full review schema with "Request contains an invalid argument" (HTTP 400)
-# when it carries both the enums and the list lengths (specs/003-pr-review research R7). The
-# review prompt states the lengths instead.
-REVIEW_RESPONSE_SCHEMA = _response_schema(ReviewOutput, max_items=False)
+# when it carries both the enums and the list lengths, and returns no risks while "risks" is
+# optional (specs/003-pr-review research R7). The review prompt states the lengths instead, and
+# every field is required; lists may be empty.
+REVIEW_RESPONSE_SCHEMA = _response_schema(ReviewOutput, max_items=False, require_all=True)
 
 
 class GeminiAnswerModel:
