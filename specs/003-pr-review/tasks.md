@@ -916,7 +916,7 @@ documentation, real-GitHub checks, and final validation
     - the API responses.
   - Add the same `.env` change to a pull request that also changes source. The value is still
     absent from the prompt, and the rule risk names `.env`.
-- [ ] T057 Add Playwright tests in frontend/tests/e2e/pull-request-review.spec.ts, against the
+- [X] T057 Add Playwright tests in frontend/tests/e2e/pull-request-review.spec.ts, against the
   stack in fake mode:
   - Sign in as octocat, connect `octo-org/review-app` with `connectOrOpen`, and wait for it to be
     ready.
