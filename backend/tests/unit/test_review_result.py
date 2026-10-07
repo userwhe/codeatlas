@@ -3,6 +3,7 @@
 import hashlib
 from typing import Any
 
+from codeatlas.review.context import CandidateTest, ChangedTest, CodeExcerpt
 from codeatlas.review.diff import ChangedFile, Hunk, Selection, select_for_review
 from codeatlas.review.evidence import ReviewEvidence
 from codeatlas.review.result import (
@@ -11,7 +12,15 @@ from codeatlas.review.result import (
     rule_risks,
     rule_summary_points,
 )
-from codeatlas.review.schema import ReviewOutput, RiskOut, Severity, SummaryPoint
+from codeatlas.review.schema import (
+    ChecklistItem,
+    NewTestCase,
+    ReviewOutput,
+    RiskOut,
+    Severity,
+    SummaryPoint,
+)
+from codeatlas.review.validate import drop_invalid
 
 LIMITS = {"max_files": 100, "max_changed_lines": 2000, "max_hunks": 80, "max_diff_tokens": 40_000}
 EMPTY_TESTS = {"changed": [], "candidates": [], "new_cases": []}
@@ -112,7 +121,15 @@ def _result(
         selection=selection,
         rule_risks=kwargs.get("rule_risks", rule_risks(selection)),
         omitted_items=kwargs.get("omitted_items", 0),
+        changed_tests=kwargs.get("changed_tests", ()),
+        candidate_tests=kwargs.get("candidate_tests", ()),
     )
+
+
+def _check(
+    text: str, *, paths: list[str] | None = None, risks: list[int] | None = None
+) -> ChecklistItem:
+    return ChecklistItem(text=text, paths=paths or [], risk_indexes=risks or [])
 
 
 def test_risks_are_ordered_by_severity_and_numbered() -> None:
@@ -359,4 +376,150 @@ def test_nothing_to_review_has_empty_text_sections_and_only_rule_risks() -> None
     assert nothing_to_review_result(plain, [])["overall_risk"] == {
         "level": "none",
         "partial": False,
+    }
+
+
+def test_checklist_risk_indexes_map_to_risk_ids_after_sorting() -> None:
+    selection = _select([_file("app/auth/permissions.py"), _skipped(".env", "credential_file")])
+    output = ReviewOutput(
+        overview="o",
+        summary_points=[_point("p", "E1")],
+        risks=[_risk("low one", "low"), _risk("high one", "high")],
+        checklist=[
+            _check("Check the low one.", risks=[0]),
+            _check(
+                "Check both.",
+                paths=["app/auth/permissions.py", "app/auth/permissions.py"],
+                risks=[1, 0, 1],
+            ),
+            _check("Check the file.", paths=["app/auth/permissions.py", "app/unknown.py"]),
+        ],
+    )
+
+    result = _result(output, selection)
+
+    # The model's risk 0 ("low one") sorts after its risk 1 and the credential-file rule risk.
+    assert [(risk["id"], risk["title"]) for risk in result["risks"]] == [
+        ("R1", "high one"),
+        ("R2", "Credential file added"),
+        ("R3", "low one"),
+    ]
+    assert result["checklist"] == [
+        {"text": "Check the low one.", "paths": [], "risk_ids": ["R3"]},
+        {"text": "Check both.", "paths": ["app/auth/permissions.py"], "risk_ids": ["R1", "R3"]},
+        {"text": "Check the file.", "paths": ["app/auth/permissions.py"], "risk_ids": []},
+    ]
+
+
+def test_checklist_items_lose_references_to_dropped_risks() -> None:
+    output = ReviewOutput(
+        overview="o",
+        summary_points=[_point("p", "E1")],
+        risks=[_risk("unknown label", "high", "E99"), _risk("kept", "medium")],
+        checklist=[
+            _check("Only the dropped risk.", risks=[0]),
+            _check("Both risks.", risks=[0, 1]),
+            _check("A file and the dropped risk.", paths=["app/auth/permissions.py"], risks=[0]),
+        ],
+    )
+
+    cleaned, removed = drop_invalid(
+        output,
+        labels={item.label for item in EVIDENCE},
+        change_labels={item.label for item in EVIDENCE if item.source_type == "change"},
+        reviewed_paths={"app/auth/permissions.py"},
+    )
+    result = _result(cleaned, omitted_items=removed)
+
+    assert [(risk["id"], risk["title"]) for risk in result["risks"]] == [("R1", "kept")]
+    assert result["checklist"] == [
+        {"text": "Both risks.", "paths": [], "risk_ids": ["R1"]},
+        {
+            "text": "A file and the dropped risk.",
+            "paths": ["app/auth/permissions.py"],
+            "risk_ids": [],
+        },
+    ]
+    # The dropped risk, and the item left with no reviewed file and no risk.
+    assert result["omitted_items"] == 2
+
+
+def test_a_checklist_item_left_without_a_valid_reference_is_dropped_and_counted() -> None:
+    output = ReviewOutput(
+        overview="o",
+        summary_points=[_point("p", "E1")],
+        checklist=[
+            _check("Nothing valid.", paths=["app/unknown.py"], risks=[3]),
+            _check("Kept.", paths=["app/auth/permissions.py"]),
+        ],
+    )
+
+    # Validation rejects such an item first; the result never shows one either way.
+    result = _result(output, omitted_items=1)
+
+    assert result["checklist"] == [
+        {"text": "Kept.", "paths": ["app/auth/permissions.py"], "risk_ids": []}
+    ]
+    assert result["omitted_items"] == 2
+
+
+def test_tests_come_from_the_context_and_new_cases_from_the_model() -> None:
+    evidence = [*EVIDENCE, _item("E7", "tests/test_permissions.py", "test")]
+    changed = [ChangedTest(path="tests/test_text.py", change="modified")]
+    candidates = [
+        CandidateTest(
+            path="tests/test_permissions.py",
+            reason="refers to `can_write`",
+            excerpt=CodeExcerpt("tests/test_permissions.py", 1, 1, "x", ("can_write",)),
+        ),
+        CandidateTest(path="tests/test_other.py", reason="refers to `can_write`", excerpt=None),
+    ]
+    output = ReviewOutput(
+        overview="o",
+        summary_points=[_point("p", "E1")],
+        new_test_cases=[
+            NewTestCase(
+                behavior="A viewer is refused on write.",
+                location_hint="tests/test_permissions.py",
+                evidence_ids=["E2"],
+            ),
+            NewTestCase(behavior="An owner may write.", location_hint="  ", evidence_ids=["E1"]),
+        ],
+    )
+
+    result = _result(output, evidence=evidence, changed_tests=changed, candidate_tests=candidates)
+
+    assert result["tests"] == {
+        "changed": [{"path": "tests/test_text.py", "change": "modified"}],
+        "candidates": [
+            {
+                "path": "tests/test_permissions.py",
+                "reason": "refers to `can_write`",
+                "evidence_ids": ["E7"],
+            },
+            # Below the top 5, or its excerpt did not fit the budget: no citation.
+            {"path": "tests/test_other.py", "reason": "refers to `can_write`", "evidence_ids": []},
+        ],
+        "new_cases": [
+            {
+                "behavior": "A viewer is refused on write.",
+                "location_hint": "tests/test_permissions.py",
+                "evidence_ids": ["E2"],
+            },
+            {"behavior": "An owner may write.", "location_hint": None, "evidence_ids": ["E1"]},
+        ],
+    }
+    assert result["coverage"]["context_items"] == 2
+
+
+def test_nothing_to_review_still_lists_changed_tests() -> None:
+    selection = _select([_skipped("tests/data/logo.png", "binary")])
+    changed = [ChangedTest(path="tests/data/logo.png", change="added")]
+
+    result = nothing_to_review_result(selection, [], changed_tests=changed)
+
+    assert result["tests"] == {
+        "changed": [{"path": "tests/data/logo.png", "change": "added"}],
+        "candidates": [],
+        "new_cases": [],
     }

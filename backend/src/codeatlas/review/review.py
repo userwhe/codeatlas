@@ -43,7 +43,13 @@ from codeatlas.jobs.worker import JobContext, register
 from codeatlas.models import AnalysisRun, EvidenceItem, Repository
 from codeatlas.providers.answer_model import AnswerModel, ReviewResult, get_answer_model
 from codeatlas.providers.errors import ProviderRefused, ProviderUnavailable
-from codeatlas.review.context import changed_declarations, module_names, related_code
+from codeatlas.review.context import (
+    candidate_tests,
+    changed_declarations,
+    changed_tests,
+    module_names,
+    related_code,
+)
 from codeatlas.review.diff import Skip, Tree, changed_files, read_tree, select_for_review
 from codeatlas.review.evidence import ReviewEvidence, ReviewEvidenceSet, build_evidence
 from codeatlas.review.prompt import SYSTEM_PROMPT, build_repair_content, build_user_content
@@ -167,6 +173,7 @@ def _generate(
     model: AnswerModel,
     content: str,
     evidence: ReviewEvidenceSet,
+    reviewed_paths: frozenset[str],
     usage: Usage,
     progress: Progress,
 ) -> ReviewOutput:
@@ -186,7 +193,11 @@ def _generate(
 
     progress("validating_citations", "Checking every citation against the evidence", {})
     errors = validate(
-        result.output, labels=labels, change_labels=change_labels, parse_error=result.parse_error
+        result.output,
+        labels=labels,
+        change_labels=change_labels,
+        reviewed_paths=reviewed_paths,
+        parse_error=result.parse_error,
     )
     if result.output is not None and not errors:
         if usable(result.output):
@@ -198,7 +209,7 @@ def _generate(
     if repair.output is None:
         raise _validation_failed()
     output, usage.omitted_items = drop_invalid(
-        repair.output, labels=labels, change_labels=change_labels
+        repair.output, labels=labels, change_labels=change_labels, reviewed_paths=reviewed_paths
     )
     if not usable(output):
         raise _validation_failed()
@@ -226,7 +237,7 @@ def analyze(
 
     The model is not called when nothing can be reviewed (`nothing_to_review`), or when every
     reviewed file was renamed without changes: no line changed, so there is nothing to cite, and
-    the rule points and risks are the whole review.
+    the rule points and risks, with the changed and candidate tests, are the whole review.
     """
     report = progress or _no_progress
     report(
@@ -243,6 +254,7 @@ def analyze(
         max_diff_tokens=settings.review_max_diff_tokens,
     )
     risks = rule_risks(selection)
+    tests_changed = changed_tests(changed)
     changed_count = sum(entry.count for entry in selection.coverage)
     report(
         "gathering_context",
@@ -252,57 +264,67 @@ def analyze(
     usage = Usage()
     if not selection.reviewed:
         return Analysis(
-            result=nothing_to_review_result(selection, risks),
+            result=nothing_to_review_result(selection, risks, changed_tests=tests_changed),
             evidence=(),
             usage=usage,
             quality_state="nothing_to_review",
         )
+
+    # Every changed file is passed, so a changed file left out by the limits is never shown as
+    # unchanged related code or as a candidate test.
+    names = changed_declarations(selection.reviewed)
+    modules = module_names(selection.reviewed)
+    candidates = candidate_tests(head, changed, names, modules)
     if not any(file.hunks for file in selection.reviewed):
         # The overview is model text, so it stays empty; the server writes the rule points.
         rules_only = ReviewOutput.model_construct(overview="", summary_points=[], risks=[])
         return Analysis(
             result=build_result(
-                rules_only, evidence=(), selection=selection, rule_risks=risks, omitted_items=0
+                rules_only,
+                evidence=(),
+                selection=selection,
+                rule_risks=risks,
+                omitted_items=0,
+                changed_tests=tests_changed,
+                candidate_tests=candidates,
             ),
             evidence=(),
             usage=usage,
             quality_state="reviewed",
         )
 
-    # Every changed file is passed, so a changed file left out by the limits is never shown as
-    # unchanged related code.
-    related = related_code(
-        head,
-        changed,
-        changed_declarations(selection.reviewed),
-        module_names(selection.reviewed),
-    )
+    related = related_code(head, changed, names, modules)
     evidence = build_evidence(
         selection,
         related,
         head_sha=head_sha,
         merge_base_sha=merge_base_sha,
         max_input_tokens=settings.review_max_input_tokens,
+        tests=[candidate.excerpt for candidate in candidates if candidate.excerpt is not None],
     )
     content = build_user_content(
         title=str(pull_request.get("title") or ""),
         description=pull_request.get("body"),
         selection=selection,
         evidence=evidence,
+        candidate_tests=candidates,
     )
-    output = _generate(model, content, evidence, usage, report)
-    return Analysis(
-        result=build_result(
-            output,
-            evidence=evidence.items,
-            selection=selection,
-            rule_risks=risks,
-            omitted_items=usage.omitted_items,
-        ),
+    reviewed_paths = frozenset(
+        path for file in selection.reviewed for path in (file.path, file.previous_path) if path
+    )
+    output = _generate(model, content, evidence, reviewed_paths, usage, report)
+    result = build_result(
+        output,
         evidence=evidence.items,
-        usage=usage,
-        quality_state="reviewed",
+        selection=selection,
+        rule_risks=risks,
+        omitted_items=usage.omitted_items,
+        changed_tests=tests_changed,
+        candidate_tests=candidates,
     )
+    # The result also counts any checklist item left with no reviewed file and no risk.
+    usage.omitted_items = result["omitted_items"]
+    return Analysis(result=result, evidence=evidence.items, usage=usage, quality_state="reviewed")
 
 
 # The job ---------------------------------------------------------------------------------------

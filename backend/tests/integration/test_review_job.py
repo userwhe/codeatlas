@@ -215,6 +215,12 @@ def test_review_of_a_seeded_defect(
     assert (caller.side, caller.commit_sha) == ("after", head)
     assert "can_write(user, repository_id)" in caller.excerpt
 
+    tests = {item.path: item for item in items.values() if item.source_type == "test"}
+    assert "tests/test_permissions.py" in tests
+    test_item = tests["tests/test_permissions.py"]
+    assert (test_item.side, test_item.commit_sha) == ("after", head)
+    assert "can_write(viewer, 7)" in test_item.excerpt
+
     result = run.result
     assert result is not None
     assert result["overall_risk"] == {"level": "high", "partial": False}
@@ -225,19 +231,44 @@ def test_review_of_a_seeded_defect(
     )
     assert [group["area"] for group in result["summary"]] == ["app/auth"]
     assert coverage_by_path(run)["app/auth/permissions.py"]["reviewed"] is True
-    assert result["coverage"]["context_items"] == len(references)
+    assert result["coverage"]["context_items"] == len(references) + len(tests)
     assert result["omitted_items"] == 0
+
+    # The checklist names the changed file and the risk; the tests come from the head tree.
+    assert result["checklist"] == [
+        {
+            "text": result["checklist"][0]["text"],
+            "paths": ["app/auth/permissions.py"],
+            "risk_ids": [risk["id"]],
+        }
+    ]
+    assert result["tests"]["changed"] == []
+    candidates = {item["path"]: item for item in result["tests"]["candidates"]}
+    assert candidates["tests/test_permissions.py"] == {
+        "path": "tests/test_permissions.py",
+        "reason": "refers to `can_write`",
+        "evidence_ids": [test_item.label],
+    }
+    [new_case] = result["tests"]["new_cases"]
+    assert new_case["evidence_ids"]
+    assert all(items[label].source_type == "change" for label in new_case["evidence_ids"])
     # A review indexes nothing: the default version stays as it was.
     assert load_repository(db, repository_id).active_snapshot_id == active_before
 
     body = octocat.get(submitted["result_url"]).json()
     assert (body["status"], body["quality_state"]) == ("succeeded", "reviewed")
     assert body["commits"]["merge_base_sha"] == MERGE_BASE
-    assert body["review"]["overall_risk"]["level"] == "high"
-    cited = set(risk["evidence_ids"])
+    review_body = body["review"]
+    assert review_body["overall_risk"]["level"] == "high"
+    assert review_body["checklist"] == result["checklist"]
+    assert review_body["tests"]["candidates"][0]["citations"] == [test_item.label]
+    assert review_body["tests"]["new_cases"][0]["citations"] == new_case["evidence_ids"]
+    cited = {*risk["evidence_ids"], *new_case["evidence_ids"], test_item.label}
     for group in result["summary"]:
         for point in group["points"]:
             cited.update(point["evidence_ids"])
+    for candidate in result["tests"]["candidates"]:
+        cited.update(candidate["evidence_ids"])
     assert {citation["label"] for citation in body["citations"]} == cited
 
 
@@ -254,6 +285,11 @@ def test_pull_request_on_another_base_branch(
     assert run.quality_state == "reviewed"
     assert run.merge_base_sha == MERGE_BASE
     assert coverage_by_path(run)["web/src/format.ts"]["reviewed"] is True
+    # The pull request changes its own test, which is listed with the change, not as a candidate.
+    assert run.result is not None
+    tests = run.result["tests"]
+    assert tests["changed"] == [{"path": "web/src/format.test.ts", "change": "modified"}]
+    assert "web/src/format.test.ts" not in {item["path"] for item in tests["candidates"]}
 
 
 def test_fork_pull_request(
@@ -462,6 +498,9 @@ def test_partly_invalid_output_drops_items_after_one_repair(
     assert (run.usage["model_calls"], run.usage["omitted_items"]) == (2, 1)
     [risk] = run.result["risks"]
     assert set(risk["evidence_ids"]) <= set(evidence(db, submitted))
+    # The checklist item also referred to the dropped risk; only that reference was removed.
+    [item] = run.result["checklist"]
+    assert (item["paths"], item["risk_ids"]) == (["app/auth/permissions.py"], [risk["id"]])
     # The repair request shows the rejected review and why it was rejected.
     assert "<previous_review>" in fake_model().prompts[1]
 

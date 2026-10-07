@@ -305,6 +305,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/analysis-runs/{run_id}/markdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Review Markdown
+         * @description A succeeded review as Markdown, with citations linking to GitHub (FR-015, research R11).
+         *
+         *     404 for an answer to a question, and 409 `review_not_finished` until the review succeeds.
+         */
+        get: operations["get_review_markdown_v1_analysis_runs__run_id__markdown_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -863,6 +885,11 @@ export interface components {
             changed_lines_reviewed: number;
             /** Context Items */
             context_items: number;
+        };
+        /** ReviewMarkdownOut */
+        ReviewMarkdownOut: {
+            /** Markdown */
+            markdown: string;
         };
         /** ReviewOut */
         ReviewOut: {
@@ -1960,6 +1987,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunOut"] | components["schemas"]["ReviewRunOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_review_markdown_v1_analysis_runs__run_id__markdown_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewMarkdownOut"];
                 };
             };
             /** @description Validation Error */

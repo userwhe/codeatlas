@@ -104,6 +104,7 @@ CASES = [
     ),
     Case("GET", "/v1/analysis-runs", "repository", query={"repository_id": "{repository}"}),
     Case("GET", "/v1/analysis-runs/{run_id}", "run"),
+    Case("GET", "/v1/analysis-runs/{run_id}/markdown", "run"),
     Case(
         "POST",
         "/v1/analysis-runs",

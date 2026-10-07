@@ -3,7 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useCallback, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useState } from "react";
 
 import { AccessLostNotice } from "@/components/AccessLostNotice";
 import { reasonLabel } from "@/components/CoverageTable";
@@ -13,7 +13,9 @@ import { RiskLevelBadge } from "@/components/RiskLevelBadge";
 import { ApiError, errorMessage, isAccessLost } from "@/lib/api/client";
 import { isActiveJob, shortSha } from "@/lib/api/repositories";
 import {
+  type CandidateTest,
   changeLabel,
+  type ChecklistItem,
   type CoverageFile,
   externalUrl,
   type FileChange,
@@ -25,9 +27,11 @@ import {
   type ReviewRun,
   type ReviewStatus,
   reviewStatusLabel,
+  type ReviewTests,
   type Risk,
   useRequestReview,
   useReview,
+  useReviewMarkdown,
 } from "@/lib/api/reviews";
 
 export function ReviewDetail({ runId }: { runId: string }) {
@@ -346,9 +350,12 @@ function ReviewBody({
   return (
     <>
       <section aria-labelledby="overview-heading" className="flex flex-col gap-4">
-        <h2 id="overview-heading" className="text-lg font-semibold">
-          Overview
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="overview-heading" className="text-lg font-semibold">
+            Overview
+          </h2>
+          <CopyMarkdown runId={run.id} />
+        </div>
         {nothingToReview && (
           <div className="flex flex-col gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-900">
             <p className="font-medium">Nothing to review: no changed file could be reviewed.</p>
@@ -438,6 +445,16 @@ function ReviewBody({
             </div>
           )}
         </section>
+      )}
+
+      {!nothingToReview && <ChecklistSection items={review.checklist} />}
+
+      {(!nothingToReview || review.tests.changed.length > 0) && (
+        <TestsSection
+          tests={review.tests}
+          citations={citations}
+          onOpen={(label) => setOpen(label, true)}
+        />
       )}
 
       {omitted > 0 && (
@@ -550,7 +567,10 @@ function RiskItem({ risk, citations }: { risk: Risk; citations: Map<string, Cita
   });
 
   return (
-    <li className="flex flex-col gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
+    <li
+      id={`risk-${risk.id}`}
+      className="flex scroll-mt-24 flex-col gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800"
+    >
       <div className="flex flex-col gap-2">
         <h3 className="flex items-start gap-2 font-medium">
           <span className="mt-0.5 shrink-0 font-mono text-xs text-zinc-500">{risk.id}</span>
@@ -589,6 +609,265 @@ function RiskItem({ risk, citations }: { risk: Risk; citations: Map<string, Cita
               open={openLabels.has(citation.label)}
               onToggle={() => setOpen(citation.label, !openLabels.has(citation.label))}
               idPrefix={`risk-${risk.id}`}
+            />
+          ))}
+        </ol>
+      )}
+    </li>
+  );
+}
+
+type CopyState = "idle" | "copying" | "copied" | "failed";
+
+/**
+ * Copies the review as Markdown (FR-015). The copy is fetched as soon as the review is shown, so a
+ * click usually writes it to the clipboard at once; otherwise it is fetched first.
+ */
+function CopyMarkdown({ runId }: { runId: string }) {
+  const markdown = useReviewMarkdown(runId);
+  const [state, setState] = useState<CopyState>("idle");
+  const [problem, setProblem] = useState<string | null>(null);
+
+  async function copy() {
+    if (state === "copying") return;
+    setState("copying");
+    setProblem(null);
+    let text = markdown.data;
+    try {
+      text ??= (await markdown.refetch({ throwOnError: true })).data;
+    } catch (error) {
+      setState("failed");
+      setProblem(`Could not load the Markdown: ${errorMessage(error)}`);
+      return;
+    }
+    try {
+      if (text === undefined) throw new Error("No Markdown");
+      await navigator.clipboard.writeText(text);
+    } catch {
+      setState("failed");
+      setProblem("Could not write to the clipboard. Allow clipboard access and try again.");
+      return;
+    }
+    setState("copied");
+    window.setTimeout(() => setState((current) => (current === "copied" ? "idle" : current)), 2000);
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <button
+        type="button"
+        onClick={() => void copy()}
+        disabled={state === "copying"}
+        className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+      >
+        {state === "copying" ? "Copying…" : "Copy as Markdown"}
+      </button>
+      <span role="status" className="text-sm text-green-700 dark:text-green-400">
+        {state === "copied" ? "Copied" : ""}
+      </span>
+      {problem && (
+        <p role="alert" className="w-full text-sm text-red-700 dark:text-red-400">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** What the reader should verify, each item with the changed files and risks it concerns. */
+function ChecklistSection({ items }: { items: ChecklistItem[] }) {
+  return (
+    <section aria-labelledby="checklist-heading" className="flex flex-col gap-4">
+      <h2 id="checklist-heading" className="text-lg font-semibold">
+        Checklist
+      </h2>
+      {items.length === 0 ? (
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          No checklist items for this change.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {items.map((item, index) => (
+            <li
+              key={index}
+              className="flex items-start gap-3 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800"
+            >
+              <span
+                aria-hidden="true"
+                className="mt-1 size-3.5 shrink-0 rounded-sm border border-zinc-400 dark:border-zinc-500"
+              />
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <p className="break-words whitespace-pre-wrap">{item.text}</p>
+                {(item.paths.length > 0 || item.risk_ids.length > 0) && (
+                  <p className="flex flex-wrap items-center gap-1.5 text-xs">
+                    {item.paths.map((path) => (
+                      <code
+                        key={path}
+                        className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono break-all dark:bg-zinc-800"
+                      >
+                        {path}
+                      </code>
+                    ))}
+                    {item.risk_ids.map((id) => (
+                      <a
+                        key={id}
+                        href={`#risk-${id}`}
+                        className="rounded bg-amber-50 px-1.5 py-0.5 font-mono font-medium text-amber-900 hover:underline dark:bg-amber-950 dark:text-amber-100"
+                      >
+                        {id}
+                      </a>
+                    ))}
+                  </p>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Text whose `backticked` parts, such as names in a candidate's reason, are shown as code. */
+function CodeText({ text }: { text: string }) {
+  const parts = text.split("`");
+  // An unmatched backtick leaves an even number of parts: show the text as it is.
+  if (parts.length % 2 === 0) return <>{text}</>;
+  return (
+    <>
+      {parts.map((part, index) =>
+        index % 2 === 1 ? (
+          <code key={index} className="font-mono text-[0.9em]">
+            {part}
+          </code>
+        ) : (
+          <Fragment key={index}>{part}</Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
+function TestGroup({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="font-medium">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function NoTests({ children }: { children: ReactNode }) {
+  return <p className="text-sm text-zinc-600 dark:text-zinc-400">{children}</p>;
+}
+
+/**
+ * The tests the pull request changes, existing tests found by name that may exercise it (never
+ * run by CodeAtlas, FR-011 and FR-012), and new test cases the change appears to need.
+ */
+function TestsSection({
+  tests,
+  citations,
+  onOpen,
+}: {
+  tests: ReviewTests;
+  citations: Map<string, Citation>;
+  onOpen: (label: string) => void;
+}) {
+  return (
+    <section aria-labelledby="tests-heading" className="flex flex-col gap-6">
+      <h2 id="tests-heading" className="text-lg font-semibold">
+        Tests
+      </h2>
+
+      <TestGroup title="Changed in this pull request">
+        {tests.changed.length === 0 ? (
+          <NoTests>The pull request changes no tests.</NoTests>
+        ) : (
+          <ul className="flex flex-col gap-1.5 text-sm">
+            {tests.changed.map((test) => (
+              <li key={test.path} className="flex items-start gap-3">
+                <ChangeChip change={test.change} />
+                <code className="min-w-0 font-mono break-all">{test.path}</code>
+              </li>
+            ))}
+          </ul>
+        )}
+      </TestGroup>
+
+      <TestGroup title="Candidate tests (not run by CodeAtlas)">
+        <p className="text-xs text-zinc-500">
+          Existing tests found by name that may exercise the change. CodeAtlas has not run them,
+          and the list may be incomplete.
+        </p>
+        {tests.candidates.length === 0 ? (
+          <NoTests>No candidate tests were found.</NoTests>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {tests.candidates.map((test) => (
+              <CandidateTestItem key={test.path} test={test} citations={citations} />
+            ))}
+          </ul>
+        )}
+      </TestGroup>
+
+      <TestGroup title="Suggested new tests">
+        {tests.new_cases.length === 0 ? (
+          <NoTests>No new tests are suggested.</NoTests>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {tests.new_cases.map((testCase, index) => (
+              <li
+                key={index}
+                className="flex flex-col gap-2 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800"
+              >
+                <p className="break-words whitespace-pre-wrap">{testCase.behavior}</p>
+                {testCase.location_hint && (
+                  <p className="text-sm break-words text-zinc-600 dark:text-zinc-400">
+                    Where: {testCase.location_hint}
+                  </p>
+                )}
+                <EvidenceLinks labels={testCase.citations} citations={citations} onOpen={onOpen} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </TestGroup>
+    </section>
+  );
+}
+
+/** One candidate test: its path, why it was chosen, and its excerpt when the review has one. */
+function CandidateTestItem({
+  test,
+  citations,
+}: {
+  test: CandidateTest;
+  citations: Map<string, Citation>;
+}) {
+  const [openLabels, setOpen] = useOpenSet();
+  const cited = test.citations.flatMap((label) => {
+    const citation = citations.get(label);
+    return citation ? [citation] : [];
+  });
+
+  return (
+    <li className="flex flex-col gap-2 rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
+      <p className="flex flex-col gap-0.5">
+        <code className="font-mono text-sm font-medium break-all">{test.path}</code>
+        <span className="text-sm text-zinc-600 dark:text-zinc-400">
+          <CodeText text={test.reason.charAt(0).toUpperCase() + test.reason.slice(1)} />
+        </span>
+      </p>
+      {cited.length > 0 && (
+        <ol aria-label={`Excerpt of ${test.path}`} className="flex flex-col gap-2">
+          {cited.map((citation) => (
+            <ReviewCitation
+              key={citation.label}
+              citation={citation}
+              open={openLabels.has(citation.label)}
+              onToggle={() => setOpen(citation.label, !openLabels.has(citation.label))}
+              idPrefix="candidate"
             />
           ))}
         </ol>

@@ -733,7 +733,7 @@ the sections and links.
 
 ### Tests for User Story 2 ⚠️ (write first, confirm they fail)
 
-- [ ] T042 [P] [US2] Extend the unit tests:
+- [X] T042 [P] [US2] Extend the unit tests:
   - **backend/tests/unit/test_review_context.py**:
     - `candidate_tests` returns unchanged head test files that refer to a changed name or module
       (reason "refers to `<name>`") or are named after a changed file (reason "named after
@@ -751,7 +751,7 @@ the sections and links.
     - when a risk is dropped, indexes pointing to it are removed from checklist items. An item
       left with no reviewed path and no valid risk is dropped and counted in `omitted_items`;
     - `tests.changed` and `tests.candidates` come from the context, not the model.
-- [ ] T043 [P] [US2] Unit tests for the Markdown export in
+- [X] T043 [P] [US2] Unit tests for the Markdown export in
   backend/tests/unit/test_review_markdown.py:
   - The heading names the pull request number and the short head SHA.
   - Sections appear in order: overall risk, summary, risks, checklist (`- [ ]` items), and
@@ -765,7 +765,7 @@ the sections and links.
     reviewed.
   - A review without risks says "No risks found" and what was examined.
   - Related-code citations carry "related code (candidate)".
-- [ ] T044 [P] [US2] Extend backend/tests/integration/test_review_job.py, and add a Markdown test
+- [X] T044 [P] [US2] Extend backend/tests/integration/test_review_job.py, and add a Markdown test
   to backend/tests/integration/test_review_submit.py:
   - #1 lists `tests/test_permissions.py` as a candidate, has a new test case citing a `change`
     label, and has a checklist item naming `app/auth/permissions.py`.
@@ -776,7 +776,7 @@ the sections and links.
 
 ### Implementation for User Story 2
 
-- [ ] T045 [US2] Extend the schema, prompt, and fake model:
+- [X] T045 [US2] Extend the schema, prompt, and fake model:
   - In backend/src/codeatlas/review/schema.py, add `checklist: list[ChecklistItem]` (at most
     12), where `ChecklistItem` has `text` (1 to 200 characters), `paths: list[str]`, and
     `risk_indexes: list[int]`.
@@ -787,19 +787,19 @@ the sections and links.
     instructions for the checklist and new test cases.
   - `FakeAnswerModel.review` in `ok` mode adds one checklist item naming the first changed path,
     and one new test case citing the first `change` label.
-- [ ] T046 [US2] Add `candidate_tests` and `changed_tests` to
+- [X] T046 [US2] Add `candidate_tests` and `changed_tests` to
   backend/src/codeatlas/review/context.py, and `test` items to
   backend/src/codeatlas/review/evidence.py. Then call them from `analyze` in
   backend/src/codeatlas/review/review.py.
-- [ ] T047 [US2] Extend backend/src/codeatlas/review/validate.py and
+- [X] T047 [US2] Extend backend/src/codeatlas/review/validate.py and
   backend/src/codeatlas/review/result.py for the checklist, new test cases, `tests.changed`, and
   `tests.candidates`. Resolve checklist risk indexes against the model's original risk list,
   before dropping, as research R7 describes. Make T042 pass.
-- [ ] T048 [US2] Create backend/src/codeatlas/review/markdown.py with
+- [X] T048 [US2] Create backend/src/codeatlas/review/markdown.py with
   `render(run, result, citations) -> str` (research R11). Add
   `GET /v1/analysis-runs/{run_id}/markdown` to backend/src/codeatlas/api/routes/analysis_runs.py.
   Make T043 and T044 pass.
-- [ ] T049 [US2] Show the new parts:
+- [X] T049 [US2] Show the new parts:
   - Add `checklist` and `tests` to `ReviewRunOut`, and regenerate the schema types.
   - In frontend/src/app/reviews/[id]/review-detail.tsx, add:
     - a "Checklist" section listing each item with its paths and risk identifiers;

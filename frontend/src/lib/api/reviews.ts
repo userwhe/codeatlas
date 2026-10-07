@@ -19,6 +19,10 @@ export type Risk = components["schemas"]["ReviewRiskOut"];
 export type RiskLevel = components["schemas"]["OverallRiskOut"]["level"];
 export type ReviewCitation = components["schemas"]["ReviewCitationOut"];
 export type FileChange = SummaryPoint["change"];
+export type ChecklistItem = components["schemas"]["ChecklistItemOut"];
+export type ReviewTests = components["schemas"]["ReviewTestsOut"];
+export type CandidateTest = components["schemas"]["CandidateTestOut"];
+export type NewTestCase = components["schemas"]["NewTestCaseOut"];
 
 const PULL_REQUEST_POLL_MS = 10_000;
 const REVIEW_POLL_MS = 3000;
@@ -64,6 +68,27 @@ export function useReview(runId: string) {
       const run = query.state.data;
       return run && isActiveJob(run.status) ? REVIEW_POLL_MS : false;
     },
+  });
+}
+
+/**
+ * The Markdown copy of a succeeded review, with citations linking to GitHub. Enable it only once
+ * the review has succeeded (the API answers 409 before), so that "Copy as Markdown" usually has the
+ * text at hand and can write it to the clipboard within the click.
+ */
+export function useReviewMarkdown(runId: string, enabled = true) {
+  return useQuery({
+    // Under the run's key, so that refreshing the run refreshes its copy too.
+    queryKey: ["analysis-runs", runId, "markdown"],
+    queryFn: async () => {
+      const body = await unwrap(
+        api.GET("/v1/analysis-runs/{run_id}/markdown", { params: { path: { run_id: runId } } }),
+      );
+      return body.markdown;
+    },
+    enabled,
+    // A finished review does not change.
+    staleTime: Infinity,
   });
 }
 

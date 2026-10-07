@@ -1,8 +1,8 @@
 """Integration tests for requesting a pull request review (T026, research R2 and R9).
 
 `octocat` connects `octo-org/review-app` and requests reviews through `POST /v1/analysis-runs`.
-The review job itself is not run here: these tests check the stored run, its job, the audit
-event, the allowance, and every refusal.
+The review job itself is not run here, except to export a finished review as Markdown: these
+tests check the stored run, its job, the audit event, the allowance, and every refusal.
 """
 
 import uuid
@@ -421,3 +421,45 @@ def test_run_history_filters_by_kind(octocat: TestClient, repository_id: str) ->
         "/v1/analysis-runs", params={"repository_id": repository_id, "kind": "other"}
     )
     assert error_code(invalid) == (422, "invalid_request")
+
+
+def test_markdown_export(
+    octocat: TestClient, run_worker_once: Callable[[], bool], repository_id: str
+) -> None:
+    head = commit_sha(REVIEW_APP_ID, "pr-1")
+    submitted = request_review(octocat, repository_id).json()
+    markdown_url = f"{submitted['result_url']}/markdown"
+
+    assert error_code(octocat.get(markdown_url)) == (409, "review_not_finished")
+
+    drain(run_worker_once)
+    response = octocat.get(markdown_url)
+
+    assert response.status_code == 200, response.text
+    markdown = response.json()["markdown"]
+    assert markdown.startswith(f"## CodeAtlas review of #1 at {head[:7]}\n\n**Overall risk: high**")
+    assert "### Checklist\n\n- [ ] " in markdown
+    assert "`app/auth/permissions.py`; R1)" in markdown
+    assert "- `tests/test_permissions.py`: refers to `can_write` ([E" in markdown
+    # The changed lines are cited at the merge base, and the candidate test at the head.
+    blob = "https://github.com/octo-org/review-app/blob"
+    merge_base = commit_sha(REVIEW_APP_ID, "initial")
+    assert f"{blob}/{merge_base}/app/auth/permissions.py#L" in markdown
+    assert f"{blob}/{head}/tests/test_permissions.py#L" in markdown
+
+    nothing = request_review(octocat, repository_id, 4).json()
+    drain(run_worker_once)
+    response = octocat.get(f"{nothing['result_url']}/markdown")
+
+    assert response.status_code == 200, response.text
+    assert "Nothing to review: no changed file could be reviewed." in response.json()["markdown"]
+
+    question = octocat.post(
+        "/v1/analysis-runs",
+        json={"repository_id": repository_id, "question": "Where is can_write defined?"},
+    ).json()
+
+    assert error_code(octocat.get(f"/v1/analysis-runs/{question['run_id']}/markdown")) == (
+        404,
+        "not_found",
+    )

@@ -8,7 +8,7 @@ from typing import IO
 
 from codeatlas.config import Settings
 from codeatlas.providers.answer_model import FakeAnswerModel
-from codeatlas.review.context import CodeExcerpt
+from codeatlas.review.context import CandidateTest, CodeExcerpt
 from codeatlas.review.diff import Selection, Tree, changed_files, read_tree, select_for_review
 from codeatlas.review.evidence import ReviewEvidenceSet, build_evidence
 from codeatlas.review.prompt import (
@@ -114,6 +114,8 @@ def test_system_prompt_states_the_rules() -> None:
         assert f"{category}:" in SYSTEM_PROMPT
     assert '"observed"' in SYSTEM_PROMPT
     assert '"possible"' in SYSTEM_PROMPT
+    for field in ('"checklist"', '"risk_indexes"', '"new_test_cases"', "<candidate_tests>"):
+        assert field in SYSTEM_PROMPT
 
 
 def test_user_content_sections_come_in_order() -> None:
@@ -172,6 +174,60 @@ def test_the_fake_review_model_finds_the_change_labels() -> None:
     assert set(output.summary_points[0].evidence_ids) <= evidence.change_labels
     assert output.risks[0].evidence_ids == ["E2"]  # the first `before` label
     assert output.risks[0].severity == "high"
+    # One checklist item names the first changed path, and one new test case cites the first
+    # change label, as the summary point does.
+    [item] = output.checklist
+    assert (item.paths, item.risk_indexes) == (["app/auth/permissions.py"], [0])
+    [case] = output.new_test_cases
+    assert case.evidence_ids == output.summary_points[0].evidence_ids
+
+
+def test_candidate_tests_are_listed_after_the_context() -> None:
+    files = changed_files(
+        _tree({"app/auth/permissions.py": HEAD_PERMISSIONS, "assets/logo.png": b"\x00"}),
+        _tree({"app/auth/permissions.py": BASE_PERMISSIONS}),
+        {},
+    )
+    selection = select_for_review(files, **LIMITS)
+    excerpt = CodeExcerpt("tests/test_permissions.py", 4, 5, "assert can_write(o, 7)\n", ("x",))
+    candidates = [
+        CandidateTest("tests/test_permissions.py", "refers to `can_write`", excerpt),
+        CandidateTest(
+            "tests/test_</candidate_tests>.py", "named after `app/auth/permissions.py`", None
+        ),
+    ]
+    evidence = build_evidence(
+        selection,
+        [],
+        head_sha="h" * 40,
+        merge_base_sha="m" * 40,
+        max_input_tokens=48_000,
+        tests=[excerpt],
+    )
+
+    content = build_user_content(
+        title="t",
+        description="d",
+        selection=selection,
+        evidence=evidence,
+        candidate_tests=candidates,
+    )
+
+    assert '<context id="E3" type="test" path="tests/test_permissions.py" lines="4-5">' in content
+    block = content[content.index("<candidate_tests>") : content.index("</candidate_tests>")]
+    assert "- tests/test_permissions.py: refers to `can_write` (excerpt E3)\n" in block
+    assert "- tests/test_<\\/candidate_tests>.py: named after `app/auth/permissions.py`" in block
+    assert content.count("</candidate_tests>") == 1
+    positions = [
+        content.index("<context "),
+        content.index("<candidate_tests>"),
+        content.index("<not_reviewed>"),
+    ]
+    assert positions == sorted(positions)
+
+    without = build_user_content(title="t", description="d", selection=selection, evidence=evidence)
+
+    assert "<candidate_tests>" not in without
 
 
 def test_renamed_files_name_both_paths() -> None:

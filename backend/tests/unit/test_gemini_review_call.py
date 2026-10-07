@@ -133,7 +133,16 @@ def test_review_schema_is_review_output_without_unsupported_keywords() -> None:
     point = REVIEW_RESPONSE_SCHEMA["properties"]["summary_points"]
     risk = REVIEW_RESPONSE_SCHEMA["properties"]["risks"]
 
-    assert set(REVIEW_RESPONSE_SCHEMA["properties"]) == {"overview", "summary_points", "risks"}
+    checklist = REVIEW_RESPONSE_SCHEMA["properties"]["checklist"]
+    new_test_cases = REVIEW_RESPONSE_SCHEMA["properties"]["new_test_cases"]
+
+    assert set(REVIEW_RESPONSE_SCHEMA["properties"]) == {
+        "overview",
+        "summary_points",
+        "risks",
+        "checklist",
+        "new_test_cases",
+    }
     assert REVIEW_RESPONSE_SCHEMA["required"] == ["overview"]
     assert point["maxItems"] == 15
     assert point["items"]["properties"]["change"]["enum"] == [
@@ -156,6 +165,11 @@ def test_review_schema_is_review_output_without_unsupported_keywords() -> None:
         "explanation",
         "suggested_check",
     ]
+    assert checklist["maxItems"] == 12
+    assert checklist["items"]["properties"]["risk_indexes"]["items"] == {"type": "integer"}
+    assert checklist["items"]["required"] == ["text"]
+    assert new_test_cases["maxItems"] == 8
+    assert new_test_cases["items"]["required"] == ["behavior"]
     assert schema_keywords(REVIEW_RESPONSE_SCHEMA) <= {
         "type",
         "description",

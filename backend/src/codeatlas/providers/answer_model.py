@@ -5,6 +5,7 @@ its own output schema. Prompts, evidence, output text, and the API key are never
 into exception messages; only error classes, status codes, and token counts.
 """
 
+import html
 import logging
 import re
 import time
@@ -25,7 +26,14 @@ from pydantic import BaseModel, ValidationError
 from codeatlas.config import Settings, get_settings
 from codeatlas.providers.errors import ProviderRefused, ProviderUnavailable
 from codeatlas.qa.schema import AnswerOutput, Claim
-from codeatlas.review.schema import ReviewOutput, RiskOut, Severity, SummaryPoint
+from codeatlas.review.schema import (
+    ChecklistItem,
+    NewTestCase,
+    ReviewOutput,
+    RiskOut,
+    Severity,
+    SummaryPoint,
+)
 
 logger = logging.getLogger(__name__)
 # With GOOGLE_GENAI_DEBUG set, the SDK logs request bodies and headers at DEBUG level.
@@ -315,6 +323,7 @@ _EVIDENCE_LABEL = re.compile(r'<evidence id="(E\d+)"')
 # research R6, R7).
 _HUNK_TAG = re.compile(r"<hunk\b([^>]*)>")
 _HUNK_LABEL = re.compile(r'\b(before|after)="(E\d+)"')
+_CHANGE_PATH = re.compile(r'<change path="([^"]*)"')
 UNKNOWN_REVIEW_LABEL = "E999"
 
 
@@ -333,11 +342,14 @@ class FakeAnswerModel:
 
     - `ok`: an overview, one summary point citing the first change label, and one `security`
       risk. The risk cites the first `before` label with severity `high` when there is one,
-      otherwise the first change label with severity `low`. Without change labels, it gives
-      only the overview.
-    - `no_risks`: the same without the risk.
-    - `partly_invalid`: `ok` plus a risk citing the unknown label `E999`.
-    - `invalid_citations`: every summary point and risk cites `E999`, on every call.
+      otherwise the first change label with severity `low`. One checklist item names the first
+      changed path and the risk, and one new test case cites the first change label. Without
+      change labels, it gives only the overview.
+    - `no_risks`: the same without the risk, so the checklist item names only the path.
+    - `partly_invalid`: `ok` plus a risk citing the unknown label `E999`, which the checklist
+      item also refers to.
+    - `invalid_citations`: every summary point, risk, and new test case cites `E999`, on every
+      call.
     - `unavailable` and `refusal`: raise `ProviderUnavailable` and `ProviderRefused`.
 
     `calls` counts every call, including those that raise, and `prompts` records the user
@@ -407,11 +419,15 @@ class FakeAnswerModel:
         ]
         change_labels = [label for _, label in sides]
         before_labels = [label for side, label in sides if side == "before"]
+        paths = [html.unescape(path) for path in _CHANGE_PATH.findall(user_content)]
         points: list[SummaryPoint] = []
         risks: list[RiskOut] = []
+        checklist: list[ChecklistItem] = []
+        cases: list[NewTestCase] = []
         if mode == "invalid_citations":
             points.append(_fake_summary_point(UNKNOWN_REVIEW_LABEL))
             risks.append(_fake_risk(UNKNOWN_REVIEW_LABEL, "low"))
+            cases.append(_fake_test_case(UNKNOWN_REVIEW_LABEL))
         elif change_labels:
             points.append(_fake_summary_point(change_labels[0]))
             if mode != "no_risks":
@@ -420,12 +436,17 @@ class FakeAnswerModel:
                     if before_labels
                     else _fake_risk(change_labels[0], "low")
                 )
+            cases.append(_fake_test_case(change_labels[0]))
         if mode == "partly_invalid":
             risks.append(_fake_risk(UNKNOWN_REVIEW_LABEL, "medium"))
+        if change_labels and paths and mode != "invalid_citations":
+            checklist.append(_fake_checklist_item(paths[0], list(range(len(risks)))))
         output = ReviewOutput(
             overview="The pull request changes the code shown in the diff.",
             summary_points=points,
             risks=risks,
+            checklist=checklist,
+            new_test_cases=cases,
         )
         return ReviewResult(output=output, parse_error=None, usage=FAKE_USAGE, model=FAKE_MODEL)
 
@@ -445,6 +466,20 @@ def _fake_risk(label: str, severity: Severity) -> RiskOut:
         explanation="The cited lines change how a request is checked.",
         suggested_check="Confirm that the check still refuses requests it refused before.",
         evidence_ids=[label],
+    )
+
+
+def _fake_checklist_item(path: str, risk_indexes: list[int]) -> ChecklistItem:
+    return ChecklistItem(
+        text="Confirm that the changed checks still refuse what they refused before.",
+        paths=[path],
+        risk_indexes=risk_indexes,
+    )
+
+
+def _fake_test_case(label: str) -> NewTestCase:
+    return NewTestCase(
+        behavior="A user without a write role is refused.", location_hint="", evidence_ids=[label]
     )
 
 

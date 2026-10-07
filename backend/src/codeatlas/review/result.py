@@ -9,6 +9,11 @@ Two kinds of item come from rules, not the model: a `high` `security` risk per c
 credential file, which names the file but never cites its content, and a summary point per file
 renamed without changes, which has no changed lines to cite.
 
+Checklist items keep only the reviewed files they name, and their risk indexes, positions in the
+model's risk list, become the numbered risk identifiers. An item left with neither is dropped and
+counted in `omitted_items`. The changed and candidate tests come from the change and the head
+tree (research R5), never from the model; a candidate cites its test excerpt when it has one.
+
 The result is the JSON stored in `analysis_runs.result` (data-model.md, "Review result shape").
 """
 
@@ -16,9 +21,10 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from codeatlas.review.context import CandidateTest, ChangedTest
 from codeatlas.review.diff import Selection
 from codeatlas.review.evidence import ReviewEvidence
-from codeatlas.review.schema import ChangeKind, ReviewOutput, RiskOut
+from codeatlas.review.schema import ChangeKind, ChecklistItem, NewTestCase, ReviewOutput, RiskOut
 
 ROOT_AREA = "(root)"
 AREA_DIRECTORIES = 2
@@ -91,9 +97,14 @@ def build_result(
     selection: Selection,
     rule_risks: Sequence[Mapping[str, Any]],
     omitted_items: int,
+    changed_tests: Sequence[ChangedTest] = (),
+    candidate_tests: Sequence[CandidateTest] = (),
 ) -> dict[str, Any]:
     """The stored result of a reviewed run. `output` has already been through `drop_invalid`,
-    so every label it cites is one of `evidence`."""
+    so every label it cites is one of `evidence`.
+
+    `omitted_items` counts the items validation dropped; checklist items dropped here are added.
+    """
     paths = {item.label: item.path for item in evidence}
     model_points: list[AreaPoint] = [
         (
@@ -107,25 +118,46 @@ def build_result(
         )
         for point in output.summary_points
     ]
-    risks = _numbered([*(_model_risk(risk) for risk in output.risks), *rule_risks])
+    all_risks = [*(_model_risk(risk) for risk in output.risks), *rule_risks]
+    order = _severity_order(all_risks)
+    risks = [{"id": f"R{number}", **all_risks[position]} for number, position in order]
+    # Checklist risk indexes are positions in the model's risk list, which comes first.
+    risk_ids = {
+        position: f"R{number}" for number, position in order if position < len(output.risks)
+    }
+    reviewed = {
+        path for file in selection.reviewed for path in (file.path, file.previous_path) if path
+    }
+    checklist = [
+        item
+        for item in (_checklist_item(item, reviewed, risk_ids) for item in output.checklist)
+        if item["paths"] or item["risk_ids"]
+    ]
     context_items = sum(1 for item in evidence if item.source_type != "change")
+    excerpts = {item.path: item.label for item in evidence if item.source_type == "test"}
     return {
         "overall_risk": _overall_risk(risks, selection),
         "overview": output.overview,
         "summary": _grouped([*model_points, *rule_summary_points(selection)]),
         "risks": risks,
-        "checklist": [],
-        "tests": _empty_tests(),
+        "checklist": checklist,
+        "tests": {
+            "changed": _changed_tests(changed_tests),
+            "candidates": [_candidate(candidate, excerpts) for candidate in candidate_tests],
+            "new_cases": [_new_case(case) for case in output.new_test_cases],
+        },
         "coverage": _coverage(selection, context_items=context_items),
-        "omitted_items": omitted_items,
+        "omitted_items": omitted_items + len(output.checklist) - len(checklist),
     }
 
 
 def nothing_to_review_result(
-    selection: Selection, rule_risks: Sequence[Mapping[str, Any]]
+    selection: Selection,
+    rule_risks: Sequence[Mapping[str, Any]],
+    changed_tests: Sequence[ChangedTest] = (),
 ) -> dict[str, Any]:
     """The result when no changed file could be reviewed (FR-020): no model text, only rule
-    risks and the coverage."""
+    risks, the changed tests, and the coverage."""
     risks = _numbered(rule_risks)
     return {
         "overall_risk": _overall_risk(risks, selection),
@@ -133,7 +165,7 @@ def nothing_to_review_result(
         "summary": [],
         "risks": risks,
         "checklist": [],
-        "tests": _empty_tests(),
+        "tests": {"changed": _changed_tests(changed_tests), "candidates": [], "new_cases": []},
         "coverage": _coverage(selection, context_items=0),
         "omitted_items": 0,
     }
@@ -154,8 +186,48 @@ def _model_risk(risk: RiskOut) -> dict[str, Any]:
 
 
 def _numbered(risks: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    ordered = sorted(risks, key=lambda risk: SEVERITY_ORDER[risk["severity"]])  # stable
-    return [{"id": f"R{number}", **risk} for number, risk in enumerate(ordered, start=1)]
+    return [{"id": f"R{number}", **risks[position]} for number, position in _severity_order(risks)]
+
+
+def _severity_order(risks: Sequence[Mapping[str, Any]]) -> list[tuple[int, int]]:
+    """(number, position) for each risk, by severity and then position: `R<number>` is the
+    identifier of `risks[position]`."""
+    positions = sorted(
+        range(len(risks)), key=lambda position: SEVERITY_ORDER[risks[position]["severity"]]
+    )
+    return list(enumerate(positions, start=1))
+
+
+def _checklist_item(
+    item: ChecklistItem, reviewed: set[str], risk_ids: Mapping[int, str]
+) -> dict[str, Any]:
+    """The item with only the reviewed paths it names and the identifiers of its risks, each
+    once, in the model's order."""
+    paths = [path for path in dict.fromkeys(item.paths) if path in reviewed]
+    ids = dict.fromkeys(risk_ids[index] for index in item.risk_indexes if index in risk_ids)
+    return {"text": item.text, "paths": paths, "risk_ids": list(ids)}
+
+
+def _new_case(case: NewTestCase) -> dict[str, Any]:
+    return {
+        "behavior": case.behavior,
+        "location_hint": case.location_hint.strip() or None,
+        "evidence_ids": list(case.evidence_ids),
+    }
+
+
+def _candidate(candidate: CandidateTest, excerpts: Mapping[str, str]) -> dict[str, Any]:
+    """A candidate test, citing its test excerpt when the excerpt was kept as evidence."""
+    label = excerpts.get(candidate.path)
+    return {
+        "path": candidate.path,
+        "reason": candidate.reason,
+        "evidence_ids": [label] if label else [],
+    }
+
+
+def _changed_tests(tests: Sequence[ChangedTest]) -> list[dict[str, Any]]:
+    return [{"path": test.path, "change": test.change} for test in tests]
 
 
 def _overall_risk(risks: Sequence[Mapping[str, Any]], selection: Selection) -> dict[str, Any]:
@@ -186,8 +258,3 @@ def _coverage(selection: Selection, *, context_items: int) -> dict[str, Any]:
         "changed_lines_reviewed": selection.changed_lines_reviewed,
         "context_items": context_items,
     }
-
-
-def _empty_tests() -> dict[str, list[dict[str, Any]]]:
-    # Changed and candidate tests and new test cases are filled in by User Story 2.
-    return {"changed": [], "candidates": [], "new_cases": []}

@@ -1,4 +1,5 @@
-"""Changed declarations, module names, and related code found by name (research R5)."""
+"""Changed declarations, module names, related code, and candidate and changed tests found by
+name (research R5)."""
 
 import io
 import tarfile
@@ -6,7 +7,15 @@ from collections.abc import Mapping
 from typing import IO
 
 from codeatlas.config import Settings
-from codeatlas.review.context import changed_declarations, module_names, related_code
+from codeatlas.review.context import (
+    CandidateTest,
+    ChangedTest,
+    candidate_tests,
+    changed_declarations,
+    changed_tests,
+    module_names,
+    related_code,
+)
 from codeatlas.review.diff import ChangedFile, Tree, changed_files, read_tree
 
 TOP = "octo-org-review-app-abc1234"
@@ -251,3 +260,159 @@ def test_no_names_give_no_related_code() -> None:
     head = _tree({"app/caller.py": b"can_write\n"})
 
     assert related_code(head, [], [], []) == []
+
+
+# candidate_tests -----------------------------------------------------------------------------
+
+
+def test_candidate_tests_refer_to_a_changed_name_or_module() -> None:
+    unchanged = {
+        "tests/test_permissions.py": b"from app.auth.permissions import User, can_write\n",
+        "tests/test_imports.py": b"import app.auth.permissions\n",
+        "tests/test_other.py": b"def test_nothing():\n    pass\n",
+        "app/repositories.py": b"from app.auth.permissions import can_write\n",
+    }
+    head = {"app/auth/permissions.py": HEAD_PERMISSIONS, **unchanged}
+    files = _changes({"app/auth/permissions.py": BASE_PERMISSIONS, **unchanged}, head)
+
+    candidates = candidate_tests(
+        _tree(head), files, ["can_write"], ["permissions", "app.auth.permissions"]
+    )
+
+    # Ranked by the number of distinct names, as related code is; the reason names the first
+    # name found, declarations before modules. Code that is not a test is never a candidate.
+    assert [(item.path, item.reason) for item in candidates] == [
+        ("tests/test_permissions.py", "refers to `can_write`"),
+        ("tests/test_imports.py", "refers to `permissions`"),
+    ]
+
+
+def test_candidate_tests_named_after_a_changed_file() -> None:
+    head = _tree(
+        {
+            "tests/test_text.py": b"def test_nothing():\n    pass\n",
+            "app/text_test.py": b"pass\n",
+            "web/src/format.test.ts": b"it('works', () => {});\n",
+            "web/src/__tests__/format.spec.tsx": b"it('renders', () => {});\n",
+            "tests/test_other.py": b"pass\n",
+            "web/src/text.test.ts": b"pass\n",  # a TypeScript test is not named after Python
+        }
+    )
+    files = [
+        _file("app/text.py"),
+        _file("web/src/format.ts", "typescript"),
+        _file("README.md", "markdown"),
+    ]
+
+    candidates = candidate_tests(head, files, [], [])
+
+    assert [(item.path, item.reason) for item in candidates] == [
+        ("app/text_test.py", "named after `app/text.py`"),
+        ("tests/test_text.py", "named after `app/text.py`"),
+        ("web/src/__tests__/format.spec.tsx", "named after `web/src/format.ts`"),
+        ("web/src/format.test.ts", "named after `web/src/format.ts`"),
+    ]
+
+
+def test_candidate_tests_skip_changed_tests() -> None:
+    base = {"tests/test_permissions.py": b"from app.auth.permissions import can_write\n"}
+    head = {
+        "app/auth/permissions.py": HEAD_PERMISSIONS,
+        "tests/test_permissions.py": b"from app.auth.permissions import can_write  # edited\n",
+    }
+    files = _changes({"app/auth/permissions.py": BASE_PERMISSIONS, **base}, head)
+
+    assert candidate_tests(_tree(head), files, ["can_write"], ["permissions"]) == []
+
+
+def test_references_come_first_and_at_most_10_candidates_are_kept() -> None:
+    references = {f"tests/test_ref_{index:02d}.py": b"can_write\n" for index in range(9)}
+    head = _tree(
+        {**references, "tests/test_text.py": b"pass\n", "tests/test_zz.py": b"can_write\n"}
+    )
+    files = [_file("app/text.py")]
+
+    candidates = candidate_tests(head, files, ["can_write"], [])
+
+    assert [item.path for item in candidates] == [*references, "tests/test_zz.py"]
+    assert len(candidate_tests(head, files, ["can_write"], [], max_tests=11)) == 11
+    assert candidate_tests(head, files, ["can_write"], [], max_tests=11)[-1] == CandidateTest(
+        path="tests/test_text.py",
+        reason="named after `app/text.py`",
+        excerpt=None,  # only the top 5 candidates give an excerpt
+    )
+
+
+def test_a_test_both_referring_and_named_after_gives_the_reference() -> None:
+    head = _tree({"tests/test_text.py": b"from app.text import slugify\n"})
+
+    [candidate] = candidate_tests(head, [_file("app/text.py")], ["slugify"], ["text"])
+
+    assert candidate.reason == "refers to `slugify`"
+
+
+def test_the_top_5_candidates_give_excerpts_built_like_related_code() -> None:
+    content = _numbered(60, {20: "assert can_write(owner, 7)", 24: "assert can_write(o, 8)"})
+    head = _tree(
+        {
+            "tests/test_a.py": content,
+            **{f"tests/test_b{index}.py": b"can_write\n" for index in range(5)},
+        }
+    )
+
+    candidates = candidate_tests(head, [], ["can_write"], [])
+
+    assert [item.excerpt is not None for item in candidates] == [True] * 5 + [False]
+    excerpt = candidates[0].excerpt
+    assert excerpt is not None
+    assert (excerpt.path, excerpt.start_line, excerpt.end_line) == ("tests/test_a.py", 14, 30)
+    assert excerpt.excerpt == "\n".join(content.decode().split("\n")[13:30])
+    assert excerpt.names == ("can_write",)
+
+
+def test_a_test_named_after_a_file_without_a_match_gives_its_first_lines() -> None:
+    content = _numbered(30, {})
+    head = _tree({"tests/test_text.py": content})
+
+    [candidate] = candidate_tests(head, [_file("app/text.py")], [], [])
+
+    assert candidate.excerpt is not None
+    assert (candidate.excerpt.start_line, candidate.excerpt.end_line) == (1, 13)
+    assert candidate.excerpt.names == ()
+
+
+def test_no_names_and_no_changed_files_give_no_candidates() -> None:
+    head = _tree({"tests/test_permissions.py": b"can_write\n"})
+
+    assert candidate_tests(head, [], [], []) == []
+
+
+# changed_tests -------------------------------------------------------------------------------
+
+
+def test_changed_tests_list_every_changed_test_file() -> None:
+    files = [
+        _file("app/main.py"),
+        ChangedFile(
+            path="tests/data/logo.png", previous_path=None, change="added", reason="binary"
+        ),
+        ChangedFile(path="tests/old_test.py", previous_path=None, change="removed"),
+        _file("tests/test_new.py", previous_path="tests/test_old.py"),
+        _file("web/src/format.test.ts", "typescript"),
+        ChangedFile(
+            path="tests/node_modules",
+            previous_path=None,
+            change="added",
+            entry_type="directory",
+            count=2,
+            reason="excluded_directory",
+        ),
+    ]
+
+    # Reviewed or not, every changed test file is listed; an excluded directory is not a file.
+    assert changed_tests(files) == [
+        ChangedTest(path="tests/data/logo.png", change="added"),
+        ChangedTest(path="tests/old_test.py", change="removed"),
+        ChangedTest(path="tests/test_new.py", change="renamed"),
+        ChangedTest(path="web/src/format.test.ts", change="modified"),
+    ]

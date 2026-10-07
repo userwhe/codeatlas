@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import IO
 
 from codeatlas.config import Settings
-from codeatlas.review.context import CodeExcerpt
+from codeatlas.review.context import CodeExcerpt, candidate_tests
 from codeatlas.review.diff import Selection, Tree, changed_files, read_tree, select_for_review
 from codeatlas.review.evidence import MAX_LABELS, HunkLabels, ReviewEvidenceSet, build_evidence
 
@@ -200,3 +200,20 @@ def test_a_file_renamed_without_changes_has_no_change_items() -> None:
     assert selection.reviewed[0].change == "renamed"
     assert evidence.items == ()
     assert evidence.hunk_labels == {}
+
+
+def test_the_top_5_candidate_tests_give_test_items() -> None:
+    head = _tree({f"tests/test_{index}.py": b"assert can_write(owner, 7)\n" for index in range(7)})
+    candidates = candidate_tests(head, [], ["can_write"], [])
+    assert len(candidates) == 7
+
+    evidence = _build(
+        tests=[candidate.excerpt for candidate in candidates if candidate.excerpt is not None]
+    )
+
+    tests = [item for item in evidence.items if item.source_type == "test"]
+    assert [item.path for item in tests] == [f"tests/test_{index}.py" for index in range(5)]
+    assert {(item.side, item.commit_sha) for item in tests} == {("after", HEAD_SHA)}
+    assert [item.label for item in tests] == ["E9", "E10", "E11", "E12", "E13"]
+    assert tests[0].excerpt == "assert can_write(owner, 7)"
+    assert evidence.context_items == 7  # 2 related-code items and 5 test items

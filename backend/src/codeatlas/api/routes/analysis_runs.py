@@ -15,13 +15,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from codeatlas.api.deps import CurrentUser, CurrentWorkspace, DbSession, RequestId
-from codeatlas.api.errors import ApiError
+from codeatlas.api.errors import ApiError, not_found
 from codeatlas.api.pagination import PageParams, next_cursor, page_params
 from codeatlas.api.routes.jobs import JobError, job_error
 from codeatlas.github.gateway import get_gateway
 from codeatlas.models import AnalysisRun, Job, User, Workspace
 from codeatlas.qa import runs
 from codeatlas.qa.schema import AnswerOutput, Claim
+from codeatlas.review import markdown
 from codeatlas.review import runs as review_runs
 from codeatlas.review.schema import ChangeKind, RiskBasis, RiskCategory, Severity
 from codeatlas.workspace import repositories as repos
@@ -261,6 +262,12 @@ class ReviewRunOut(BaseModel):
 AnyRunOut = Annotated[RunOut | ReviewRunOut, Field(discriminator="kind")]
 
 
+class ReviewMarkdownOut(BaseModel):
+    # Review text in it is neutralized for pasting into GitHub: mentions and references are
+    # wrapped in inline code, and raw HTML is escaped.
+    markdown: str
+
+
 class RunSummaryOut(BaseModel):
     id: uuid.UUID
     kind: AnalysisKind
@@ -463,3 +470,26 @@ def get_run(
     if run.kind == review_runs.ANALYSIS_KIND:
         return ReviewRunOut.model_validate(review_runs.review_out(db, run))
     return run_out(db, run)
+
+
+@router.get("/analysis-runs/{run_id}/markdown")
+def get_review_markdown(
+    run_id: uuid.UUID,
+    db: DbSession,
+    user: CurrentUser,
+    workspace: CurrentWorkspace,
+    request_id: RequestId,
+) -> ReviewMarkdownOut:
+    """A succeeded review as Markdown, with citations linking to GitHub (FR-015, research R11).
+
+    404 for an answer to a question, and 409 `review_not_finished` until the review succeeds.
+    """
+    run = runs.get_scoped(db, user=user, workspace=workspace, run_id=run_id, request_id=request_id)
+    if run.kind != review_runs.ANALYSIS_KIND:
+        raise not_found()
+    job = db.get(Job, run.job_id) if run.job_id is not None else None
+    if run.result is None or job is None or job.status != "succeeded":
+        raise ApiError(409, "review_not_finished", "The review has not finished.")
+    return ReviewMarkdownOut(
+        markdown=markdown.render(run, run.result, review_runs.citations(db, run))
+    )
