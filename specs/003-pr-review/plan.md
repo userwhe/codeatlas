@@ -175,6 +175,7 @@ backend/
 │       ├── quotas.py                # reserve_review, refund_review
 │       └── audit.py                 # pull_request_review_submit
 ├── tests/
+│   ├── fixtures/repos/review-app/   # new: fixture repository with tests
 │   ├── fixtures/pull-requests/      # new: overlays and README
 │   ├── unit/                        # test_review_diff.py, test_review_context.py, test_review_evidence.py,
 │   │                                # test_review_validation.py, test_review_result.py, test_review_markdown.py,

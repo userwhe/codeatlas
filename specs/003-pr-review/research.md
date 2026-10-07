@@ -115,7 +115,8 @@ Documented facts this relies on:
     same network.
   - Implementation verifies the plain `SHA...SHA` form against a real fork pull request. If GitHub
     refuses it for a fork head, the owner-qualified form is used.
-- **Failures**:
+- **Failures**: the access check runs first (R9). After it passes, a not-found answer from the
+  comparison or an archive means the commit is gone, not that access was lost.
   - A pinned commit that GitHub no longer serves (for example, after a force push and garbage
     collection) fails the run with `commit_unavailable`, permanently.
   - Commits with no common ancestor fail the run with `no_common_history`, permanently.
@@ -347,8 +348,9 @@ commit, as FR-016 requires, while the model still sees each hunk as one diff.
   - Validation errors trigger one repair call with the errors.
   - If the repaired output parses but still has invalid items, those items are dropped and counted
     in `omitted_items`, which the page shows (FR-016).
-  - If it does not parse, the run fails with `review_validation_failed`. This is permanent for the
-    job, and the user may request a new review.
+  - The run fails with `review_validation_failed` if the repaired output does not parse, or if no
+    valid summary point or overview remains. This is permanent for the job, and the user may
+    request a new review.
 - **Failures**: as in 001. Provider outages end as `provider_unavailable` and are retryable
   (FR-028). Safety blocks end as `model_refused`.
 - **Deadline**: 5 minutes from the first start (FR-028).
@@ -511,16 +513,20 @@ conventions.
 **Decision**:
 
 - **Fake GitHub**:
-  - Pull requests on `octo-org/sample-app` (2001) and `octo-org/sample-app-private` (2002). Each
-    head commit is built in code from an overlay under `backend/tests/fixtures/pull-requests/<name>/`
-    (files to write, plus a list of paths to remove or rename) on top of the `second` commit.
+  - A new fixture repository, `backend/tests/fixtures/repos/review-app/`: a small Python and
+    TypeScript app with tests. It is served as `octo-org/review-app` (2011) and
+    `octo-org/review-app-private` (2012), so the 001 and 002 fixtures and their coverage
+    assertions stay unchanged.
+  - Pull requests on both repositories. Each head commit is built in code from an overlay under
+    `backend/tests/fixtures/pull-requests/<name>/` (files to write, plus paths to remove or
+    rename) on top of the repository's `initial` commit, which is also the merge base.
   - Fixtures:
 
     | Pull request | Contents |
     | --- | --- |
-    | Seeded defect | Removes the permission check in `app/auth/access.py` and adds no test |
-    | Tested change | Edits `src/utils/format.ts` and adds a matching test |
-    | Fork | Head repository `hubot/sample-app` |
+    | Seeded defect | Removes the role check in `app/auth/permissions.py` and adds no test |
+    | Tested change | Edits `web/src/format.ts` and its test |
+    | Fork | Head repository `hubot/review-app` |
     | Credential and binary | Changes a credential file and a binary file. The credential file is injected by the fake, as in 001, not stored |
     | Rename and edit | Renames and edits a file |
     | Large | Generated changes over the review limits |
@@ -534,8 +540,10 @@ conventions.
   - Fixture data is static, so the API and worker processes, which hold separate fakes, agree.
 - **Gateway**: new methods `list_pull_requests`, `get_pull_request`, `compare_commits`, and
   `get_installation_permissions`; `open_tarball` is unchanged.
-- **Fake review model**: `FAKE_REVIEW_MODEL_MODE` is `ok`, `no_risks`, `unavailable`,
-  `invalid_citations`, or `refusal`.
+- **Fake review model**: `FAKE_REVIEW_MODEL_MODE` is `ok`, `no_risks`, `partly_invalid`,
+  `unavailable`, `invalid_citations`, or `refusal`. `partly_invalid` adds one risk with an unknown
+  label, which is dropped and counted; `invalid_citations` cites unknown labels everywhere, so the
+  run fails.
   - In `ok`, it cites the first `change` label from the prompt in one summary point, one risk, and
     one new test case.
   - The risk is `high` when that hunk removes lines, and `low` otherwise.

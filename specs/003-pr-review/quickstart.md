@@ -23,9 +23,9 @@ requirement from 001 applies to private code.
 ## Fake mode
 
 Use the settings from 001 and 002. The fake gateway serves the pull requests listed in
-`backend/tests/fixtures/pull-requests/README.md` on `octo-org/sample-app`. The fake review model
-follows `FAKE_REVIEW_MODEL_MODE` (`ok` by default; also `no_risks`, `unavailable`,
-`invalid_citations`, and `refusal`).
+`backend/tests/fixtures/pull-requests/README.md` on `octo-org/review-app`. The fake review model
+follows `FAKE_REVIEW_MODEL_MODE` (`ok` by default; also `no_risks`, `partly_invalid`,
+`unavailable`, `invalid_citations`, and `refusal`).
 
 ## Automated checks
 
