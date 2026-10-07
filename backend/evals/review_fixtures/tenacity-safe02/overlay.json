@@ -1,0 +1,44 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/stop.py",
+      "find": "        return retry_state.attempt_number >= self.max_attempt_number",
+      "replace": [
+        "        return retry_state.attempt_number >= self.max_attempt_number",
+        "",
+        "    @override",
+        "    def __repr__(self) -> str:",
+        "        return f\"stop_after_attempt({self.max_attempt_number})\""
+      ]
+    },
+    {
+      "path": "tenacity/stop.py",
+      "find": "        return retry_state.seconds_since_start >= self.max_delay",
+      "replace": [
+        "        return retry_state.seconds_since_start >= self.max_delay",
+        "",
+        "    @override",
+        "    def __repr__(self) -> str:",
+        "        return f\"stop_after_delay({self.max_delay})\""
+      ]
+    },
+    {
+      "path": "tests/test_tenacity.py",
+      "find": "    def test_stop_after_delay(self) -> None:",
+      "replace": [
+        "    def test_stop_after_attempt_repr(self) -> None:",
+        "        self.assertEqual(",
+        "            repr(tenacity.stop_after_attempt(3)), \"stop_after_attempt(3)\"",
+        "        )",
+        "",
+        "    def test_stop_after_delay_repr(self) -> None:",
+        "        self.assertEqual(",
+        "            repr(tenacity.stop_after_delay(datetime.timedelta(seconds=1.5))),",
+        "            \"stop_after_delay(1.5)\",",
+        "        )",
+        "",
+        "    def test_stop_after_delay(self) -> None:"
+      ]
+    }
+  ]
+}

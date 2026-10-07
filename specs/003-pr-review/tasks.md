@@ -928,21 +928,22 @@ documentation, real-GitHub checks, and final validation
     the review heading.
   - Return to the repository page. #1 shows "Current", and "View review" opens the same review.
   - Confirm that .github/workflows/ci.yml's `e2e` job runs every spec in frontend/tests/e2e.
-- [ ] T058 [P] Draft the evaluation set (research R14), marked as a draft for human review:
+- [X] T058 [P] Draft the evaluation set (research R14), marked as a draft for human review:
   - Create backend/evals/review_v1.jsonl and the overlays in backend/evals/review_fixtures/<id>/.
   - Each item holds:
     - `id`;
     - `repository` and `commit_sha`, one of the pinned repositories of
       backend/evals/qa_v1.jsonl;
     - `title` and `body`;
-    - the overlay (`files/`, `remove`, `rename`);
+    - the overlay, in `review_fixtures/<overlay>/overlay.json`: find-and-replace `edits`, `add`,
+      `remove`, and `rename`, so upstream files are never copied;
     - `labels`: either `{"kind": "seeded", "defects": [{"path", "side", "start_line", "end_line", "category"}]}`,
       `{"kind": "safe"}`, or `{"kind": "injection", "defects": [...]}`.
   - Composition: at least 20 seeded-defect pull requests spread over the categories, each with at
     least one labeled defect; at least 5 safe changes that include tests; and at least 5 injection
     variants of seeded items.
   - Document the format in backend/evals/README.md.
-- [ ] T059 Write the evaluation runner, backend/evals/run_review_eval.py, with options `--set`,
+- [X] T059 Write the evaluation runner, backend/evals/run_review_eval.py, with options `--set`,
   `--limit`, `--fixtures`, and `--out`:
   - It downloads each pinned base archive once from
     `https://codeload.github.com/{full_name}/tar.gz/{sha}` into `backend/evals/out/cache/`, which

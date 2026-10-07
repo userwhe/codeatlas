@@ -1,0 +1,22 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/retry.py",
+      "find": [
+        "            exc = retry_state.outcome.exception()",
+        "            # Guard against cyclic __cause__ chains (e.g. ``raise e from e``),",
+        "            # which would otherwise spin forever inside the predicate and",
+        "            # prevent stop conditions from ever running (see #658).",
+        "            seen: set[int] = set()",
+        "            while exc is not None and id(exc) not in seen:",
+        "                seen.add(id(exc))",
+        "                if isinstance(exc.__cause__, self.exception_cause_types):"
+      ],
+      "replace": [
+        "            exc = retry_state.outcome.exception()",
+        "            while exc is not None:",
+        "                if isinstance(exc.__cause__, self.exception_cause_types):"
+      ]
+    }
+  ]
+}

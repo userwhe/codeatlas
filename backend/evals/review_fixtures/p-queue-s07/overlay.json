@@ -1,0 +1,16 @@
+{
+  "edits": [
+    {
+      "path": "source/index.ts",
+      "find": [
+        "\t\t\t\tthis.emit('active');",
+        "\t\t\t\tjob();"
+      ],
+      "replace": [
+        "\t\t\t\tthis.emit('active');",
+        "\t\t\t\tconsole.log(`[p-queue] starting task (pending: ${this.#pending}, queued: ${this.#queue.size})`);",
+        "\t\t\t\tjob();"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "edits": [
+    {
+      "path": "src/fetch.ts",
+      "find": "            const parseFunction = context.options.parseResponse || JSON.parse;",
+      "replace": [
+        "            const parseFunction =",
+        "              context.options.parseResponse ||",
+        "              ((text: string) =>",
+        "                JSON.parse(text, (_key, value) =>",
+        "                  typeof value === \"string\" && /^-?\\d+(\\.\\d+)?$/.test(value)",
+        "                    ? Number(value)",
+        "                    : value",
+        "                ));"
+      ]
+    }
+  ]
+}

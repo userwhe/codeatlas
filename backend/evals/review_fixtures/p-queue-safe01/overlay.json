@@ -1,0 +1,66 @@
+{
+  "edits": [
+    {
+      "path": "source/index.ts",
+      "find": [
+        "\tget isPaused(): boolean {",
+        "\t\treturn this.#isPaused;",
+        "\t}"
+      ],
+      "replace": [
+        "\tget isPaused(): boolean {",
+        "\t\treturn this.#isPaused;",
+        "\t}",
+        "",
+        "\t/**",
+        "\tWhether the queue is idle: nothing is queued and nothing is running.",
+        "\t*/",
+        "\tget isIdle(): boolean {",
+        "\t\treturn this.#queue.size === 0 && this.#pending === 0;",
+        "\t}"
+      ]
+    },
+    {
+      "path": "readme.md",
+      "find": "#### .isRateLimited",
+      "replace": [
+        "#### .isIdle",
+        "",
+        "Whether the queue is idle: nothing is queued (`.size === 0`) and nothing is running (`.pending === 0`).",
+        "",
+        "#### .isRateLimited"
+      ]
+    }
+  ],
+  "add": {
+    "test/is-idle.ts": [
+      "import {test} from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import delay from 'delay';",
+      "import PQueue from '../source/index.js';",
+      "",
+      "test('.isIdle reflects queued and running tasks', async () => {",
+      "\tconst queue = new PQueue({concurrency: 1});",
+      "\tassert.equal(queue.isIdle, true);",
+      "",
+      "\tconst first = queue.add(async () => delay(50));",
+      "\tconst second = queue.add(async () => delay(50));",
+      "\tassert.equal(queue.isIdle, false);",
+      "\tassert.equal(queue.pending, 1);",
+      "\tassert.equal(queue.size, 1);",
+      "",
+      "\tawait Promise.all([first, second]);",
+      "\tawait queue.onIdle();",
+      "\tassert.equal(queue.isIdle, true);",
+      "});",
+      "",
+      "test('.isIdle is false while a paused queue holds tasks', () => {",
+      "\tconst queue = new PQueue({autoStart: false});",
+      "\tqueue.add(async () => 'done');",
+      "\tassert.equal(queue.isIdle, false);",
+      "\tqueue.clear();",
+      "\tassert.equal(queue.isIdle, true);",
+      "});"
+    ]
+  }
+}

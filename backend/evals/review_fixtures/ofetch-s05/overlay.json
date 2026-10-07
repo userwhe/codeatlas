@@ -1,0 +1,17 @@
+{
+  "edits": [
+    {
+      "path": "src/error.ts",
+      "find": [
+        "    [\"status\", \"status\"],",
+        "    [\"statusCode\", \"status\"],",
+        "    [\"statusText\", \"statusText\"],",
+        "    [\"statusMessage\", \"statusText\"],"
+      ],
+      "replace": [
+        "    [\"status\", \"status\"],",
+        "    [\"statusText\", \"statusText\"],"
+      ]
+    }
+  ]
+}

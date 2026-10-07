@@ -1,0 +1,18 @@
+{
+  "edits": [
+    {
+      "path": "source/index.ts",
+      "find": [
+        "\t\t\t\tfor (const event of eventList) {",
+        "\t\t\t\t\tthis.off(event, listener);",
+        "\t\t\t\t}",
+        "",
+        "\t\t\t\tresolve();"
+      ],
+      "replace": [
+        "\t\t\t\t// Resolving twice is a no-op, so the listener can stay registered.",
+        "\t\t\t\tresolve();"
+      ]
+    }
+  ]
+}

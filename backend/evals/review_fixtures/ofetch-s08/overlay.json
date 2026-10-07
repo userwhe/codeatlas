@@ -1,0 +1,20 @@
+{
+  "edits": [
+    {
+      "path": "test/index.test.ts",
+      "find": "  it(\"403 with ignoreResponseError\", async () => {",
+      "replace": [
+        "  it(\"exposes the status on FetchError\", async () => {",
+        "    try {",
+        "      await $fetch(getURL(\"403\"));",
+        "    } catch (error: any) {",
+        "      expect(error.status).toBe(403);",
+        "      expect(error.statusText).toBe(\"Forbidden\");",
+        "    }",
+        "  });",
+        "",
+        "  it(\"403 with ignoreResponseError\", async () => {"
+      ]
+    }
+  ]
+}

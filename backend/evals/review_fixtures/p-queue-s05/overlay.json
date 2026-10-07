@@ -1,0 +1,31 @@
+{
+  "edits": [
+    {
+      "path": "source/index.ts",
+      "find": [
+        "\tonError(): Promise<never> {",
+        "\t\treturn new Promise<never>((_resolve, reject) => {",
+        "\t\t\tconst handleError = (error: unknown) => {",
+        "\t\t\t\tthis.off('error', handleError);",
+        "\t\t\t\treject(error);",
+        "\t\t\t};",
+        "",
+        "\t\t\tthis.on('error', handleError);",
+        "\t\t});",
+        "\t}"
+      ],
+      "replace": [
+        "\tonError(): Promise<never> {",
+        "\t\tconst {promise, reject} = Promise.withResolvers<never>();",
+        "\t\tconst handleError = (error: unknown) => {",
+        "\t\t\tthis.off('error', handleError);",
+        "\t\t\treject(error);",
+        "\t\t};",
+        "",
+        "\t\tthis.on('error', handleError);",
+        "\t\treturn promise;",
+        "\t}"
+      ]
+    }
+  ]
+}

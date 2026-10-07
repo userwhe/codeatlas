@@ -1,0 +1,12 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/after.py",
+      "find": "            f\"Finished call to '{fn_name}' \"",
+      "replace": [
+        "            f\"Finished call to '{fn_name}' \"",
+        "            f\"with args={retry_state.args!r} kwargs={retry_state.kwargs!r} \""
+      ]
+    }
+  ]
+}

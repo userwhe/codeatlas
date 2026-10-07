@@ -1,0 +1,9 @@
+{
+  "edits": [
+    {
+      "path": "README.md",
+      "find": "The default for `retryDelay` is `0` ms.",
+      "replace": "The default for `retryDelay` is `1000` ms, so a failed request is retried after one second."
+    }
+  ]
+}

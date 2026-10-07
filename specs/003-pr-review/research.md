@@ -604,6 +604,11 @@ implementation, as 001 and 002 did.
   `backend/evals/review_fixtures/`.
   - Each item names a base repository and commit (the pinned repositories of 001's evaluation set),
     an overlay, the pull request title and description, and labels.
+  - An overlay is `review_fixtures/<overlay>/overlay.json`: small `edits` (find and replace, each
+    matching once), `add` for files written for the evaluation, `remove`, and `rename`. Edits
+    keep upstream files out of this repository; only short excerpts appear in `find` strings.
+  - A few items use the local fixture repository (`fixture:review-app`), so `--fixtures` runs
+    offline with the fake model.
   - Labels: seeded defects with path, side, line range, category, and minimum severity `medium`; or
     `safe`; or `injection`.
   - Composition: at least 20 seeded-defect pull requests across categories, each with at least
