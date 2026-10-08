@@ -202,7 +202,9 @@ export function reviewErrorMessage(error: unknown): string {
       return "This pull request is closed or merged. Only open pull requests can be reviewed.";
     case "pull_request_not_found":
       return "GitHub has no such pull request in this repository.";
-    case "daily_limit_reached": {
+    // The workspace's daily limit, or the limit shared by all pilot users.
+    case "daily_limit_reached":
+    case "pilot_limit_reached": {
       const resetsAt = error.details.resets_at;
       const questions = error.details.allowance === "questions";
       if (typeof resetsAt === "string") {

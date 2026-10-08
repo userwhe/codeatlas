@@ -92,12 +92,20 @@ _USERS = {
         name="Hubot",
         avatar_url="https://avatars.githubusercontent.com/u/1002?v=4",
     ),
+    # Has no installation of the App: the user outside the pilot's access list in the tests.
+    "monalisa": GitHubUser(
+        id=1003,
+        login="monalisa",
+        name="Mona Lisa",
+        avatar_url="https://avatars.githubusercontent.com/u/1003?v=4",
+    ),
 }
 _INITIAL_INSTALLATIONS = {"octo-org": 5001, "octocat": 5002, "hubot": 5003}
 _ORGANIZATIONS = frozenset({"octo-org"})
 _INITIAL_ACCESS = {
     "octocat": {2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2011, 2012},
     "hubot": {SAMPLE_APP_ID, HUBOT_TOOLS_ID, REVIEW_APP_ID},
+    "monalisa": set(),
 }
 # The App's repository permissions. An installation has them all unless one is withheld.
 _PERMISSIONS = ("contents", "metadata", "pull_requests")
@@ -699,6 +707,14 @@ class FakeGitHub:
     def get_authenticated_user(self, user_token: str) -> GitHubUser:
         self._call("get_authenticated_user")
         return _USERS[self._login_for(user_token)]
+
+    def get_user_by_login(self, login: str) -> GitHubUser:
+        self._call("get_user_by_login")
+        # As on GitHub, logins match without regard to case.
+        user = _USERS.get(login.lower())
+        if user is None:
+            raise GitHubNotFound(f"user {login} not found")
+        return user
 
     def list_accessible_repositories(self, user_token: str) -> list[GitHubRepository]:
         self._call("list_accessible_repositories")

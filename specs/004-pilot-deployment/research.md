@@ -226,9 +226,11 @@ an in-memory window is exact. It needs no new dependency or service, and unit te
   their own origin for OAuth callbacks and the Origin check. It also writes `DATABASE_URL` and
   `METRICS_ENVIRONMENT`, and forces `EMIT_METRICS=0` outside the pilot, so the drill adds no
   metrics even though it inherits the pilot's setting.
-- **Quoting**: Compose interpolates `$` in unquoted `env_file` values and cuts a value at ` #`, so
-  render-config writes every value in single quotes (a `'` inside a value becomes `'\''`), which
-  Compose takes literally. Generated secrets use only hexadecimal or URL-safe Base64 characters.
+- **Quoting**: Compose interpolates `$` in unquoted `env_file` values and cuts a value at ` #`,
+  and its env-file parser rejects the shell's `'\''` form inside single quotes. render-config
+  therefore writes every value double-quoted, escaping `\`, `"`, and `$` (as `$$`); a test reads
+  tricky values back through Compose. Generated secrets use only hexadecimal or URL-safe Base64
+  characters.
 - **Startup validation** (FR-009): in production, `Settings` collects every missing required
   setting and raises one error that lists their names: the GitHub App settings, a readable private
   key file, the webhook secret, the token encryption key, both model provider keys, an `https`

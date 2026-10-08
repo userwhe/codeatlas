@@ -84,9 +84,15 @@ export function useAskQuestion() {
   });
 }
 
-/** A message for a failed submission; the daily limit message includes the local reset time. */
+/**
+ * A message for a failed submission. The messages for the workspace's daily limit and the
+ * pilot-wide daily limit include the local reset time.
+ */
 export function questionErrorMessage(error: unknown): string {
-  if (error instanceof ApiError && error.code === "daily_limit_reached") {
+  if (
+    error instanceof ApiError &&
+    (error.code === "daily_limit_reached" || error.code === "pilot_limit_reached")
+  ) {
     const resetsAt = error.details.resets_at;
     if (typeof resetsAt === "string") {
       const local = new Date(resetsAt).toLocaleString();

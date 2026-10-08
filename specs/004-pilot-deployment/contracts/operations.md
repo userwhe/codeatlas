@@ -56,7 +56,8 @@ replacement needs `ALTER ROLE` first, as the operations guide describes); read o
 "Production" means `CODEATLAS_ENV=production`. Derived by render-config, never stored in SSM:
 `APP_ORIGIN=https://<hostname>`, `DATABASE_URL`, `GITHUB_APP_PRIVATE_KEY_PATH`, and
 `METRICS_ENVIRONMENT=<environment>`. Outside the pilot it forces `EMIT_METRICS=0`. Every value is
-written single-quoted, which Compose takes literally.
+written double-quoted, with `\`, `"`, and `$` escaped (`$` as `$$`), so Compose reads it back
+exactly; Compose's env-file parser does not accept the shell's `'\''` form inside single quotes.
 
 ## Host layout
 

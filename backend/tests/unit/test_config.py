@@ -1,9 +1,11 @@
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from codeatlas.config import Settings
+from tests.unit.test_production_settings import production_values
 
 
 def make(**values: object) -> Settings:
@@ -37,17 +39,15 @@ def test_spec_limit_defaults() -> None:
     assert settings.answer_model == "gemini-3.8-flash"
 
 
-def test_webhook_secret_required_in_production() -> None:
+def test_webhook_secret_required_in_production(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="GITHUB_WEBHOOK_SECRET"):
-        make(CODEATLAS_ENV="production", CODEATLAS_FAKE_EXTERNALS=False, GITHUB_WEBHOOK_SECRET="")
+        make(**production_values(tmp_path, GITHUB_WEBHOOK_SECRET=""))
 
 
-def test_webhook_secret_optional_in_development() -> None:
+def test_webhook_secret_optional_in_development(tmp_path: Path) -> None:
     settings = make(CODEATLAS_ENV="development", GITHUB_WEBHOOK_SECRET="")
     assert settings.github_webhook_secret == ""
-    production = make(
-        CODEATLAS_ENV="production", CODEATLAS_FAKE_EXTERNALS=False, GITHUB_WEBHOOK_SECRET="s3cret"
-    )
+    production = make(**production_values(tmp_path, GITHUB_WEBHOOK_SECRET="s3cret"))
     assert production.github_webhook_secret == "s3cret"
 
 

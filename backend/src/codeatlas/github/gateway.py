@@ -167,6 +167,12 @@ class GitHubGateway(Protocol):
 
     def get_authenticated_user(self, user_token: str) -> GitHubUser: ...
 
+    def get_user_by_login(self, login: str) -> GitHubUser:
+        """`GET /users/{login}`, public data read without credentials (specs/004-pilot-deployment,
+        research R13). Raises `GitHubNotFound` for an unknown login.
+        """
+        ...
+
     def list_accessible_repositories(self, user_token: str) -> list[GitHubRepository]:
         """Repositories reachable through the user's installations of the App (connect dialog).
 

@@ -174,7 +174,7 @@ unlisted account sees the invitation page and leaves no rows.
 
 ### Tests for User Story 1 ⚠️ (write first, confirm they fail)
 
-- [ ] T012 [P] [US1] Unit tests for production settings in
+- [X] T012 [P] [US1] Unit tests for production settings in
   backend/tests/unit/test_production_settings.py (FR-009, research R5). Build `Settings` with
   `_env_file=None` and explicit values:
   - A complete production configuration validates. Use a temporary private key file and a
@@ -194,7 +194,7 @@ unlisted account sees the invitation page and leaves no rows.
   - Rewrite the production case in backend/tests/unit/test_config.py (around lines 45 to 51),
     which builds a production configuration with only `GITHUB_WEBHOOK_SECRET`, to use a complete
     configuration, and keep its assertion that a missing webhook secret is refused.
-- [ ] T013 [P] [US1] Unit tests for the rate limiter in backend/tests/unit/test_ratelimit.py
+- [X] T013 [P] [US1] Unit tests for the rate limiter in backend/tests/unit/test_ratelimit.py
   (FR-006, research R4):
   - `SlidingWindowLimiter(limit=3, window_seconds=60, clock=fake_clock)`: three calls for one
     address are allowed; the fourth is refused with `retry_after` equal to the seconds until the
@@ -207,7 +207,7 @@ unlisted account sees the invitation page and leaves no rows.
     third `GET /auth/github/login` returns 429 with `{"error": {"code": "rate_limited", ...}}` and a
     `Retry-After` header; `POST /webhooks/github` is limited the same way and the refused request
     creates no `webhook_deliveries` row; `GET /v1/me`, `/healthz`, and `/readyz` are never limited.
-- [ ] T014 [P] [US1] Unit tests for looking up a user by login:
+- [X] T014 [P] [US1] Unit tests for looking up a user by login:
   - In backend/tests/unit/test_github_users_client.py, with `httpx.MockTransport`:
     `get_user_by_login("octocat")` sends `GET /users/octocat` with no `Authorization` header and
     returns a `GitHubUser`; 404 raises `GitHubNotFound`; 5xx and rate limiting raise
@@ -216,7 +216,7 @@ unlisted account sees the invitation page and leaves no rows.
     new user `monalisa` with no installations; an unknown login raises `GitHubNotFound`; `monalisa`
     can complete the fake sign-in and list their (empty) repositories without an error; the
     existing tests for the `monalisa/public-lib` fixture still pass.
-- [ ] T015 [P] [US1] Integration tests for the access decision in
+- [X] T015 [P] [US1] Integration tests for the access decision in
   backend/tests/integration/test_access_list.py (FR-002, FR-003, data-model.md "Access decision").
   Set `access_list_required` to true with the `settings` fixture:
   - With `octocat` in `pilot_users`, octocat signs in as before, and `pilot_users.github_login` is
@@ -226,7 +226,7 @@ unlisted account sees the invitation page and leaves no rows.
     `github_credentials`, and `sessions`. Exactly one `audit_events` row has action `sign_in`,
     outcome `denied`, and detail `{"reason": "not_invited", "github_login": "monalisa"}`.
   - With the access list off (the test default), monalisa signs in normally.
-- [ ] T016 [P] [US1] Integration tests for the operator commands in
+- [X] T016 [P] [US1] Integration tests for the operator commands in
   backend/tests/integration/test_ops_commands.py (FR-004, contracts/operations.md), calling
   `codeatlas.ops.__main__.main([...])` and checking exit status and output:
   - `pilot-users add octocat --note friend` adds the fake's user ID, login, and note, records
@@ -239,7 +239,7 @@ unlisted account sees the invitation page and leaves no rows.
   - `pilot-users delete-data octocat` exits 1 while octocat is listed. After removal it tombstones
     every connected repository of octocat's workspace through the existing disconnect, deletes the
     `github_credentials` row, revokes sessions, records `pilot_user_delete_data`, and exits 0.
-- [ ] T017 [P] [US1] Integration tests for pilot-wide limits in
+- [X] T017 [P] [US1] Integration tests for pilot-wide limits in
   backend/tests/integration/test_pilot_limits.py (FR-005, research R14), with
   `pilot_daily_question_limit` 2 and `pilot_daily_review_limit` 1 set through the `settings`
   fixture:
@@ -257,7 +257,7 @@ unlisted account sees the invitation page and leaves no rows.
   - When both the workspace and the pilot-wide allowance are used up, the code is
     `pilot_limit_reached`.
   - Browsing (`GET /v1/repositories`) and search still succeed after the limit is reached.
-- [ ] T018 [P] [US1] Playwright tests in frontend/tests/e2e/pilot-access.spec.ts, against the
+- [X] T018 [P] [US1] Playwright tests in frontend/tests/e2e/pilot-access.spec.ts, against the
   stack in fake mode:
   - Opening `/?error=not_invited` shows the heading "CodeAtlas is in a private pilot", the
     explanation, and no "Sign in with GitHub" link.
@@ -269,7 +269,7 @@ unlisted account sees the invitation page and leaves no rows.
 
 ### Implementation for User Story 1
 
-- [ ] T019 [P] [US1] Production validation in backend/src/codeatlas/config.py (FR-009, research R5):
+- [X] T019 [P] [US1] Production validation in backend/src/codeatlas/config.py (FR-009, research R5):
   - Set `hide_input_in_errors=True` in `model_config`. Never log `ValidationError.errors()` or
     `.json()`, which still contain the input.
   - Replace `_webhook_secret_in_production` with one `model_validator(mode="after")` that, in
@@ -281,7 +281,7 @@ unlisted account sees the invitation page and leaves no rows.
     `_fakes_only_outside_production`, so that validator still runs first and the existing test of
     its message keeps passing.
   - Add the property `access_list_enforced` (`env == "production" or access_list_required`).
-- [ ] T020 [P] [US1] Rate limiting (FR-006, research R4):
+- [X] T020 [P] [US1] Rate limiting (FR-006, research R4):
   - Create backend/src/codeatlas/api/ratelimit.py with `SlidingWindowLimiter(limit,
     window_seconds=60, clock=time.monotonic)`: a dict from address to a `deque` of timestamps,
     guarded by a `threading.Lock`; `check(address) -> float | None` returns `None` when allowed or
@@ -292,7 +292,7 @@ unlisted account sees the invitation page and leaves no rows.
     runs first. For paths starting with `/auth/` or `/webhooks/`, it checks `request.client.host`
     and returns `_error_response(request, 429, "rate_limited", "Too many requests. Try again
     later.", retryable=True)` with `Retry-After` (integer seconds) before calling the next handler.
-- [ ] T021 [P] [US1] Look up GitHub users by login:
+- [X] T021 [P] [US1] Look up GitHub users by login:
   - Add `get_user_by_login(self, login: str) -> GitHubUser` to the protocol in
     backend/src/codeatlas/github/gateway.py.
   - Implement it in backend/src/codeatlas/github/client.py as an unauthenticated
@@ -301,7 +301,7 @@ unlisted account sees the invitation page and leaves no rows.
   - In backend/src/codeatlas/github/fake.py, add `monalisa` to `_USERS` (next free fake user ID)
     and `"monalisa": set()` to `_INITIAL_ACCESS`, so calls that index `self._access` by login do
     not raise `KeyError`; implement `get_user_by_login` from `_USERS`.
-- [ ] T022 [US1] Create backend/src/codeatlas/auth/access_list.py (research R13):
+- [X] T022 [US1] Create backend/src/codeatlas/auth/access_list.py (research R13):
   - `is_allowed(db, github_user_id) -> bool`.
   - `add(db, gateway, login, note) -> PilotUser`, `remove(db, login) -> PilotUser`,
     `delete_data(db, login) -> int` (repositories disconnected), and `list_users(db)`.
@@ -316,7 +316,7 @@ unlisted account sees the invitation page and leaves no rows.
     `request_id=None`) for each repository not yet disconnected, calls `forget_github_credential`,
     revokes sessions, and records `pilot_user_delete_data`. The disconnect audit events keep the
     user as actor (data-model.md).
-- [ ] T023 [US1] Enforce the list at sign-in:
+- [X] T023 [US1] Enforce the list at sign-in:
   - In backend/src/codeatlas/auth/github_login.py, right after `get_authenticated_user` in
     `complete_login`, when `get_settings().access_list_enforced` and not
     `access_list.is_allowed(db, github_user.id)`, raise `NotInvited(github_user.login)` (a new
@@ -325,13 +325,13 @@ unlisted account sees the invitation page and leaves no rows.
   - In backend/src/codeatlas/api/routes/auth.py, catch `NotInvited` before the generic handler:
     roll back, record `sign_in` with outcome `denied` and detail `{"reason": "not_invited",
     "github_login": ...}`, commit, delete the state cookie, and redirect to `/?error=not_invited`.
-- [ ] T024 [US1] Operator commands in backend/src/codeatlas/ops/__init__.py and
+- [X] T024 [US1] Operator commands in backend/src/codeatlas/ops/__init__.py and
   backend/src/codeatlas/ops/__main__.py: `python -m codeatlas.ops pilot-users add <login>
   [--note TEXT] | remove <login> | delete-data <login> | list`, with `argparse`, one session per
   command committed on success, `get_gateway()` for lookups, and the exit statuses in
   contracts/operations.md. Errors print one line to stderr. Call `configure_logging()` only under
   `if __name__ == "__main__"`, so tests that call `main([...])` keep their log capture.
-- [ ] T025 [US1] Pilot-wide limits in backend/src/codeatlas/workspace/quotas.py (FR-005, research
+- [X] T025 [US1] Pilot-wide limits in backend/src/codeatlas/workspace/quotas.py (FR-005, research
   R14):
   - Add `_reserve_pilot(db, now, *, counter, limit, allowance, noun)`: the same guarded upsert as
     `_reserve` on `PilotUsageCounter`, raising `ApiError(429, "pilot_limit_reached", f"CodeAtlas
@@ -342,7 +342,7 @@ unlisted account sees the invitation page and leaves no rows.
   - `refund_review` also decrements `PilotUsageCounter.reviews_count` for the same `usage_date`,
     never below zero, and does so before the workspace decrement, so both paths lock the pilot row
     first and cannot deadlock.
-- [ ] T026 [P] [US1] Frontend messages:
+- [X] T026 [P] [US1] Frontend messages:
   - In frontend/src/app/page.tsx and frontend/src/app/sign-in.tsx, when `error === "not_invited"`,
     render the heading "CodeAtlas is in a private pilot" and "Your GitHub account is not on the
     pilot's access list. CodeAtlas did not keep any data from this sign-in." with no sign-in link.
@@ -350,7 +350,7 @@ unlisted account sees the invitation page and leaves no rows.
     frontend/src/lib/api/reviews.ts, handle `pilot_limit_reached` like `daily_limit_reached`:
     the server message plus "New questions can be asked after <local time>." or "New reviews can be
     requested after <local time>."
-- [ ] T027 [P] [US1] Create deploy/Caddyfile (research R3), for `caddy:2.10`:
+- [X] T027 [P] [US1] Create deploy/Caddyfile (research R3), for `caddy:2.10`:
   - A global block with `log default` using the same filter as below, so error logs are filtered
     too.
   - One site block for `{$CODEATLAS_HOSTNAME}`; `encode zstd gzip`; `header
@@ -361,7 +361,7 @@ unlisted account sees the invitation page and leaves no rows.
     `request>headers>Referer`.
   - Check it with `docker run --rm -e CODEATLAS_HOSTNAME=example.com -v "$PWD/deploy:/etc/caddy"
     caddy:2.10 caddy validate --config /etc/caddy/Caddyfile`.
-- [ ] T028 [US1] Create deploy/compose.yml (research R1, R2, R7, R9; contracts/operations.md
+- [X] T028 [US1] Create deploy/compose.yml (research R1, R2, R7, R9; contracts/operations.md
   "Host layout"):
   - `name: codeatlas`. It is run through `codeatlas-compose` with `--project-directory
     /opt/codeatlas`, so relative paths resolve there. Interpolation variables come from
@@ -389,7 +389,7 @@ unlisted account sees the invitation page and leaves no rows.
     `mode: non-blocking`, `max-buffer-size: 4m`. `api` and `worker` depend on `db` being healthy.
   - Check it with `docker compose -f deploy/compose.yml config --quiet`, with placeholder
     variables and empty `runtime/*.env` files.
-- [ ] T029 [P] [US1] Create deploy/render-config.sh `<environment>` (research R5;
+- [X] T029 [P] [US1] Create deploy/render-config.sh `<environment>` (research R5;
   contracts/operations.md "SSM parameters"; `set -euo pipefail`, never `set -x`, never prints a
   value):
   - Read all parameters under `PARAMETERS_PATH` from `/opt/codeatlas/environment` with
@@ -402,13 +402,13 @@ unlisted account sees the invitation page and leaves no rows.
     `DATABASE_URL=postgresql+psycopg://codeatlas:<password>@db:5432/codeatlas`,
     `METRICS_ENVIRONMENT=$ENVIRONMENT`, `EMIT_METRICS=0` unless `ENVIRONMENT` is `pilot`, and,
     when the key exists, `GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app.pem`. Write every
-    value single-quoted, with a `'` inside it written as `'\''`; Compose takes single-quoted values
-    literally (no `$` interpolation, no cut at ` #`).
+    value double-quoted, escaping `\`, `"`, and `$` (as `$$`); Compose's env-file parser rejects
+    the shell's `'\''` form inside single quotes.
   - Write `runtime/db.env` (0600) with `POSTGRES_USER=codeatlas`, `POSTGRES_DB=codeatlas`, and
     `POSTGRES_PASSWORD`, and `runtime/github-app.pem` (0400, owner UID 1000 from T010) when the
     parameter exists.
   - Write each file to a temporary name and rename it, so a failure leaves the previous files.
-- [ ] T030 [P] [US1] Create deploy/put-secrets.sh `<environment>`, run on the developer's machine
+- [X] T030 [P] [US1] Create deploy/put-secrets.sh `<environment>`, run on the developer's machine
   (research R5; `set -euo pipefail`):
   - Prompts with `read -rs` for each secret, or takes `--github-app-private-key FILE`; never
     echoes a value.
@@ -424,7 +424,7 @@ unlisted account sees the invitation page and leaves no rows.
     is refused with a pointer to the operations guide's `ALTER ROLE` procedure.
   - `--set NAME=VALUE` writes one optional setting (contracts/operations.md, "Limits and
     switches"), and `--unset NAME` deletes it, for temporary changes such as quickstart scenario 6.
-- [ ] T031 [US1] Create deploy/release.sh `<sha>` for releases by hand (research R7, "Host layout"
+- [X] T031 [US1] Create deploy/release.sh `<sha>` for releases by hand (research R7, "Host layout"
   and steps 1 to 4; T059 adds the check and rollback). It runs from its bundle directory
   `/opt/codeatlas/releases/<sha>/`, which the caller has extracted from
   `s3://<bucket>/releases/<sha>/deploy.tar.gz`:
@@ -443,7 +443,7 @@ unlisted account sees the invitation page and leaves no rows.
     https://<hostname>/readyz`.
   - Write `<sha>` to `/var/lib/codeatlas/state/running`, and append a line to
     `/var/log/codeatlas/releases.log`.
-- [ ] T032 [US1] Create `bats` tests in deploy/tests/ (research R18): `render_config.bats` and
+- [X] T032 [US1] Create `bats` tests in deploy/tests/ (research R18): `render_config.bats` and
   `release.bats`, with stub `aws`, `docker`, `curl`, and `codeatlas-compose` scripts placed first on
   `PATH` that record their arguments, and a temporary directory standing in for `/opt/codeatlas`
   and `/var/lib/codeatlas` (both scripts take these roots from `CODEATLAS_ROOT` and
@@ -451,11 +451,12 @@ unlisted account sees the invitation page and leaves no rows.
   - render-config: a production parameter set writes `app.env` with the derived `APP_ORIGIN`,
     `DATABASE_URL`, and `METRICS_ENVIRONMENT`, `$` doubled, and modes 0600 and 0400; a missing
     production parameter fails naming it; a fake-mode set without GitHub parameters succeeds.
-  - render-config writes values single-quoted and forces `EMIT_METRICS=0` outside the pilot.
+  - render-config writes values double-quoted with `\`, `"`, and `$` escaped, and forces
+    `EMIT_METRICS=0` outside the pilot.
   - release: a successful release updates `current`, `.env`, and `state/running`, and recreates
     `caddy` only when the Caddyfile changed; a failing pull, login, or `migrate` exits 2, leaves
     `.env` unchanged, and never calls `up`.
-- [ ] T033 [US1] Create infra/shared/ (research R8; contracts/operations.md "Terraform"):
+- [X] T033 [US1] Create infra/shared/ (research R8; contracts/operations.md "Terraform"):
   - versions.tf: Terraform `>= 1.11`, AWS provider `~> 6.0`, `backend "s3"` with
     `use_lockfile = true`; the bucket and key come from `-backend-config=backend.hcl`
     (gitignored), with a `backend.hcl.example`.
@@ -468,7 +469,7 @@ unlisted account sees the invitation page and leaves no rows.
     with a rule expiring `releases/` after 30 days; the Route 53 hosted zone for `domain`.
   - outputs.tf: `ecr_repositories`, `bucket`, `zone_id`, `name_servers`.
   - shared.tfvars.example with placeholder values.
-- [ ] T034 [US1] Create infra/stack/ (research R1 to R3, R8, R9):
+- [X] T034 [US1] Create infra/stack/ (research R1 to R3, R8, R9):
   - versions.tf as in T033, with the state key `stack/<environment>.tfstate` from `backend.hcl`.
   - variables.tf: `environment` (validated to `pilot`, `drill`, or `loadtest`), `hostname`,
     `domain`, `availability_zone` (default `us-east-1a`), `instance_type` (default `t4g.medium`),
@@ -500,7 +501,7 @@ unlisted account sees the invitation page and leaves no rows.
   - outputs.tf: `instance_id`, `public_ip`, `url`.
   - pilot.tfvars.example, drill.tfvars.example (with `parameters_path = "/codeatlas/pilot"`), and
     loadtest.tfvars.example.
-- [ ] T035 [US1] Create infra/stack/cloud-init.yaml.tftpl (research R2, R7):
+- [X] T035 [US1] Create infra/stack/cloud-init.yaml.tftpl (research R2, R7):
   - Install Docker Engine and the Compose plugin from Docker's apt repository, the AWS CLI v2 for
     `aarch64`, `jq`, and `unzip`.
   - Write `/opt/codeatlas/environment` with `ENVIRONMENT`, `AWS_REGION`, `REGISTRY`, `BUCKET`,
@@ -513,7 +514,7 @@ unlisted account sees the invitation page and leaves no rows.
     `RequiresMountsFor=/var/lib/codeatlas`, then run `systemctl daemon-reload` and restart Docker.
   - Create a 2 GiB swap file; set `Unattended-Upgrade::Automatic-Reboot "true"` and
     `Unattended-Upgrade::Automatic-Reboot-Time "04:30"`; create `/var/log/codeatlas`.
-- [ ] T036 [US1] Write docs/operations.md, first sections (FR-030; contracts/operations.md):
+- [X] T036 [US1] Write docs/operations.md, first sections (FR-030; contracts/operations.md):
   - One-time setup: tools, the state bucket (T003), `infra/shared` (plan, review, apply the saved
     plan), delegating the domain to the zone's name servers, the pilot GitHub App (permissions
     Contents, Metadata, and Pull requests read-only; events Push, Installation, and Installation
@@ -537,7 +538,7 @@ unlisted account sees the invitation page and leaves no rows.
   - Tearing down: `terraform destroy` per stack (the pilot's data volume refuses until its
     `prevent_destroy` is removed deliberately; drill and loadtest destroy cleanly), then
     `infra/shared`.
-- [ ] T037 [US1] Extend .github/workflows/ci.yml:
+- [X] T037 [US1] Extend .github/workflows/ci.yml:
   - A new `infra` job: `terraform fmt -check -recursive infra`; `terraform init -backend=false`
     and `terraform validate` in `infra/shared` and `infra/stack`; `shellcheck deploy/*.sh`;
     install `bats` and run `bats deploy/tests`; create placeholder `runtime/app.env` and

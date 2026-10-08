@@ -12,6 +12,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from codeatlas.api.errors import ApiError, error_body
+from codeatlas.api.ratelimit import SlidingWindowLimiter
 from codeatlas.api.routes import (
     analysis_runs,
     auth,
@@ -34,6 +35,8 @@ STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # GitHub calls these paths, and their signature check replaces the Origin check
 # (specs/002-push-reindexing, research R2).
 WEBHOOK_PATH_PREFIX = "/webhooks/"
+# The endpoints reachable without a session: sign-in and GitHub's deliveries (FR-006).
+RATE_LIMITED_PATH_PREFIXES = ("/auth/", WEBHOOK_PATH_PREFIX)
 
 
 def _request_id(request: Request) -> str | None:
@@ -82,6 +85,30 @@ def create_app() -> FastAPI:
             request_id_var.reset(token)
         response.headers["X-Request-ID"] = request_id
         return response
+
+    limiter = SlidingWindowLimiter(get_settings().rate_limit_per_minute)
+
+    # Registered last, so it runs first: a refused request reaches no Origin or signature check,
+    # route, or database (research R4). Behind Caddy, uvicorn takes the client address from
+    # X-Forwarded-For.
+    @app.middleware("http")
+    async def rate_limit(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        if request.url.path.startswith(RATE_LIMITED_PATH_PREFIXES):
+            address = request.client.host if request.client is not None else "unknown"
+            retry_after = limiter.check(address)
+            if retry_after is not None:
+                refused = _error_response(
+                    request,
+                    429,
+                    "rate_limited",
+                    "Too many requests. Try again later.",
+                    retryable=True,
+                )
+                refused.headers["Retry-After"] = str(int(retry_after))
+                return refused
+        return await call_next(request)
 
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:

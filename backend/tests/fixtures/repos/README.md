@@ -23,7 +23,8 @@ GitHub's (`<owner>-<repo>-<sha[:7]>/`).
 
 As on GitHub, every user can see a public repository; the Access column lists who reaches it
 through an installation of the App. Installations: `octo-org` 5001, `octocat` 5002, `hubot` 5003.
-Commit SHAs are
+Users: `octocat` 1001, `hubot` 1002, and `monalisa` 1003, who has no installation and reaches no
+repository through the App. Commit SHAs are
 `sha1("<repository id>:<commit name>")`; the module function `commit_sha` computes them.
 
 ## sample-app

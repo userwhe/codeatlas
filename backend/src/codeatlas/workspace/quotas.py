@@ -1,6 +1,10 @@
-"""Daily question and review allowances per workspace (FR-028, and specs/003-pr-review FR-027).
+"""Daily question and review allowances per workspace (FR-028, and specs/003-pr-review FR-027),
+and the pilot-wide allowances across every workspace (specs/004-pilot-deployment FR-005,
+research R14).
 
-Days are UTC calendar days.
+Days are UTC calendar days. A submission reserves the pilot-wide use first, then the workspace's,
+in the caller's transaction, so either refusal rolls back both. Refunds keep the same order, so
+the two paths lock the pilot row first and cannot deadlock.
 """
 
 import uuid
@@ -13,7 +17,7 @@ from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from codeatlas.api.errors import ApiError
 from codeatlas.config import get_settings
-from codeatlas.models import UsageCounter
+from codeatlas.models import PilotUsageCounter, UsageCounter
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,14 @@ class Usage:
 
 def next_reset(now: datetime) -> datetime:
     return datetime.combine(now.astimezone(UTC).date() + timedelta(days=1), time(), tzinfo=UTC)
+
+
+def _limit_details(now: datetime, limit: int, allowance: str) -> dict[str, object]:
+    return {
+        "resets_at": next_reset(now).isoformat().replace("+00:00", "Z"),
+        "limit": limit,
+        "allowance": allowance,
+    }
 
 
 def _reserve(
@@ -60,51 +72,113 @@ def _reserve(
         )
         if db.execute(statement).scalar_one_or_none() is not None:
             return
-    resets_at = next_reset(now)
     raise ApiError(
         429,
         "daily_limit_reached",
         f"This workspace has used {limit} of {limit} {noun} today.",
-        details={
-            "resets_at": resets_at.isoformat().replace("+00:00", "Z"),
-            "limit": limit,
-            "allowance": allowance,
-        },
+        details=_limit_details(now, limit, allowance),
+    )
+
+
+def _reserve_pilot(
+    db: Session,
+    now: datetime,
+    *,
+    counter: InstrumentedAttribute[int],
+    limit: int,
+    allowance: str,
+    noun: str,
+) -> None:
+    """Count one use of a pilot-wide allowance for today, or raise 429 when it is used up.
+
+    The same guarded upsert as `_reserve`, on the one row of the day. Runs in the caller's
+    transaction.
+    """
+    today = now.astimezone(UTC).date()
+    if limit > 0:
+        statement = (
+            insert(PilotUsageCounter)
+            .values({"usage_date": today, counter.key: 1})
+            .on_conflict_do_update(
+                index_elements=[PilotUsageCounter.usage_date],
+                set_={counter.key: counter + 1},
+                where=counter < limit,
+            )
+            .returning(counter)
+        )
+        if db.execute(statement).scalar_one_or_none() is not None:
+            return
+    raise ApiError(
+        429,
+        "pilot_limit_reached",
+        f"CodeAtlas has reached today's limit of {limit} {noun} for all pilot users.",
+        details=_limit_details(now, limit, allowance),
     )
 
 
 def reserve_question(db: Session, workspace_id: uuid.UUID, *, now: datetime | None = None) -> None:
-    """Count one question for today, or raise 429 when the allowance is used up."""
+    """Count one question for today, or raise 429 when the pilot-wide or the workspace's
+    allowance is used up. The pilot-wide check runs first, so it is reported when both are.
+    """
+    now = now or datetime.now(UTC)
+    settings = get_settings()
+    _reserve_pilot(
+        db,
+        now,
+        counter=PilotUsageCounter.questions_count,
+        limit=settings.pilot_daily_question_limit,
+        allowance="questions",
+        noun="questions",
+    )
     _reserve(
         db,
         workspace_id,
         now,
         counter=UsageCounter.questions_count,
-        limit=get_settings().daily_question_limit,
+        limit=settings.daily_question_limit,
         allowance="questions",
         noun="questions",
     )
 
 
 def reserve_review(db: Session, workspace_id: uuid.UUID, *, now: datetime | None = None) -> None:
-    """Count one review for today, or raise 429 when the allowance is used up."""
+    """Count one review for today, or raise 429 when the pilot-wide or the workspace's allowance
+    is used up. The pilot-wide check runs first, so it is reported when both are.
+    """
+    now = now or datetime.now(UTC)
+    settings = get_settings()
+    _reserve_pilot(
+        db,
+        now,
+        counter=PilotUsageCounter.reviews_count,
+        limit=settings.pilot_daily_review_limit,
+        allowance="reviews",
+        noun="reviews",
+    )
     _reserve(
         db,
         workspace_id,
         now,
         counter=UsageCounter.reviews_count,
-        limit=get_settings().daily_review_limit,
+        limit=settings.daily_review_limit,
         allowance="reviews",
         noun="reviews",
     )
 
 
 def refund_review(db: Session, workspace_id: uuid.UUID, usage_date: date) -> None:
-    """Give back one review counted on `usage_date`, never going below zero.
+    """Give back one review counted on `usage_date`, to the pilot-wide and the workspace's
+    allowance, never going below zero.
 
     A review that ends `nothing_to_review` does not count (specs/003-pr-review FR-020). Runs in
-    the caller's transaction.
+    the caller's transaction, and decrements the pilot row first, in the order `reserve_review`
+    locks the two rows.
     """
+    db.execute(
+        update(PilotUsageCounter)
+        .where(PilotUsageCounter.usage_date == usage_date)
+        .values(reviews_count=func.greatest(PilotUsageCounter.reviews_count - 1, 0))
+    )
     db.execute(
         update(UsageCounter)
         .where(UsageCounter.workspace_id == workspace_id, UsageCounter.usage_date == usage_date)

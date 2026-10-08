@@ -1,0 +1,61 @@
+# The edge proxy (specs/004-pilot-deployment research R3). Caddy obtains and renews the
+# certificate for the environment's name, redirects HTTP to HTTPS, routes the API's paths to `api`
+# and everything else to `web`. Its logs are JSON on stdout, with the OAuth `code` and `state`
+# query parameters and the Referer header removed.
+{
+	# The security group opens TCP 80 and 443 only, so do not advertise HTTP/3 over UDP.
+	servers {
+		protocols h1 h2
+	}
+
+	# Caddy's own logs, including errors that record a request's URI (for example a 502 while the
+	# API restarts), use the same filter as the access log below.
+	log default {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete code
+					delete state
+				}
+				resp_headers>Location query {
+					delete code
+					delete state
+				}
+				request>headers>Referer delete
+			}
+		}
+	}
+}
+
+{$CODEATLAS_HOSTNAME} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+
+	@api path /v1/* /auth/* /webhooks/* /healthz /readyz /version
+	handle @api {
+		reverse_proxy api:8000
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete code
+					delete state
+				}
+				resp_headers>Location query {
+					delete code
+					delete state
+				}
+				request>headers>Referer delete
+			}
+		}
+	}
+}

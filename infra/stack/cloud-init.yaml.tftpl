@@ -1,0 +1,132 @@
+#cloud-config
+# Bootstrap of a CodeAtlas host (specs/004-pilot-deployment research R2 and R7), rendered by
+# Terraform. cloud-init runs it once per instance; a change to it replaces the host.
+
+write_files:
+  # Read by release.sh and render-config.sh (contracts/operations.md, "Host layout").
+  - path: /opt/codeatlas/environment
+    permissions: "0644"
+    content: |
+      ENVIRONMENT=${environment}
+      AWS_REGION=${region}
+      REGISTRY=${registry}
+      BUCKET=${bucket}
+      CODEATLAS_HOSTNAME=${hostname}
+      PARAMETERS_PATH=${parameters_path}
+
+  # Compose for the running release; operator commands, backups, and restores use it.
+  - path: /usr/local/bin/codeatlas-compose
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      exec docker compose --project-directory /opt/codeatlas -f /opt/codeatlas/current/compose.yml --env-file /opt/codeatlas/.env "$@"
+
+  # Security updates install daily; a reboot they need happens at 04:30 UTC, and every service
+  # restarts on its own (FR-017).
+  - path: /etc/apt/apt.conf.d/52codeatlas-reboot
+    permissions: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+
+  - path: /usr/local/sbin/codeatlas-bootstrap
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Installs Docker and the AWS CLI, mounts the data volume, and prepares the host layout.
+      # Its output is in /var/log/cloud-init-output.log.
+      set -euo pipefail
+
+      DATA_DEVICE="${data_volume_device}"
+      export DEBIAN_FRONTEND=noninteractive
+
+      apt_get() {
+        apt-get -o DPkg::Lock::Timeout=600 -o Acquire::Retries=5 -y -q "$@"
+      }
+
+      # Docker Engine and the Compose plugin, from Docker's apt repository.
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL --retry 5 https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      # shellcheck source=/dev/null
+      . /etc/os-release
+      cat >/etc/apt/sources.list.d/docker.sources <<EOF
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: $VERSION_CODENAME
+      Components: stable
+      Signed-By: /etc/apt/keyrings/docker.asc
+      EOF
+      apt_get update
+      apt_get install ca-certificates curl jq unzip \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+      # The AWS CLI v2 for aarch64.
+      if ! command -v aws >/dev/null; then
+        workdir="$(mktemp -d)"
+        curl -fsSL --retry 5 https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o "$workdir/awscliv2.zip"
+        unzip -q "$workdir/awscliv2.zip" -d "$workdir"
+        "$workdir/aws/install"
+        rm -rf "$workdir"
+      fi
+
+      # The data volume, found by its EBS volume ID once Terraform attaches it.
+      echo "waiting for the data volume $DATA_DEVICE"
+      for _ in $(seq 60); do
+        [ -e "$DATA_DEVICE" ] && break
+        sleep 5
+      done
+      if [ ! -e "$DATA_DEVICE" ]; then
+        echo "the data volume did not appear within 5 minutes" >&2
+        exit 1
+      fi
+
+      # Create a file system only on an empty volume: blkid -p exits 2 when it finds none. Any
+      # other failure stops here rather than formatting a volume that may hold the pilot's data.
+      status=0
+      blkid -p "$DATA_DEVICE" >/dev/null || status=$?
+      if [ "$status" -eq 2 ]; then
+        mkfs.ext4 -q -L codeatlas-data "$DATA_DEVICE"
+      elif [ "$status" -ne 0 ]; then
+        echo "blkid exited with $status for the data volume; not formatting it" >&2
+        exit 1
+      fi
+
+      uuid="$(blkid -p -s UUID -o value "$DATA_DEVICE")"
+      mkdir -p /var/lib/codeatlas
+      if ! grep -q "^UUID=$uuid " /etc/fstab; then
+        echo "UUID=$uuid /var/lib/codeatlas ext4 defaults,nofail 0 2" >>/etc/fstab
+      fi
+      systemctl daemon-reload
+      mountpoint -q /var/lib/codeatlas || mount /var/lib/codeatlas
+      mkdir -p /var/lib/codeatlas/postgres /var/lib/codeatlas/caddy \
+        /var/lib/codeatlas/backup /var/lib/codeatlas/state
+
+      # Docker never starts without the data volume, so PostgreSQL cannot start on an empty
+      # directory of the root volume.
+      mkdir -p /etc/systemd/system/docker.service.d
+      cat >/etc/systemd/system/docker.service.d/codeatlas.conf <<'EOF'
+      [Unit]
+      RequiresMountsFor=/var/lib/codeatlas
+      EOF
+      systemctl daemon-reload
+      systemctl restart docker
+
+      # Swap absorbs the worker's peaks while it reads archives (research R1).
+      if [ ! -f /swapfile ]; then
+        fallocate -l 2G /swapfile
+        chmod 600 /swapfile
+        mkswap /swapfile
+      fi
+      swapon --show=NAME --noheadings | grep -qx /swapfile || swapon /swapfile
+      grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+
+      # The rest of the host layout; release.sh fills it.
+      install -d -m 0755 /opt/codeatlas/releases
+      install -d -m 0700 /opt/codeatlas/runtime
+      install -d -m 0755 /var/log/codeatlas
+
+      echo "codeatlas bootstrap finished"
+
+runcmd:
+  - [/usr/local/sbin/codeatlas-bootstrap]
