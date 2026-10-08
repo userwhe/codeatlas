@@ -33,6 +33,10 @@ os.environ.update(
         "DAILY_REVIEW_LIMIT": "10",
         "FAKE_ANSWER_MODEL_MODE": "ok",
         "FAKE_EMBEDDER_MODE": "ok",
+        # Keep the suites clear of the pilot's limits; tests that need them use `settings`.
+        "RATE_LIMIT_PER_MINUTE": "0",
+        "PILOT_DAILY_QUESTION_LIMIT": "1000",
+        "PILOT_DAILY_REVIEW_LIMIT": "1000",
     }
 )
 

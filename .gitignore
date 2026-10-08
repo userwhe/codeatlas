@@ -14,6 +14,16 @@ frontend/test-results/
 backend/evals/out/
 *.log
 
+# Terraform: local state, plans, and per-environment values. `.terraform.lock.hcl` stays tracked,
+# and the committed examples end in `.tfvars.example`.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.out
+infra/**/*.tfvars
+infra/**/backend.hcl
+
 # Spec Kit tooling (regenerate with `specify init`)
 .agents/
 .claude/

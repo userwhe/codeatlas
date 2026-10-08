@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from codeatlas.api.errors import ApiError, error_body
@@ -23,6 +25,7 @@ from codeatlas.api.routes import (
     webhooks,
 )
 from codeatlas.config import get_settings
+from codeatlas.db import new_session
 from codeatlas.logging import configure_logging, request_id_var
 
 logger = logging.getLogger(__name__)
@@ -121,9 +124,27 @@ def create_app() -> FastAPI:
             request, 500, "internal_error", "Something went wrong.", retryable=True
         )
 
+    # Liveness, readiness, and the running version (specs/004-pilot-deployment, research R11).
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/readyz", include_in_schema=False)
+    def readyz(request: Request) -> JSONResponse:
+        # Only the database: GitHub and model provider outages leave the service ready (FR-011).
+        try:
+            with new_session() as db:
+                db.execute(text("SET LOCAL statement_timeout = '2s'"))
+                db.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            return _error_response(
+                request, 503, "not_ready", "The database is unavailable.", retryable=True
+            )
+        return JSONResponse({"status": "ready"})
+
+    @app.get("/version", include_in_schema=False)
+    def version() -> dict[str, str]:
+        return {"commit": get_settings().release}
 
     app.include_router(auth.router)
     app.include_router(webhooks.router)

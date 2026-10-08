@@ -1,6 +1,11 @@
 """JSON logging with request, job, run, and snapshot identifiers taken from context variables.
 
 Log messages must never contain tokens, source text, prompts, or model output (research R16).
+
+Call sites add structured fields with `extra={"fields": {...}}`. Only the keys in
+`STRUCTURED_FIELDS` reach the JSON line, as top-level keys; any other key is dropped. The
+allow-list keeps source text, prompts, and tokens out of the logs even when a call site passes
+them (specs/004-pilot-deployment, research R9).
 """
 
 import json
@@ -22,6 +27,17 @@ _CONTEXT_VARS = {
     "snapshot_id": snapshot_id_var,
 }
 
+STRUCTURED_FIELDS = (
+    "method",
+    "route",
+    "status",
+    "duration_ms",
+    "kind",
+    "outcome",
+    "attempt",
+    "provider",
+)
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -35,6 +51,11 @@ class JsonFormatter(logging.Formatter):
             value = var.get()
             if value is not None:
                 entry[name] = value
+        fields = getattr(record, "fields", None)
+        if isinstance(fields, dict):
+            for name in STRUCTURED_FIELDS:
+                if name in fields:
+                    entry[name] = fields[name]
         if record.exc_info:
             entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(entry)

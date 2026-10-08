@@ -78,6 +78,20 @@ class Settings(BaseSettings):
     review_deadline: timedelta = timedelta(minutes=5)
     session_ttl: timedelta = timedelta(days=7)
 
+    # Pilot deployment (specs/004-pilot-deployment/data-model.md, "Settings added").
+    # The access list always applies in production; this enables it elsewhere (research R13).
+    access_list_required: bool = False
+    pilot_user_limit: int = 10
+    # Pilot-wide daily limits across every workspace (FR-005).
+    pilot_daily_question_limit: int = 30
+    pilot_daily_review_limit: int = 15
+    # Requests per client address per minute on `/auth/*` and `/webhooks/*` (FR-006); 0 disables.
+    rate_limit_per_minute: int = 60
+    emit_metrics: bool = False
+    metrics_environment: str = "local"
+    # The commit SHA baked into the image at build time (research R6).
+    release: str = Field(default="development", validation_alias="CODEATLAS_RELEASE")
+
     @model_validator(mode="after")
     def _fakes_only_outside_production(self) -> Self:
         if self.fake_externals and self.env not in ("test", "development"):

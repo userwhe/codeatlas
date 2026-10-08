@@ -4,11 +4,12 @@ Run from `backend/`:
 
     uv run python -m evals.perf_check --base-url http://localhost:8000 --users 10 --duration 120
 
-Start the API and the worker with the fake GitHub gateway and fake model providers, and with a
-daily question limit high enough for the run (the default of 20 per workspace turns most question
-submissions into 429 errors):
+Start the API and the worker with the fake GitHub gateway and fake model providers, with daily
+question limits high enough for the run (the default of 20 per workspace, or 30 across the pilot,
+turns most question submissions into 429 errors), and with rate limiting off:
 
-    export CODEATLAS_ENV=development CODEATLAS_FAKE_EXTERNALS=1 DAILY_QUESTION_LIMIT=100000
+    export CODEATLAS_ENV=development CODEATLAS_FAKE_EXTERNALS=1 DAILY_QUESTION_LIMIT=100000 \
+        RATE_LIMIT_PER_MINUTE=0 PILOT_DAILY_QUESTION_LIMIT=100000 PILOT_DAILY_REVIEW_LIMIT=1000
     export TOKEN_ENCRYPTION_KEY=<a Fernet key>   # see specs/001-repository-qa/quickstart.md
     uv run uvicorn codeatlas.api.app:app --port 8000
     uv run python -m codeatlas.jobs.worker

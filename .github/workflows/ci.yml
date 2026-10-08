@@ -69,6 +69,9 @@ jobs:
             echo "CODEATLAS_FAKE_EXTERNALS=1"
             echo "TOKEN_ENCRYPTION_KEY=$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
             echo "GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET"
+            echo "RATE_LIMIT_PER_MINUTE=0"
+            echo "PILOT_DAILY_QUESTION_LIMIT=1000"
+            echo "PILOT_DAILY_REVIEW_LIMIT=1000"
           } > .env
           # Playwright signs its webhook deliveries with the same per-run secret.
           echo "GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> "$GITHUB_ENV"

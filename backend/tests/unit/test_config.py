@@ -66,3 +66,38 @@ def test_review_defaults() -> None:
 def test_unknown_fake_review_mode_is_rejected() -> None:
     with pytest.raises(ValidationError):
         make(fake_review_model_mode="sometimes")
+
+
+PILOT_ENVIRONMENT = (
+    "ACCESS_LIST_REQUIRED",
+    "PILOT_USER_LIMIT",
+    "PILOT_DAILY_QUESTION_LIMIT",
+    "PILOT_DAILY_REVIEW_LIMIT",
+    "RATE_LIMIT_PER_MINUTE",
+    "EMIT_METRICS",
+    "METRICS_ENVIRONMENT",
+    "CODEATLAS_RELEASE",
+)
+
+
+def test_pilot_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    # tests/conftest.py relaxes some of these limits in the environment.
+    for name in PILOT_ENVIRONMENT:
+        monkeypatch.delenv(name, raising=False)
+
+    settings = make()
+
+    assert settings.access_list_required is False
+    assert settings.pilot_user_limit == 10
+    assert settings.pilot_daily_question_limit == 30
+    assert settings.pilot_daily_review_limit == 15
+    assert settings.rate_limit_per_minute == 60
+    assert settings.emit_metrics is False
+    assert settings.metrics_environment == "local"
+    assert settings.release == "development"
+
+
+def test_release_is_read_from_codeatlas_release() -> None:
+    settings = make(CODEATLAS_RELEASE="3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091")
+
+    assert settings.release == "3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091"

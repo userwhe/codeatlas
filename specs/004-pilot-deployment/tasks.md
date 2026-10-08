@@ -44,10 +44,10 @@ leak into later tests (research R18).
 
 **Purpose**: Ignore rules, new settings, and the developer's one-time accounts
 
-- [ ] T001 [P] Extend .gitignore with `.terraform/`, `*.tfstate`, `*.tfstate.*`, `*.tfplan`,
+- [X] T001 [P] Extend .gitignore with `.terraform/`, `*.tfstate`, `*.tfstate.*`, `*.tfplan`,
   `plan.out`, `infra/**/*.tfvars` (the committed examples end in `.tfvars.example`), and
   `infra/**/backend.hcl`. Keep `.terraform.lock.hcl` tracked, and keep every existing rule.
-- [ ] T002 Add the new settings to backend/src/codeatlas/config.py (data-model.md, "Settings
+- [X] T002 Add the new settings to backend/src/codeatlas/config.py (data-model.md, "Settings
   added"), without validation logic yet:
   - `access_list_required: bool = False` (`ACCESS_LIST_REQUIRED`).
   - `pilot_user_limit: int = 10`.
@@ -83,7 +83,7 @@ leak into later tests (research R18).
 
 ### Tests for the foundation ⚠️ (write first, confirm they fail)
 
-- [ ] T004 [P] Integration tests for the schema in backend/tests/integration/test_pilot_schema.py
+- [X] T004 [P] Integration tests for the schema in backend/tests/integration/test_pilot_schema.py
   (data-model.md):
   - `pilot_users` has `github_user_id` (bigint, primary key), `github_login` (text, not null),
     `note` (text, nullable), and `added_at` (default `now()`). A `note` longer than "At most 200
@@ -93,14 +93,14 @@ leak into later tests (research R18).
   - `audit_events.action` accepts `pilot_user_add`, `pilot_user_remove`, and
     `pilot_user_delete_data`, and still rejects an unknown action.
   - `alembic_version.version_num` is `0004`.
-- [ ] T005 [P] Extend backend/tests/unit/test_logging_redaction.py for structured fields (research
+- [X] T005 [P] Extend backend/tests/unit/test_logging_redaction.py for structured fields (research
   R9):
   - `logger.info("request", extra={"fields": {...}})` puts each allow-listed key (`method`,
     `route`, `status`, `duration_ms`, `kind`, `outcome`, `attempt`, `provider`) at the top level of
     the JSON line.
   - A key outside the allow-list (for example `body` or `prompt`) is dropped.
   - Lines without `fields` are unchanged.
-- [ ] T006 [P] Integration tests for readiness and version in
+- [X] T006 [P] Integration tests for readiness and version in
   backend/tests/integration/test_readiness.py (contracts/http-api.md):
   - `GET /readyz` returns 200 `{"status": "ready"}` with the database up.
   - With the database session factory patched to raise `sqlalchemy.exc.OperationalError`, it
@@ -114,7 +114,7 @@ leak into later tests (research R18).
 
 ### Implementation for the foundation
 
-- [ ] T007 Write migration backend/alembic/versions/0004_pilot_access.py, with
+- [X] T007 Write migration backend/alembic/versions/0004_pilot_access.py, with
   `revision = "0004"` and `down_revision = "0003"`, and update backend/src/codeatlas/models.py:
   - `PilotUser` (`pilot_users`): `github_user_id` BigInteger primary key (not autoincrement),
     `github_login` Text not null, `note` Text nullable with check `note IS NULL OR
@@ -125,18 +125,18 @@ leak into later tests (research R18).
     `_replace_check`, as `0003_pull_request_review.py` does.
   - The downgrade deletes `audit_events` rows with the three new actions, restores the previous
     constraint, and drops both tables.
-- [ ] T008 Implement allow-listed structured fields in backend/src/codeatlas/logging.py:
+- [X] T008 Implement allow-listed structured fields in backend/src/codeatlas/logging.py:
   `JsonFormatter` reads `record.fields` (a dict passed as `extra={"fields": ...}`) and copies only
   the keys in `STRUCTURED_FIELDS = ("method", "route", "status", "duration_ms", "kind", "outcome",
   "attempt", "provider")` into the entry. Document in the module docstring that the allow-list
   keeps source text, prompts, and tokens out (research R9).
-- [ ] T009 Add `/readyz` and `/version` to backend/src/codeatlas/api/app.py, next to `/healthz`,
+- [X] T009 Add `/readyz` and `/version` to backend/src/codeatlas/api/app.py, next to `/healthz`,
   with `include_in_schema=False`:
   - `/readyz` opens a session, runs `SET LOCAL statement_timeout = '2s'` and `SELECT 1`, and
     returns 200 `{"status": "ready"}`; on any `SQLAlchemyError` it returns `_error_response` with
     status 503, code `not_ready`, message "The database is unavailable.", and `retryable` true.
   - `/version` returns `{"commit": get_settings().release}`.
-- [ ] T010 [P] Release metadata and fixtures in backend/Dockerfile (research R6):
+- [X] T010 [P] Release metadata and fixtures in backend/Dockerfile (research R6):
   - Add `ARG CODEATLAS_RELEASE=development` and `ENV CODEATLAS_RELEASE=$CODEATLAS_RELEASE` after
     the dependency layers, so the argument does not invalidate the dependency cache.
   - Copy `tests/fixtures/repos` and `tests/fixtures/pull-requests` to `/app/tests/fixtures/`, the
@@ -144,7 +144,7 @@ leak into later tests (research R18).
     `tests/`. `backend/.dockerignore` does not exclude them.
   - Create the user with `useradd --uid 1000 --create-home app`, so the UID that render-config
     (T029) relies on is fixed rather than a default.
-- [ ] T011 [P] Production web image (research R6):
+- [X] T011 [P] Production web image (research R6):
   - Make frontend/Dockerfile multi-stage: `deps` (`npm ci`), `dev` (today's behavior: copy the
     source and run `npm run dev -- --hostname 0.0.0.0`), `build` (`ARG NEXT_PUBLIC_RELEASE=development`,
     `NEXT_TELEMETRY_DISABLED=1`, `npm run build`), and `production` (`node:24-slim`, copy
