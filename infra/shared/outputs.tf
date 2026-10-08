@@ -8,6 +8,11 @@ output "bucket" {
   value       = aws_s3_bucket.main.bucket
 }
 
+output "alert_topic_arn" {
+  description = "The topic that alarms and failed releases notify."
+  value       = aws_sns_topic.alerts.arn
+}
+
 output "zone_id" {
   description = "The hosted zone of the domain."
   value       = aws_route53_zone.main.zone_id

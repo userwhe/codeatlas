@@ -1,6 +1,8 @@
 """The embedding boundary (research R9, R12, R13). Real and fake embedders follow this protocol.
 
 Only documentation chunks and search queries are embedded. Texts and the API key are never logged.
+Every provider error is logged as a warning with the structured field `provider`, so the
+dashboard counts them (specs/004-pilot-deployment, research R9).
 """
 
 import hashlib
@@ -18,6 +20,7 @@ from codeatlas.config import Settings, get_settings
 from codeatlas.providers.errors import ProviderUnavailable
 
 logger = logging.getLogger(__name__)
+_PROVIDER_FIELD = {"fields": {"provider": "voyage"}}
 # The Voyage SDK logs request bodies (the texts) at DEBUG level; keep them out of our logs.
 logging.getLogger("voyage").setLevel(logging.INFO)
 
@@ -116,10 +119,13 @@ class VoyageEmbedder:
                 )
             except voyageai.error.VoyageError as exc:
                 if not _retryable(exc):
-                    raise ProviderUnavailable(_rejected_message(exc)) from exc
+                    raise _logged(ProviderUnavailable(_rejected_message(exc))) from exc
                 if attempt == MAX_ATTEMPTS:
-                    raise ProviderUnavailable(
-                        f"Voyage embeddings failed after {MAX_ATTEMPTS} attempts: {_describe(exc)}"
+                    raise _logged(
+                        ProviderUnavailable(
+                            f"Voyage embeddings failed after {MAX_ATTEMPTS} attempts: "
+                            f"{_describe(exc)}"
+                        )
                     ) from exc
                 delay = min(BACKOFF_BASE_SECONDS * 2 ** (attempt - 1), BACKOFF_CAP_SECONDS)
                 logger.warning(
@@ -128,6 +134,7 @@ class VoyageEmbedder:
                     MAX_ATTEMPTS,
                     _describe(exc),
                     delay,
+                    extra=_PROVIDER_FIELD,
                 )
                 self._sleep(delay)
                 attempt += 1
@@ -137,8 +144,16 @@ class VoyageEmbedder:
     def _vectors(self, result: EmbeddingsResult, expected: int) -> list[list[float]]:
         vectors = [[float(value) for value in vector] for vector in result.embeddings]
         if len(vectors) != expected or any(len(v) != self._dimensions for v in vectors):
-            raise ProviderUnavailable("Voyage returned an unexpected number or size of embeddings")
+            raise _logged(
+                ProviderUnavailable("Voyage returned an unexpected number or size of embeddings")
+            )
         return vectors
+
+
+def _logged[ErrorT: Exception](error: ErrorT) -> ErrorT:
+    """Log a provider error about to be raised; its message names no request content."""
+    logger.warning("%s", error, extra=_PROVIDER_FIELD)
+    return error
 
 
 def _retryable(exc: voyageai.error.VoyageError) -> bool:

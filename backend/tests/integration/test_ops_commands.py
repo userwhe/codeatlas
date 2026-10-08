@@ -1,16 +1,19 @@
-"""Integration tests for the operator commands (T016, FR-004, contracts/operations.md).
+"""Integration tests for the operator commands (T016, T042, FR-004, contracts/operations.md).
 
 They call `codeatlas.ops.__main__.main` as `python -m codeatlas.ops` would, and check the exit
 status, the output, and the database.
 """
 
+import hashlib
+import json
 import uuid
 from collections.abc import Callable
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select, table, text
 from sqlalchemy.orm import Session
 
 from codeatlas.config import Settings
@@ -22,6 +25,7 @@ pytestmark = pytest.mark.integration
 
 OCTOCAT_ID = 1001
 HUBOT_ID = 1002
+RELEASE = "3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091"
 
 
 def pilot_users(db: Session) -> list[tuple[int, str, str | None]]:
@@ -234,3 +238,110 @@ def test_delete_data_disconnects_every_repository_and_forgets_the_user(
     [event] = audit(db, "pilot_user_delete_data")
     assert (event.outcome, event.actor_user_id) == ("success", None)
     assert event.detail == {"github_user_id": OCTOCAT_ID, "github_login": "octocat"}
+
+
+# backup-manifest and verify-restore --------------------------------------------------------
+
+
+def row_counts(db: Session) -> dict[str, int]:
+    """The row count of every table in the `public` schema, as `backup.sh` records them."""
+    db.expire_all()
+    names = db.scalars(text("SELECT tablename FROM pg_tables WHERE schemaname = 'public'"))
+    counts: dict[str, int] = {}
+    for name in names.all():
+        counts[name] = db.scalar(select(func.count()).select_from(table(name))) or 0
+    return counts
+
+
+def write_counts(db: Session, path: Path) -> dict[str, int]:
+    counts = row_counts(db)
+    path.write_text(json.dumps({"alembic_revision": "0004", "row_counts": counts}))
+    return counts
+
+
+def test_backup_manifest_then_verify_restore(
+    db: Session,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(settings, "release", RELEASE)
+    assert main(["pilot-users", "add", "octocat"]) == 0
+    counts_file = tmp_path / "counts.json"
+    counts = write_counts(db, counts_file)
+    assert counts["pilot_users"] == 1 and counts["alembic_version"] == 1
+    sha256 = hashlib.sha256(b"dump").hexdigest()
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "backup-manifest",
+                "--counts",
+                str(counts_file),
+                "--dump-key",
+                "K",
+                "--bytes",
+                "10",
+                "--sha256",
+                sha256,
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr().out
+    manifest = json.loads(printed)
+    created_at = datetime.strptime(manifest["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    assert abs(datetime.now(UTC) - created_at) < timedelta(minutes=1)
+    assert manifest == {
+        "created_at": manifest["created_at"],
+        "release": RELEASE,
+        "alembic_revision": "0004",
+        "dump": {"key": "K", "bytes": 10, "sha256": sha256},
+        "row_counts": counts,
+    }
+    manifest_file = tmp_path / "manifest.json"
+    manifest_file.write_text(printed)
+
+    assert main(["verify-restore", str(manifest_file)]) == 0
+    assert "matches" in capsys.readouterr().out
+
+    db.add(AuditEvent(action="sign_out", outcome="success"))
+    db.commit()
+
+    assert main(["verify-restore", str(manifest_file)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "audit_events: row count 1 in the backup, 2 restored" in captured.err
+    assert "pilot_users" not in captured.err
+
+
+def test_verify_restore_reports_a_different_revision(
+    db: Session, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_file = tmp_path / "manifest.json"
+    manifest_file.write_text(json.dumps({"alembic_revision": "0003", "row_counts": row_counts(db)}))
+
+    assert main(["verify-restore", str(manifest_file)]) == 1
+
+    assert "Alembic revision: 0003 in the backup, 0004 restored" in capsys.readouterr().err
+
+
+def test_backup_manifest_refuses_an_invalid_counts_file(
+    db: Session, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    arguments = ["--dump-key", "K", "--bytes", "10", "--sha256", "0" * 64]
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(json.dumps({"alembic_revision": "0004", "row_counts": {"users": "6"}}))
+    truncated = tmp_path / "truncated.json"
+    truncated.write_text('{"alembic_revision": "0004", "row_co')
+
+    assert "users" in refused(capsys, ["backup-manifest", "--counts", str(invalid), *arguments])
+    assert "counts file" in refused(
+        capsys, ["backup-manifest", "--counts", str(truncated), *arguments]
+    )
+    assert "counts file" in refused(
+        capsys, ["backup-manifest", "--counts", str(tmp_path / "missing.json"), *arguments]
+    )

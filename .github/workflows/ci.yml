@@ -102,6 +102,15 @@ jobs:
         run: >-
           docker run --rm -e CODEATLAS_HOSTNAME=example.com -v "$PWD/deploy:/etc/caddy"
           caddy:2.10 caddy validate --config /etc/caddy/Caddyfile
+      - name: Check the CloudWatch agent configuration
+        # The agent's own translator checks it against the agent's schema, as the host's
+        # bootstrap does with the latest agent.
+        run: >-
+          docker run --rm -v "$PWD/deploy:/deploy:ro" -e RUN_IN_CONTAINER=False -e AWS_REGION=us-east-1
+          --entrypoint /opt/aws/amazon-cloudwatch-agent/bin/config-translator
+          public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest
+          --input /deploy/cloudwatch-agent.json --input-dir /tmp/none --output /tmp/agent.toml
+          --mode onPremise --os linux
 
   e2e:
     needs: [backend, frontend]

@@ -1,0 +1,12 @@
+# The daily certificate check (specs/004-pilot-deployment research R10), started by
+# codeatlas-cert-check.timer. Installed in the pilot only, by the host's bootstrap. Its output is in
+# /var/log/codeatlas/check-certificate.log.
+[Unit]
+Description=CodeAtlas certificate check
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/codeatlas/current/check-certificate.sh
+TimeoutStartSec=5min

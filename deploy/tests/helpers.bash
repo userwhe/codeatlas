@@ -4,10 +4,13 @@
 # /var/lib/codeatlas (CODEATLAS_DATA), and /var/log/codeatlas (CODEATLAS_LOG_DIR), and stub `aws`,
 # `docker`, `curl`, and `codeatlas-compose` commands first on PATH. Every stub appends its command
 # line to $STUB_LOG; the `aws` stub also saves each parameter that `ssm put-parameter` writes under
-# $STUB_VALUES/<name>, with its type in <name>.type. A stub fails when its failure keyword is listed
-# in $STUB_FAIL:
+# $STUB_VALUES/<name>, with its type in <name>.type, and keeps S3 objects under $STUB_BUCKET/<key>.
+# `codeatlas-compose exec` and `run` run the service's command from $STUB_CONTAINER_BIN when a stub
+# of that name is there (host_scripts.bats installs them). A stub fails when its failure keyword is
+# listed in $STUB_FAIL:
 #   ssm (aws ssm), ecr-login (aws ecr get-login-password), docker-login, pull, migrate,
-#   up (codeatlas-compose up), curl.
+#   up (codeatlas-compose up), curl, s3-download (aws s3 cp from S3), s3-upload
+#   (aws s3api put-object), metric (aws cloudwatch put-metric-data).
 
 DEPLOY_DIR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 export DEPLOY_DIR
@@ -36,7 +39,9 @@ setup_host() {
 	export STUB_FAIL=""
 	export STUB_SSM_RESPONSE="$BATS_TEST_TMPDIR/parameters.json"
 	export STUB_VALUES="$BATS_TEST_TMPDIR/values"
-	mkdir -p "$CODEATLAS_ROOT/releases" "$CODEATLAS_DATA/state" "$CODEATLAS_LOG_DIR" "$STUB_VALUES"
+	export STUB_BUCKET="$BATS_TEST_TMPDIR/bucket"
+	mkdir -p "$CODEATLAS_ROOT/releases" "$CODEATLAS_DATA/state" "$CODEATLAS_LOG_DIR" "$STUB_VALUES" \
+		"$STUB_BUCKET"
 	: >"$STUB_LOG"
 
 	# Without root, the key file cannot be given to UID 1000; give it to the current user instead.
@@ -100,6 +105,54 @@ case "$1 $2" in
 	fails ecr-login && { echo "stub: ecr login failed" >&2; exit 255; }
 	echo "stub-registry-password"
 	;;
+"s3 cp")
+	shift 2
+	paths=()
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--region) shift ;;
+		--*) ;;
+		*) paths+=("$1") ;;
+		esac
+		shift
+	done
+	case "${paths[0]}" in
+	s3://*)
+		fails s3-download && { echo "stub: download failed" >&2; exit 1; }
+		object="$STUB_BUCKET/${paths[0]#s3://*/}"
+		[ -f "$object" ] || { echo "stub: (404) Not Found" >&2; exit 1; }
+		cp "$object" "${paths[1]}"
+		;;
+	*)
+		object="$STUB_BUCKET/${paths[1]#s3://*/}"
+		mkdir -p "${object%/*}"
+		cp "${paths[0]}" "$object"
+		;;
+	esac
+	;;
+"s3api put-object")
+	key="" body="" if_none_match=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--key) key="$2"; shift ;;
+		--body) body="$2"; shift ;;
+		--if-none-match) if_none_match="$2"; shift ;;
+		esac
+		shift
+	done
+	fails s3-upload && { echo "stub: upload failed" >&2; exit 254; }
+	object="$STUB_BUCKET/$key"
+	if [ -e "$object" ] && [ "$if_none_match" = "*" ]; then
+		echo "stub: (PreconditionFailed) At least one of the pre-conditions you specified did not hold" >&2
+		exit 254
+	fi
+	mkdir -p "${object%/*}"
+	cp "$body" "$object"
+	echo '{"ETag": "\"stub\""}'
+	;;
+"cloudwatch put-metric-data")
+	fails metric && { echo "stub: put-metric-data failed" >&2; exit 254; }
+	;;
 esac
 exit 0
 EOF
@@ -127,6 +180,24 @@ EOF
 #!/usr/bin/env bash
 echo "codeatlas-compose $*" >>"$STUB_LOG"
 case " $STUB_FAIL " in *" up "*) [ "$1" = up ] && exit 1 ;; esac
+case "$1" in
+exec | run)
+	# exec [-T] SERVICE COMMAND... and run [--rm] [-T] [-v VOLUME] SERVICE COMMAND...
+	shift
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		-v | --volume | -e | --env | -u | --user | -w | --workdir) shift 2 ;;
+		-*) shift ;;
+		*) break ;;
+		esac
+	done
+	shift
+	if [ $# -gt 0 ] && [ -n "${STUB_CONTAINER_BIN:-}" ] && [ -x "$STUB_CONTAINER_BIN/$1" ]; then
+		export PATH="$STUB_CONTAINER_BIN:$PATH"
+		exec "$@"
+	fi
+	;;
+esac
 exit 0
 EOF
 

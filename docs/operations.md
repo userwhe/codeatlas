@@ -86,10 +86,11 @@ aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" \
 
 ### Shared resources
 
-`infra/shared/` holds the image repositories, the bucket for release bundles, and the hosted zone.
-Copy the examples and fill them in: the account ID in `backend.hcl`; the domain, the alert email
-address, and the repository's OIDC subject prefix in `shared.tfvars` (later stories use the last
-two, but the variables are required now).
+`infra/shared/` holds the image repositories, the bucket for release bundles and backups, the hosted
+zone, the alert topic `codeatlas-alerts` with an email subscription, and the monthly budget
+`codeatlas-monthly`. Copy the examples and fill them in: the account ID in `backend.hcl`; the
+domain, the alert email address, the monthly budget, and the repository's OIDC subject prefix in
+`shared.tfvars` (the release workflow uses the prefix later, but the variable is required now).
 
 ```bash
 cp infra/shared/backend.hcl.example infra/shared/backend.hcl
@@ -101,6 +102,25 @@ terraform -chdir=infra/shared plan -var-file=shared.tfvars -out=plan.out
 terraform -chdir=infra/shared show plan.out    # review
 terraform -chdir=infra/shared apply plan.out
 ```
+
+### Confirming the alert subscription
+
+Applying `infra/shared` subscribes the alert email address to `codeatlas-alerts`, and AWS sends it
+a message titled "AWS Notification - Subscription Confirmation". Open its "Confirm subscription"
+link; until then, no alarm or failed release reaches you. Check, and send a test message:
+
+```bash
+TOPIC_ARN="$(terraform -chdir=infra/shared output -raw alert_topic_arn)"
+aws sns list-subscriptions-by-topic --topic-arn "$TOPIC_ARN" \
+  --query 'Subscriptions[].SubscriptionArn' --output text    # an ARN, not PendingConfirmation
+aws sns publish --topic-arn "$TOPIC_ARN" --subject "CodeAtlas test" --message "Test notification."
+```
+
+Every notification email ends with an unsubscribe link; following it stops all alerts. To
+subscribe again, or after changing `alert_email`, apply `infra/shared` again and confirm the new
+message. The budget's emails go to the same address directly and need no confirmation: once each
+month at 80% and 100% of actual spend and at 80% of forecast spend (forecasts start after about five
+weeks of data).
 
 ### Delegating the domain
 
@@ -164,8 +184,9 @@ terraform -chdir=infra/stack show plan.out    # review
 terraform -chdir=infra/stack apply plan.out
 ```
 
-The host installs Docker and the AWS CLI and mounts its data volume on first boot. Wait for it to
-finish (on the host):
+The host installs Docker, the AWS CLI, and the CloudWatch agent, and mounts its data volume on first
+boot; in the pilot it also installs the backup and certificate check timers. Wait for it to finish
+(on the host):
 
 ```bash
 sudo cloud-init status --wait    # "status: done"
@@ -398,6 +419,307 @@ connections from `api` and `worker` fail.
 
 4. Release the running commit again. It writes the new `DATABASE_URL` and recreates `api`, `worker`,
    and `db`.
+
+## Monitoring
+
+The pilot reports to CloudWatch (research R10): the services' logs, the host scripts' log files
+(shipped by the CloudWatch agent), the worker's metrics, the agent's memory and disk metrics, and
+two Route 53 health checks. The drill and the load test have logs and agent metrics, but no alarms,
+dashboard, or health checks.
+
+### Alerts
+
+Each alarm emails `codeatlas-alerts` when it fires and again when it recovers. The budget emails
+separately (["Confirming the alert subscription"](#confirming-the-alert-subscription)).
+
+| Alarm | Fires when | Look first at (on the host unless noted) |
+| --- | --- | --- |
+| `site-down` | `https://codeatlas.example.dev/readyz` has failed for 5 minutes: the API, its database, or Caddy is down | `sudo codeatlas-compose ps`, then `sudo codeatlas-compose logs --tail 100 api db caddy` |
+| `web-down` | `https://codeatlas.example.dev/` has failed for 5 minutes | `sudo codeatlas-compose ps`, then the `web` and `caddy` logs |
+| `worker-down` | The worker has sent no heartbeat for 5 minutes | `sudo codeatlas-compose logs --tail 100 worker`; `sudo codeatlas-compose up -d worker` |
+| `jobs-waiting` | A job that could run has waited 30 minutes | The dashboard's queue graph and the worker's log: a stuck job, or more work than one worker handles |
+| `jobs-failing` | 3 or more jobs failed in an hour (retries used up, timeouts, internal errors) | The saved query "Failed jobs", then the job's lines; the dashboard's provider errors |
+| `root-disk-full` | The root volume is more than 80% full | `sudo docker system df`; remove old bundles in `/opt/codeatlas/releases/` (never those in `state/running` and `state/previous`) and unused images with `sudo docker image prune -a` (a rollback then pulls its images again) |
+| `data-disk-full` | The data volume is more than 80% full | `sudo du -sh /var/lib/codeatlas/*`; grow the volume (below) |
+| `backup-missing` | No backup has completed for 26 hours | ["Backups"](#backups) |
+| `certificate-expiring` | The certificate expires within 14 days, or has not been checked for 26 hours | `sudo tail /var/log/codeatlas/check-certificate.log`, then Caddy's log for renewal errors |
+| `host-status-check` | EC2 status checks have failed for 2 minutes | The instance's status checks in the EC2 console. Automatic recovery restarts it on new hardware after a system check failure; for an instance check failure, reboot it, and replace the host (["Replacing the host"](#replacing-the-host)) if that does not help |
+
+To grow the data volume, raise `data_volume_gib` in `pilot.tfvars`, plan and apply (the volume
+changes in place, without a new host), then extend its file system (on the host):
+
+```bash
+sudo resize2fs "$(findmnt -n -o SOURCE /var/lib/codeatlas)"
+```
+
+### The dashboard
+
+The CloudWatch dashboard `codeatlas-pilot` (CloudWatch console, Dashboards) shows the last 7 days:
+the alarms' states; the health checks; the worker's heartbeat, queued jobs, and oldest runnable job;
+CPU, memory, and both volumes; failed jobs, backups, status checks, and the certificate's days left;
+and, from the logs, requests and p95 latency by route group (searches, views, submissions, other),
+5xx responses, jobs by kind and outcome (`retry_wait` counts the retries), and model provider
+errors by provider. The log widgets run Logs Insights queries whenever the dashboard loads.
+
+### Logs
+
+Each environment's log groups keep 7 days: `/codeatlas/<environment>/caddy`, `web`, `api`,
+`worker`, `db`, `releases` (Run Command output of releases), and `host` (the files in
+`/var/log/codeatlas/`: `backup.log`, `restore.log`, `check-certificate.log`, and `releases.log`,
+one stream per file). API and worker lines are JSON with `request_id`, `job_id`, `run_id`,
+`snapshot_id`, and, on `request` lines, `method`, `route`, `status`, and `duration_ms`; on
+`job_finished` lines, `kind`, `outcome`, `attempt`, and `duration_ms`; on provider errors,
+`provider`.
+
+Logs Insights (CloudWatch console, Logs Insights, saved queries) has three queries for the pilot,
+under `codeatlas-pilot/`:
+
+- **Lines for a request or job ID**: every line, in every log group, that contains an ID. Replace
+  `REQUEST_OR_JOB_ID` with a request ID (every API response has an `X-Request-ID` header, and error
+  bodies repeat it as `request_id`) or a job ID. Caddy's lines hold the request ID in their logged
+  response headers.
+- **p95 latency by route**: request count and p95 `duration_ms` by method and route template.
+- **Failed jobs**: the `job_finished` lines with outcome `failed`, with kind, attempt, and job ID.
+
+The same search from the command line, over the last hour:
+
+```bash
+ID=<request or job ID>
+QUERY_ID="$(aws logs start-query \
+  --log-group-names /codeatlas/pilot/caddy /codeatlas/pilot/api /codeatlas/pilot/worker \
+  --start-time "$(( $(date +%s) - 3600 ))" --end-time "$(date +%s)" \
+  --query-string "fields @timestamp, @log, @message | filter @message like \"$ID\" | sort @timestamp asc" \
+  --query queryId --output text)"
+sleep 5
+aws logs get-query-results --query-id "$QUERY_ID" --output text
+```
+
+The CloudWatch agent's own log is `/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log`
+(on the host); `systemctl status amazon-cloudwatch-agent` shows whether it runs.
+
+## Backups
+
+Every night at 03:30 UTC, `codeatlas-backup.timer` (pilot only) runs
+`/opt/codeatlas/current/backup.sh`. In one database snapshot it dumps the database with `pg_dump`
+and counts the rows of every table, so the counts describe exactly the dump; it checks that
+`pg_restore` can read the dump, builds `manifest.json` (commit, Alembic revision, the dump's size
+and SHA-256, and the row counts), uploads both files, and publishes the `BackupCompleted` metric.
+Any failure stops it before the metric, and `backup-missing` fires within about an hour once 26
+hours have passed without a successful backup.
+
+- **Where**: `s3://codeatlas-<account ID>-us-east-1/backups/<UTC date>/codeatlas.dump` and
+  `manifest.json`, encrypted by S3. They expire 7 days after they are taken (rounded up to the next
+  midnight UTC); deleted data can therefore remain in a backup for up to 10 days after deletion,
+  which the external processing disclosure states.
+- **Protection**: the pilot's role can only create objects under `backups/`, with
+  `If-None-Match: *`; it can neither overwrite nor delete a backup. A second backup on the same UTC
+  date therefore fails, and so does a retry after a partial upload: the next night's backup is the
+  retry.
+- **Staging**: the dump is written to `/var/lib/codeatlas/backup/` on the data volume and deleted
+  after the upload, so the data volume needs free space for one dump.
+
+Check the last runs and the next one (on the host):
+
+```bash
+systemctl list-timers 'codeatlas-*'
+sudo tail -n 20 /var/log/codeatlas/backup.log
+sudo journalctl -u codeatlas-backup.service --since yesterday
+```
+
+List the backups and read a manifest (on your machine; the host's role cannot list the bucket):
+
+```bash
+ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+BUCKET="codeatlas-$ACCOUNT_ID-$AWS_REGION"
+aws s3 ls "s3://$BUCKET/backups/"
+aws s3 cp "s3://$BUCKET/backups/<date>/manifest.json" - | jq '{created_at, release, alembic_revision}'
+```
+
+Run a backup now, for example after fixing a failure (on the host); `systemctl start` waits until it
+ends:
+
+```bash
+sudo systemctl start codeatlas-backup.service
+sudo tail -n 5 /var/log/codeatlas/backup.log
+```
+
+## Restoring a backup
+
+`restore.sh` replaces the host's database with one backup. It downloads the dump and its manifest
+into `/var/lib/codeatlas/backup/`, checks the dump's SHA-256 against the manifest (changing nothing
+if it differs), stops `api` and `worker`, runs `pg_restore --clean --if-exists --no-owner
+--exit-on-error`, and runs `verify-restore`, which compares the restored Alembic revision and row
+counts with the manifest. It leaves `api` and `worker` stopped, so you can look before anything
+runs. Everything written to the database after the backup is lost, so restore into the running
+pilot only when its data is gone.
+
+The host must run the backup's commit (`release` in the manifest), so that the schema matches;
+release it first ("Releasing an existing commit") if needed. The script warns when the host runs
+another commit. Then (on the host):
+
+```bash
+sudo /opt/codeatlas/current/restore.sh <UTC date, for example 2026-10-07>
+sudo codeatlas-compose up -d api worker    # after checking; the drill starts only api
+```
+
+It exits 0 when the restore is verified; 1 when the download, the checksum, `pg_restore`, or the
+verification fails (the output and `/var/log/codeatlas/restore.log` name the step and, for the
+verification, each table that differs); 2 for a malformed date. The pilot's and the drill's roles
+can read the backups; the load test's cannot.
+
+## Recovery exercise
+
+The drill rebuilds the pilot from its definition and its latest backup, to prove recovery works
+and to time it (SC-008: under 2 hours, losing only changes after the backup). The drill reads the
+pilot's parameters, has its own name, `drill.example.dev`, and never runs the worker, so no
+background job acts on the restored data. Record the start time, then:
+
+1. Build the drill:
+
+   ```bash
+   cp infra/stack/drill.tfvars.example infra/stack/drill.tfvars    # set domain and hostname
+   terraform -chdir=infra/stack init -reconfigure -backend-config=backend.hcl \
+     -backend-config=key=stack/drill.tfstate
+   terraform -chdir=infra/stack plan -var-file=drill.tfvars -out=plan.out
+   terraform -chdir=infra/stack show plan.out    # review
+   terraform -chdir=infra/stack apply plan.out
+   ```
+
+   Then wait for its bootstrap (`sudo cloud-init status --wait` in a session on the instance tagged
+   `codeatlas:environment=drill`).
+2. In the pilot GitHub App's settings (General, Callback URL, "Add Callback URL"), add
+   `https://drill.example.dev/auth/github/callback`, so that you can sign in on the drill.
+3. Find the latest backup and its manifest's `release` (["Backups"](#backups)): the commit the pilot
+   ran when the backup was taken, usually the one `https://codeatlas.example.dev/version` reports.
+   Release that commit to the drill, following ["Releasing an existing
+   commit"](#releasing-an-existing-commit) with `ENVIRONMENT=drill`. The release starts every
+   service on an empty database, the worker too; the restore stops it.
+4. Restore the backup, then start the API without the worker (on the drill host):
+
+   ```bash
+   sudo /opt/codeatlas/current/restore.sh <latest date>
+   sudo codeatlas-compose up -d api
+   ```
+
+5. Sign in at `https://drill.example.dev`, and check your repositories, an earlier answer, and an
+   earlier review. Do not submit new questions or reviews: without the worker they only queue.
+6. Record the end time and the result in the quickstart's validation record.
+7. Remove the drill's callback URL from the App, and destroy the drill (["Tearing
+   down"](#the-drill-or-the-load-test)).
+
+## Replacing the host
+
+The data volume, the Elastic IP, and the DNS record outlive the instance, so a new host takes over
+the pilot without a restore. Replace it after a change to the bootstrap: the template, or the files
+it installs from `deploy/` (`cloudwatch-agent.json` and `systemd/`), after which the plan shows
+`aws_instance.host` "must be replaced"; after a host failure that a reboot and automatic recovery do
+not fix; or to move to a newer Ubuntu image.
+
+1. Note the running commit: `curl -s https://codeatlas.example.dev/version` (or, on the host,
+   `cat /var/lib/codeatlas/state/running`).
+2. Plan the replacement and review it: the instance, its volume attachment, and the Elastic IP
+   association are replaced; the data volume is not touched. The pilot is down from the moment the
+   old instance stops until the release below finishes, so `site-down` and `web-down` fire and then
+   recover.
+
+   ```bash
+   terraform -chdir=infra/stack init -reconfigure -backend-config=backend.hcl \
+     -backend-config=key=stack/pilot.tfstate
+   terraform -chdir=infra/stack plan -var-file=pilot.tfvars -replace=aws_instance.host -out=plan.out
+   terraform -chdir=infra/stack show plan.out    # review
+   terraform -chdir=infra/stack apply plan.out
+   ```
+
+3. Wait for the new host's bootstrap (`sudo cloud-init status --wait`). It mounts the same data
+   volume, with the database, Caddy's certificates, and `state/running`.
+4. The new host has no release bundle or rendered configuration. Release the noted commit to it
+   (["Releasing an existing commit"](#releasing-an-existing-commit)); upload its bundle again if it
+   expired.
+5. Check `/version`, `systemctl list-timers 'codeatlas-*'`, and `systemctl status
+   amazon-cloudwatch-agent` (on the host), and that every alarm returns to OK. The alarms on the
+   instance's metrics follow the new instance ID in the same apply.
+
+## Losing the data volume
+
+When the pilot's data volume is lost or its file system cannot be repaired, the pilot comes back
+from the latest backup, and changes made after that backup are lost (up to 24 hours). If only the
+instance failed, replace the host instead (above); the data is intact.
+
+1. Find the latest backup and read its manifest's `created_at` and `release` (["Backups"](#backups)).
+2. Make Terraform forget the lost volume. It is protected by `prevent_destroy`, so it is removed from
+   the state rather than destroyed:
+
+   ```bash
+   terraform -chdir=infra/stack init -reconfigure -backend-config=backend.hcl \
+     -backend-config=key=stack/pilot.tfstate
+   terraform -chdir=infra/stack state rm 'aws_ebs_volume.pilot_data[0]'
+   ```
+
+3. Plan and apply. The plan creates a new data volume and replaces the attachment and the host,
+   whose bootstrap names the new volume; check that it destroys nothing else.
+
+   ```bash
+   terraform -chdir=infra/stack plan -var-file=pilot.tfvars -out=plan.out
+   terraform -chdir=infra/stack show plan.out    # review
+   terraform -chdir=infra/stack apply plan.out
+   ```
+
+4. Wait for the new host's bootstrap, which creates a file system on the empty volume. Release the
+   backup's commit (`release` in its manifest) to the host, as in ["Releasing an existing
+   commit"](#releasing-an-existing-commit). It creates an empty database and starts the services;
+   Caddy obtains a new certificate.
+5. Restore the backup, check the data, and start the services (on the host):
+
+   ```bash
+   sudo /opt/codeatlas/current/restore.sh <latest date>
+   sudo codeatlas-compose up -d api worker
+   ```
+
+6. If `main` has moved past the backup's commit, release the newer commit.
+7. Tell the pilot users the backup's time (`created_at`): questions, reviews, and repository changes
+   after it are lost, and repositories they disconnected after it are connected again, so they should
+   disconnect those again. Lost repository access is found again by the daily access check.
+8. Delete the lost volume in the EC2 console (or `aws ec2 delete-volume`) once nothing more can be
+   recovered from it; Terraform no longer manages it.
+
+## Fault tests
+
+The fault tests (SC-007) prove that each alert arrives within 10 minutes (the backup alert within an
+hour after the 26-hour mark) and that a recovery email follows. They disturb the pilot, so run them
+at a quiet time, and record when each fault starts and when each email arrives in the quickstart's
+validation record. On the host:
+
+| Fault | Start it | Expected alert | End it |
+| --- | --- | --- | --- |
+| Edge proxy down | `sudo codeatlas-compose stop caddy` | `site-down` and `web-down` | `sudo codeatlas-compose up -d caddy` |
+| Web app down | `sudo codeatlas-compose stop web` | `web-down` | `sudo codeatlas-compose up -d web` |
+| Worker down with jobs queued | `sudo codeatlas-compose stop worker`, then re-index a repository in the web app | `worker-down` | `sudo codeatlas-compose up -d worker` |
+| Disk full | Fill the data volume past 80%, below | `data-disk-full` | `sudo rm /var/lib/codeatlas/fault-test.fill` |
+| Backup skipped | `sudo systemctl disable --now codeatlas-backup.timer`, then wait until 26 hours after the last backup | `backup-missing` | `sudo systemctl enable --now codeatlas-backup.timer`, then `sudo systemctl start codeatlas-backup.service` |
+
+To fill the data volume to 85%:
+
+```bash
+FILL="$(df -B1 --output=size,used /var/lib/codeatlas | awk 'NR == 2 { printf "%d", $1 * 0.85 - $2 }')"
+sudo fallocate -l "$FILL" /var/lib/codeatlas/fault-test.fill
+```
+
+`jobs-waiting`, `jobs-failing`, and `certificate-expiring` are covered by the tests of their
+metrics. Prove their notification path by setting their state by hand (on your machine): each sends
+an alarm email, then a recovery email. CloudWatch evaluates them again at their next period and
+returns them to the state their data gives.
+
+```bash
+for alarm in jobs-waiting jobs-failing certificate-expiring; do
+  aws cloudwatch set-alarm-state --alarm-name "$alarm" --state-value ALARM \
+    --state-reason "Notification test"
+done
+# After the three alarm emails arrive:
+for alarm in jobs-waiting jobs-failing certificate-expiring; do
+  aws cloudwatch set-alarm-state --alarm-name "$alarm" --state-value OK \
+    --state-reason "Notification test"
+done
+```
 
 ## Tearing down
 

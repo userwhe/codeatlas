@@ -13,6 +13,9 @@ locals {
   bucket   = "codeatlas-${local.account_id}-${local.region}"
 
   data_volume_id = local.is_pilot ? aws_ebs_volume.pilot_data[0].id : aws_ebs_volume.temporary_data[0].id
+
+  # Host files that the bootstrap installs, from the repository's deploy/ directory.
+  deploy_dir = "${path.module}/../../deploy"
 }
 
 data "aws_caller_identity" "current" {}
@@ -130,7 +133,52 @@ data "aws_iam_policy_document" "host" {
     resources = ["${data.aws_s3_bucket.main.arn}/releases/*"]
   }
 
-  # The Docker daemon's awslogs driver and Run Command's output.
+  # restore.sh: the pilot restores into itself after losing its data volume, and the drill
+  # restores the pilot's backups. The load test never reads them (research R12).
+  dynamic "statement" {
+    for_each = var.environment == "loadtest" ? [] : [1]
+
+    content {
+      sid       = "ReadBackups"
+      actions   = ["s3:GetObject"]
+      resources = ["${data.aws_s3_bucket.main.arn}/backups/*"]
+    }
+  }
+
+  # backup.sh uploads with If-None-Match: *, so this role can create backups but never overwrite
+  # or delete one; a compromised host cannot erase them (research R12).
+  dynamic "statement" {
+    for_each = local.is_pilot ? [1] : []
+
+    content {
+      sid       = "CreateBackups"
+      actions   = ["s3:PutObject"]
+      resources = ["${data.aws_s3_bucket.main.arn}/backups/*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "s3:if-none-match"
+        values   = ["*"]
+      }
+    }
+  }
+
+  # The CloudWatch agent's memory and disk metrics everywhere (the load test reads them); the
+  # backup and certificate metrics only in the pilot (research R10).
+  statement {
+    sid       = "PublishMetrics"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = local.is_pilot ? ["CWAgent", "CodeAtlas"] : ["CWAgent"]
+    }
+  }
+
+  # The Docker daemon's awslogs driver, Run Command's output, and the CloudWatch agent's shipping
+  # of the host scripts' log files.
   statement {
     sid = "WriteLogs"
     actions = [
@@ -176,6 +224,12 @@ resource "aws_instance" "host" {
     hostname           = var.hostname
     parameters_path    = local.parameters_path
     data_volume_device = "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(local.data_volume_id, "-", "")}"
+    # The CloudWatch agent's configuration with this environment's log group (research R10).
+    cloudwatch_agent_config = replace(file("${local.deploy_dir}/cloudwatch-agent.json"), "__ENVIRONMENT__", var.environment)
+    # The backup and certificate check timers and their services, in the pilot only (research R12).
+    systemd_units = local.is_pilot ? {
+      for name in fileset("${local.deploy_dir}/systemd", "*") : name => file("${local.deploy_dir}/systemd/${name}")
+    } : {}
   })
   user_data_replace_on_change = true
 

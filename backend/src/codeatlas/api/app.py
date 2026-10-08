@@ -1,6 +1,7 @@
-"""FastAPI application: error handling, request IDs, Origin check, and routers."""
+"""FastAPI application: error handling, request IDs and log lines, Origin check, and routers."""
 
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -30,7 +31,10 @@ from codeatlas.db import new_session
 from codeatlas.logging import configure_logging, request_id_var
 
 logger = logging.getLogger(__name__)
+# One line per request, for the dashboard's request counts and latency (research R9).
+request_logger = logging.getLogger("codeatlas.request")
 
+API_PREFIX = "/v1"
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # GitHub calls these paths, and their signature check replaces the Origin check
 # (specs/002-push-reindexing, research R2).
@@ -55,6 +59,36 @@ def _error_response(
     )
 
 
+def _route_template(request: Request) -> str:
+    """The matched route's path template, such as `/v1/repositories/{repository_id}`.
+
+    The router records the matched route on the request's scope, with its path relative to the
+    `include_router` prefix, so the prefix is added back here. The app's route list cannot be
+    searched instead: FastAPI 0.142 keeps included routers there without a path (research R9).
+    """
+    path = getattr(request.scope.get("route"), "path", None)
+    if not isinstance(path, str):
+        return "unmatched"
+    if request.url.path.startswith(f"{API_PREFIX}/"):
+        return API_PREFIX + path
+    return path
+
+
+def _log_request(request: Request, status: int, started: float) -> None:
+    # The method and route template only: no query string, body, or path parameter values.
+    request_logger.info(
+        "request",
+        extra={
+            "fields": {
+                "method": request.method,
+                "route": _route_template(request),
+                "status": status,
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+            }
+        },
+    )
+
+
 def create_app() -> FastAPI:
     configure_logging()
     app = FastAPI(title="CodeAtlas API", version="0.1.0")
@@ -71,6 +105,21 @@ def create_app() -> FastAPI:
                     request, 403, "origin_mismatch", "The request origin is not allowed."
                 )
         return await call_next(request)
+
+    # Registered before `request_ids`, so it runs inside it and the line carries the request ID.
+    @app.middleware("http")
+    async def request_log(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            # The exception handler answers 500 outside this middleware.
+            _log_request(request, 500, started)
+            raise
+        _log_request(request, response.status_code, started)
+        return response
 
     @app.middleware("http")
     async def request_ids(
@@ -176,7 +225,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(webhooks.router)
     for module in (me, usage, jobs, github, repositories, snapshots, search, analysis_runs):
-        app.include_router(module.router, prefix="/v1")
+        app.include_router(module.router, prefix=API_PREFIX)
     return app
 
 

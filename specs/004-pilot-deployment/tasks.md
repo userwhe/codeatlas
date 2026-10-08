@@ -568,7 +568,7 @@ latest backup shows a pilot user's data within 2 hours.
 
 ### Tests for User Story 2 ⚠️ (write first, confirm they fail)
 
-- [ ] T039 [P] [US2] Unit tests for EMF lines in backend/tests/unit/test_metrics.py (research
+- [X] T039 [P] [US2] Unit tests for EMF lines in backend/tests/unit/test_metrics.py (research
   R10), capturing stdout with `capsys`:
   - With `emit_metrics` on and `metrics_environment` `pilot`, `emit({"QueuedJobs": 3,
     "OldestRunnableJobAgeSeconds": 42.0})` writes one JSON line with `_aws.Timestamp` (integer
@@ -576,7 +576,7 @@ latest backup shows a pilot user's data within 2 hours.
     `Dimensions == [["Environment"]]`, a definition per metric with its unit (`Count` or
     `Seconds`), the values at the top level, and `"Environment": "pilot"`.
   - With `emit_metrics` off, nothing is written.
-- [ ] T040 [P] [US2] Integration tests for worker metrics and job lines in
+- [X] T040 [P] [US2] Integration tests for worker metrics and job lines in
   backend/tests/integration/test_worker_metrics.py, with `emit_metrics` on through the `settings`
   fixture. Capture EMF with `capsys` and log lines with the custom handler that
   backend/tests/integration/test_logging.py uses (`_Capture`), because `configure_logging` binds
@@ -595,7 +595,7 @@ latest backup shows a pilot user's data within 2 hours.
     and emit `JobsFailed` 1, including a job failed by `claim_next` (expired deadline), whose
     `job_finished` line still carries its `job_id`. A permanent input failure (for example a size
     limit) logs `failed` and emits no `JobsFailed`.
-- [ ] T041 [P] [US2] Unit tests for backups in backend/tests/unit/test_backup_manifest.py (data
+- [X] T041 [P] [US2] Unit tests for backups in backend/tests/unit/test_backup_manifest.py (data
   model, "Backup manifest"):
   - `build_manifest(counts, release=..., dump_key=..., bytes_=..., sha256=..., created_at=...)`
     returns the documented shape from a counts document (`alembic_revision`, `row_counts`).
@@ -603,24 +603,24 @@ latest backup shows a pilot user's data within 2 hours.
   - `compare(manifest, row_counts, revision)` returns no differences for equal input, and one
     readable difference each for a count mismatch, a missing table, an extra table, and a revision
     mismatch.
-- [ ] T042 [P] [US2] Extend backend/tests/integration/test_ops_commands.py for backups: write a
+- [X] T042 [P] [US2] Extend backend/tests/integration/test_ops_commands.py for backups: write a
   counts file with the current row counts and `alembic_revision` `0004`; `backup-manifest --counts
   <file> --dump-key K --bytes 10 --sha256 <hex>` prints the manifest JSON; `verify-restore <that
   file>` with the printed manifest saved to a file exits 0; after inserting one row into
   `audit_events` it exits 1 and prints the table.
-- [ ] T043 [P] [US2] Extend backend/tests/integration/test_logging.py: a `GET
+- [X] T043 [P] [US2] Extend backend/tests/integration/test_logging.py: a `GET
   /v1/repositories/{id}` produces one `request` line with `method`, `route`
   (`/v1/repositories/{repository_id}`, the template with its prefix), `status`, `duration_ms`, and
   `request_id`, and no query string or body content; a route that raises an unexpected exception
   produces a `request` line with status 500.
-- [ ] T044 [P] [US2] Extend backend/tests/unit/test_gemini_answer_model.py and
+- [X] T044 [P] [US2] Extend backend/tests/unit/test_gemini_answer_model.py and
   backend/tests/unit/test_voyage_embedder.py: a retried error, a non-retryable error (for example
   401), a blocked response, and exhausted retries are each logged with the structured field
   `provider` (`gemini` or `voyage`) and no request content.
 
 ### Implementation for User Story 2
 
-- [ ] T045 [US2] Create backend/src/codeatlas/metrics.py:
+- [X] T045 [US2] Create backend/src/codeatlas/metrics.py:
   - `emit(values, *, units=None)` writes EMF lines to `sys.stdout` (flushed) only when
     `get_settings().emit_metrics`, with `Environment` from `metrics_environment`. Units default to
     `Count`, and to `Seconds` for names ending in `Seconds`.
@@ -628,7 +628,7 @@ latest backup shows a pilot user's data within 2 hours.
     eligibility conditions as `claim_next`'s `_claimable` query, and emits them.
   - `start_reporter(interval=60) -> threading.Event` starts a daemon thread that calls
     `report_once()` every interval until the returned event is set, logging and surviving errors.
-- [ ] T046 [US2] Job outcomes and failure metrics:
+- [X] T046 [US2] Job outcomes and failure metrics:
   - In backend/src/codeatlas/jobs/queue.py, make `fail` return the job's final status
     (`retry_wait` or `failed`). In `_mark_failed`, which both `fail` and `claim_next` reach, inside
     `log_context(job_id=str(job.id))`, log `job_finished` with `outcome` `failed`, and emit
@@ -639,7 +639,7 @@ latest backup shows a pilot user's data within 2 hours.
     `retry_wait`), `attempt`, and `duration_ms` (the failed outcome is logged by `_mark_failed`).
     In `main`, when `emit_metrics` is set, call `metrics.start_reporter()` before the loop and set
     its event when stopping.
-- [ ] T047 [US2] Request log line in backend/src/codeatlas/api/app.py: a middleware registered
+- [X] T047 [US2] Request log line in backend/src/codeatlas/api/app.py: a middleware registered
   before `request_ids` (so it runs inside it and sees the request ID) times the request and logs
   `request` through the `codeatlas.request` logger with `method`, `route`, `status`, and
   `duration_ms`. Take `route` from `request.scope.get("route")` after `call_next` returns, or in
@@ -647,17 +647,17 @@ latest backup shows a pilot user's data within 2 hours.
   prefix `/v1` when the request path starts with `/v1/`; log `unmatched` when there is no route.
   Do not search `app.router.routes`: in FastAPI 0.142 it holds `_IncludedRouter` entries without
   `path` (research R9). On an exception, log status 500 and re-raise.
-- [ ] T048 [US2] Provider field on error logs: in backend/src/codeatlas/providers/answer_model.py
+- [X] T048 [US2] Provider field on error logs: in backend/src/codeatlas/providers/answer_model.py
   and backend/src/codeatlas/providers/embeddings.py, log a warning with
   `extra={"fields": {"provider": "gemini"}}` or `"voyage"` for each retried error and before each
   raised error (blocked, rejected, and retries exhausted), without request content.
-- [ ] T049 [US2] Backups in the operator commands:
+- [X] T049 [US2] Backups in the operator commands:
   - Create backend/src/codeatlas/ops/backup.py with the pure `build_manifest` and `compare`.
   - Add `backup-manifest --counts FILE --dump-key --bytes --sha256` (reads the counts file; the
     `release` comes from settings) and `verify-restore MANIFEST` (counts every table in the
     `public` schema and reads `alembic_version`, in one `REPEATABLE READ` transaction) to
     backend/src/codeatlas/ops/__main__.py.
-- [ ] T050 [P] [US2] Host scripts (research R12; contracts/operations.md "Host scripts";
+- [X] T050 [P] [US2] Host scripts (research R12; contracts/operations.md "Host scripts";
   `set -euo pipefail`; each logs to `/var/log/codeatlas/<script>.log`). Write their `bats` tests
   first, in deploy/tests/host_scripts.bats with stub `psql`, `docker`, `aws`, and `openssl`
   (research R18): `backup.sh` publishes no metric and exits non-zero when the dump step fails;
@@ -691,21 +691,21 @@ latest backup shows a pilot user's data within 2 hours.
     and `.timer` (`OnCalendar=*-*-* 03:30:00 UTC`, `Persistent=true`), and
     `codeatlas-cert-check.service` (`ExecStart=/opt/codeatlas/current/check-certificate.sh`) and
     `.timer` (daily at 06:00 UTC).
-- [ ] T051 [P] [US2] Create deploy/cloudwatch-agent.json: `mem_used_percent`, and
+- [X] T051 [P] [US2] Create deploy/cloudwatch-agent.json: `mem_used_percent`, and
   `disk_used_percent` with `resources` limited to `/` and `/var/lib/codeatlas`, `drop_device:
   true`, every 60 seconds, with `append_dimensions` `InstanceId` (so the disk metric's dimensions
   are `InstanceId`, `path`, and `fstype`); and the files `/var/log/codeatlas/*.log` shipped to
   `/codeatlas/<environment>/host`.
-- [ ] T052 [US2] Extend infra/stack/cloud-init.yaml.tftpl: install the CloudWatch agent's `arm64`
+- [X] T052 [US2] Extend infra/stack/cloud-init.yaml.tftpl: install the CloudWatch agent's `arm64`
   package from AWS, write its configuration with the environment's values, and start it; in the
   pilot only, install the units from `deploy/systemd/` (shipped in the user data) and enable both
   timers. Because `user_data_replace_on_change` is set, the plan shows a host replacement (T057).
-- [ ] T053 [US2] Extend infra/shared/: the SNS topic `codeatlas-alerts` with an email subscription
+- [X] T053 [US2] Extend infra/shared/: the SNS topic `codeatlas-alerts` with an email subscription
   to `alert_email`; the budget `codeatlas-monthly` for `monthly_budget_usd` with email
   notifications at 80% and 100% of actual spend and 80% of forecast spend (forecasts start after
   about five weeks of data); a second rule in T033's lifecycle configuration expiring `backups/`
   after 7 days; output `alert_topic_arn`.
-- [ ] T054 [US2] Extend infra/stack/:
+- [X] T054 [US2] Extend infra/stack/:
   - Instance role: `s3:GetObject` on `backups/*` in the pilot (which restores into itself after
     losing its data volume) and the drill, not the load test; in the pilot, `s3:PutObject` on
     `backups/*` only with the condition `s3:if-none-match` equal to `*` (no delete or overwrite;
@@ -723,10 +723,10 @@ latest backup shows a pilot user's data within 2 hours.
     widgets and Logs Insights widgets for request count, 5xx count, and p95 `duration_ms` by route
     group, job `duration_ms`, retries, and failures by `kind`, and provider errors by
     `provider`.
-- [ ] T055 [P] [US2] Disclosure (FR-018): add "Deleted data can remain in encrypted backups for up
+- [X] T055 [P] [US2] Disclosure (FR-018): add "Deleted data can remain in encrypted backups for up
   to 10 days after deletion." to frontend/src/components/ExternalProcessingAcceptance.tsx, after the
   processing sentence.
-- [ ] T056 [US2] Extend docs/operations.md: confirming the alert subscription; the dashboard;
+- [X] T056 [US2] Extend docs/operations.md: confirming the alert subscription; the dashboard;
   saved Logs Insights queries (all lines for a `request_id` or `job_id` across the log groups,
   p95 by route, failed jobs); backups; restoring; the recovery exercise with the drill (research
   R12, including adding the drill's callback URL to the App and starting it without `worker`);

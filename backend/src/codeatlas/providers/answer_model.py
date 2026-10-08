@@ -3,6 +3,9 @@
 Each `answer` or `review` call (specs/003-pr-review research R7) is one stateless request with
 its own output schema. Prompts, evidence, output text, and the API key are never logged or put
 into exception messages; only error classes, status codes, and token counts.
+
+Every provider error is logged as a warning with the structured field `provider`, so the
+dashboard counts them (specs/004-pilot-deployment, research R9).
 """
 
 import html
@@ -36,6 +39,7 @@ from codeatlas.review.schema import (
 )
 
 logger = logging.getLogger(__name__)
+_PROVIDER_FIELD = {"fields": {"provider": "gemini"}}
 # With GOOGLE_GENAI_DEBUG set, the SDK logs request bodies and headers at DEBUG level.
 logging.getLogger("google.genai").setLevel(logging.INFO)
 
@@ -204,11 +208,13 @@ class GeminiAnswerModel:
         interaction = self._create(system, user_content, schema, call=call)
         codes = [_code_name(error.code) for error in interaction.errors or []]
         if any(code in _BLOCK_CODES for code in codes):
-            raise ProviderRefused(f"Gemini blocked the {call} ({', '.join(codes)})")
+            raise _logged(ProviderRefused(f"Gemini blocked the {call} ({', '.join(codes)})"))
         if interaction.status not in ("completed", "incomplete"):
-            raise ProviderUnavailable(
-                f"Gemini interaction ended with status {interaction.status}"
-                + (f" ({', '.join(codes)})" if codes else "")
+            raise _logged(
+                ProviderUnavailable(
+                    f"Gemini interaction ended with status {interaction.status}"
+                    + (f" ({', '.join(codes)})" if codes else "")
+                )
             )
         return interaction
 
@@ -233,12 +239,15 @@ class GeminiAnswerModel:
                 )
             except APIError as exc:
                 if _blocked(exc):
-                    raise ProviderRefused(f"Gemini blocked the request ({_describe(exc)})") from exc
+                    blocked = ProviderRefused(f"Gemini blocked the request ({_describe(exc)})")
+                    raise _logged(blocked) from exc
                 if not _retryable(exc):
-                    raise ProviderUnavailable(_rejected_message(exc, call)) from exc
+                    raise _logged(ProviderUnavailable(_rejected_message(exc, call))) from exc
                 if attempt == MAX_ATTEMPTS:
-                    raise ProviderUnavailable(
-                        f"Gemini {call} failed after {MAX_ATTEMPTS} attempts: {_describe(exc)}"
+                    raise _logged(
+                        ProviderUnavailable(
+                            f"Gemini {call} failed after {MAX_ATTEMPTS} attempts: {_describe(exc)}"
+                        )
                     ) from exc
                 delay = min(BACKOFF_BASE_SECONDS * 2 ** (attempt - 1), BACKOFF_CAP_SECONDS)
                 logger.warning(
@@ -248,6 +257,7 @@ class GeminiAnswerModel:
                     MAX_ATTEMPTS,
                     _describe(exc),
                     delay,
+                    extra=_PROVIDER_FIELD,
                 )
                 self._sleep(delay)
                 attempt += 1
@@ -296,6 +306,12 @@ def _usage(interaction: Interaction) -> AnswerUsage:
         thinking_tokens=usage.total_thought_tokens or 0,
         cached_tokens=usage.total_cached_tokens or 0,
     )
+
+
+def _logged[ErrorT: Exception](error: ErrorT) -> ErrorT:
+    """Log a provider error about to be raised; its message names no request content."""
+    logger.warning("%s", error, extra=_PROVIDER_FIELD)
+    return error
 
 
 def _code_name(code: str | None) -> str:

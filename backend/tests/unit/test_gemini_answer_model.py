@@ -342,6 +342,54 @@ def test_prompt_output_and_key_stay_out_of_logs_and_errors(
         assert API_KEY not in text
 
 
+ADAPTER_LOGGER = "codeatlas.providers.answer_model"
+TRANSIENT = http_error(503, "service_unavailable")
+BLOCKED_RESPONSE = interaction("", status="failed", errors=[{"code": "safety", "message": "no"}])
+FAILED_RESPONSE = interaction(None, status="failed", errors=[{"code": "api_error"}])
+# The stub client, the error raised (None when the call succeeds), and the warnings logged.
+PROVIDER_ERRORS: dict[str, tuple[Callable[[], StubClient], type[Exception] | None, int]] = {
+    "retried": (lambda: StubClient(http_error(429, "rate_limit_exceeded")), None, 1),
+    "rejected": (lambda: StubClient(http_error(401, "authentication")), ProviderUnavailable, 1),
+    "blocked request": (lambda: StubClient(http_error(400, "safety")), ProviderRefused, 1),
+    "blocked response": (lambda: StubClient(response=BLOCKED_RESPONSE), ProviderRefused, 1),
+    "failed response": (lambda: StubClient(response=FAILED_RESPONSE), ProviderUnavailable, 1),
+    "retries exhausted": (
+        lambda: StubClient(TRANSIENT, TRANSIENT, TRANSIENT),
+        ProviderUnavailable,
+        3,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("make_client", "raises", "warnings"), PROVIDER_ERRORS.values(), ids=PROVIDER_ERRORS.keys()
+)
+def test_provider_errors_are_logged_with_the_provider_field(
+    make_client: Callable[[], StubClient],
+    raises: type[Exception] | None,
+    warnings: int,
+    sleeps: list[float],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    model = gemini(make_client(), sleeps)
+
+    if raises is None:
+        ask(model)
+    else:
+        with pytest.raises(raises):
+            ask(model)
+
+    records = [record for record in caplog.records if record.name == ADAPTER_LOGGER]
+    assert [(r.levelname, getattr(r, "fields", None)) for r in records] == [
+        ("WARNING", {"provider": "gemini"})
+    ] * warnings
+    for text in (caplog.text, *(record.getMessage() for record in records)):
+        assert SECRET not in text
+        assert SYSTEM not in text
+        assert API_KEY not in text
+
+
 # The real SDK client, through an in-memory transport (no network)
 
 

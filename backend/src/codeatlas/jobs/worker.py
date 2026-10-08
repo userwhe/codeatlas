@@ -20,6 +20,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from codeatlas import metrics
+from codeatlas.config import get_settings
 from codeatlas.db import new_session, session_scope
 from codeatlas.jobs.queue import (
     Claim,
@@ -67,6 +69,8 @@ class JobContext:
     trigger: str = "user"
     lease_lost: threading.Event = field(default_factory=threading.Event, init=False, repr=False)
     published: bool = field(default=False, init=False)
+    # The job's status once published: `succeeded`, or another status the handler set.
+    published_status: str | None = field(default=None, init=False)
 
     @classmethod
     def from_claim(cls, claim: Claim) -> "JobContext":
@@ -113,7 +117,9 @@ class JobContext:
             yield db, job
             if job.status == "running":
                 complete(db, job)
+            status = job.status
         self.published = True
+        self.published_status = status
 
 
 Handler = Callable[[JobContext], None]
@@ -174,10 +180,11 @@ def _heartbeat(ctx: JobContext, stop: threading.Event) -> None:
 
 def _record_failure(
     ctx: JobContext, code: str, message: str, *, permanent: bool, retryable: bool | None = None
-) -> None:
+) -> str | None:
+    """Record the failed attempt; returns the job's new status, or None if the lease was lost."""
     try:
         with new_session() as db:
-            fail(
+            return fail(
                 db,
                 ctx.job_id,
                 ctx.fencing_token,
@@ -188,9 +195,29 @@ def _record_failure(
             )
     except LeaseLost:
         logger.warning("lease lost before the failure was recorded")
+        return None
+
+
+def _log_finished(claim: Claim, outcome: str | None, started: float) -> None:
+    """Log the attempt's outcome (research R9). `queue` logs the jobs it marks failed."""
+    if outcome is None or outcome == "failed":
+        return
+    duration_ms = round((time.monotonic() - started) * 1000)
+    logger.info(
+        "job_finished",
+        extra={
+            "fields": {
+                "kind": claim.kind,
+                "outcome": outcome,
+                "attempt": claim.attempt,
+                "duration_ms": duration_ms,
+            }
+        },
+    )
 
 
 def _run(claim: Claim) -> None:
+    started = time.monotonic()
     ctx = JobContext.from_claim(claim)
     handler = _handlers.get(claim.kind)
     if handler is None:
@@ -220,14 +247,17 @@ def _run(claim: Claim) -> None:
         logger.warning("lease lost; another attempt owns the job")
     except JobFailure as exc:
         logger.info("job attempt failed with %s (permanent=%s)", exc.code, exc.permanent)
-        _record_failure(
+        status = _record_failure(
             ctx, exc.code, exc.message, permanent=exc.permanent, retryable=exc.retryable
         )
+        _log_finished(claim, status, started)
     except Exception:
         logger.exception("job handler raised an unexpected error")
-        _record_failure(ctx, "internal_error", INTERNAL_ERROR_MESSAGE, permanent=False)
+        status = _record_failure(ctx, "internal_error", INTERNAL_ERROR_MESSAGE, permanent=False)
+        _log_finished(claim, status, started)
     else:
         logger.info("job attempt %s succeeded", claim.attempt)
+        _log_finished(claim, ctx.published_status, started)
 
 
 def run_once() -> bool:
@@ -266,6 +296,8 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
+    # A thread of its own, so a long job does not stop the heartbeat (research R10).
+    reporter = metrics.start_reporter() if get_settings().emit_metrics else None
     logger.info("worker started")
     while not stopping.is_set():
         try:
@@ -276,6 +308,8 @@ def main() -> None:
         _run_due_periodic(time.monotonic())
         if not worked:
             stopping.wait(POLL_INTERVAL.total_seconds())
+    if reporter is not None:
+        reporter.set()
     logger.info("worker stopped")
 
 

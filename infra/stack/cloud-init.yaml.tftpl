@@ -1,6 +1,6 @@
 #cloud-config
-# Bootstrap of a CodeAtlas host (specs/004-pilot-deployment research R2 and R7), rendered by
-# Terraform. cloud-init runs it once per instance; a change to it replaces the host.
+# Bootstrap of a CodeAtlas host (specs/004-pilot-deployment research R2, R7, R10, and R12),
+# rendered by Terraform. cloud-init runs it once per instance; a change to it replaces the host.
 
 write_files:
   # Read by release.sh and render-config.sh (contracts/operations.md, "Host layout").
@@ -29,12 +29,27 @@ write_files:
       Unattended-Upgrade::Automatic-Reboot "true";
       Unattended-Upgrade::Automatic-Reboot-Time "04:30";
 
+  # The CloudWatch agent's configuration (deploy/cloudwatch-agent.json): memory and disk metrics,
+  # and /var/log/codeatlas/*.log shipped to /codeatlas/${environment}/host.
+  - path: /opt/codeatlas/cloudwatch-agent.json
+    permissions: "0644"
+    content: |
+      ${indent(6, chomp(cloudwatch_agent_config))}
+%{ for name, unit in systemd_units ~}
+
+  # deploy/systemd/${name}, in the pilot only.
+  - path: /etc/systemd/system/${name}
+    permissions: "0644"
+    content: |
+      ${indent(6, chomp(unit))}
+%{ endfor ~}
+
   - path: /usr/local/sbin/codeatlas-bootstrap
     permissions: "0755"
     content: |
       #!/bin/bash
-      # Installs Docker and the AWS CLI, mounts the data volume, and prepares the host layout.
-      # Its output is in /var/log/cloud-init-output.log.
+      # Installs Docker, the AWS CLI, and the CloudWatch agent, mounts the data volume, and
+      # prepares the host layout. Its output is in /var/log/cloud-init-output.log.
       set -euo pipefail
 
       DATA_DEVICE="${data_volume_device}"
@@ -125,6 +140,25 @@ write_files:
       install -d -m 0755 /opt/codeatlas/releases
       install -d -m 0700 /opt/codeatlas/runtime
       install -d -m 0755 /var/log/codeatlas
+
+      # The CloudWatch agent for arm64, from AWS: memory and disk metrics, and the host scripts'
+      # log files (research R10). fetch-config checks the configuration, starts the agent, and
+      # enables it at boot.
+      workdir="$(mktemp -d)"
+      chmod 0755 "$workdir"
+      curl -fsSL --retry 5 -o "$workdir/amazon-cloudwatch-agent.deb" \
+        https://amazoncloudwatch-agent-${region}.s3.${region}.amazonaws.com/ubuntu/arm64/latest/amazon-cloudwatch-agent.deb
+      apt_get install "$workdir/amazon-cloudwatch-agent.deb"
+      rm -rf "$workdir"
+      /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s \
+        -c file:/opt/codeatlas/cloudwatch-agent.json
+%{ if length(systemd_units) > 0 ~}
+
+      # The nightly backup and the daily certificate check (pilot only, research R12). Their
+      # scripts come with the first release; until then, their runs fail.
+      systemctl daemon-reload
+      systemctl enable --now codeatlas-backup.timer codeatlas-cert-check.timer
+%{ endif ~}
 
       echo "codeatlas bootstrap finished"
 

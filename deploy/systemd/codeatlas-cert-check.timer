@@ -1,0 +1,10 @@
+# Starts the certificate check daily at 06:00 UTC, or at the next boot after a missed run.
+[Unit]
+Description=CodeAtlas certificate check at 06:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
