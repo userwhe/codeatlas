@@ -927,6 +927,132 @@ for alarm in jobs-waiting jobs-failing certificate-expiring; do
 done
 ```
 
+## Running the load test
+
+The load test (SC-011, research R15) measures 001 SC-007's latency targets on the pilot's
+hardware; the 10-user level must meet them. It runs against `loadtest`, a temporary environment
+built from the pilot's definition: the same instance type, Compose file, and release images, in
+fake mode (the fake GitHub gateway and model providers, with the fixture repositories in the
+image), with raised daily limits, no rate limit, and no pilot data. The `Load test` workflow
+(`.github/workflows/load-test.yml`) runs `evals/perf_check.py` from a GitHub-hosted runner: 10
+concurrent users, then 20, 40, and 80, for 120 seconds each, stopping after the first level that
+misses a target or returns errors. The environment costs money for as long as it exists, so build,
+run, and destroy it in one sitting.
+
+1. Write its parameters: the mode settings (development with fake externals), the raised limits,
+   `RATE_LIMIT_PER_MINUTE=0`, and a generated token encryption key and database password. It
+   prompts for nothing:
+
+   ```bash
+   deploy/put-secrets.sh loadtest
+   ```
+
+2. Build the stack. Its instance type must be the pilot's: if `pilot.tfvars` sets
+   `instance_type`, set the same value in `loadtest.tfvars`.
+
+   ```bash
+   cp infra/stack/loadtest.tfvars.example infra/stack/loadtest.tfvars    # set domain and hostname
+   terraform -chdir=infra/stack init -reconfigure -backend-config=backend.hcl \
+     -backend-config=key=stack/loadtest.tfstate
+   terraform -chdir=infra/stack plan -var-file=loadtest.tfvars -out=plan.out
+   terraform -chdir=infra/stack show plan.out    # review
+   terraform -chdir=infra/stack apply plan.out
+   ```
+
+   Then wait for its bootstrap (`sudo cloud-init status --wait` in a session on the instance tagged
+   `codeatlas:environment=loadtest`).
+3. Release the pilot's commit to it, following ["Releasing an existing
+   commit"](#releasing-an-existing-commit) with:
+
+   ```bash
+   SHA="$(curl -s https://codeatlas.example.dev/version | jq -r .commit)"
+   ENVIRONMENT=loadtest
+   ```
+
+   The release's check confirms that `https://loadtest.example.dev/version` reports the commit.
+   The database starts empty; `perf_check` connects the `sample-app` fixture repository and waits
+   for its index before the first level.
+4. Prepare the readings. EC2 reports CPU every 5 minutes, which spans more than one level, so turn
+   on detailed monitoring, which reports it every minute. It is charged while it is on and ends
+   with the instance; Terraform does not manage it.
+
+   ```bash
+   INSTANCE_ID="$(terraform -chdir=infra/stack output -raw instance_id)"
+   aws ec2 monitor-instances --instance-ids "$INSTANCE_ID"
+
+   # The data points of one of the instance's metrics between START and END.
+   metric() {    # namespace, metric name, statistic, period in seconds
+     aws cloudwatch get-metric-statistics --namespace "$1" --metric-name "$2" \
+       --dimensions Name=InstanceId,Value="$INSTANCE_ID" --start-time "$START" --end-time "$END" \
+       --statistics "$3" --period "$4" \
+       --query "sort_by(Datapoints, &Timestamp)[].[Timestamp, $3]" --output text
+   }
+   ```
+
+   The instance uses standard CPU credits: once its credit balance is spent, it is held to its
+   baseline (20% of each vCPU on a `t4g.medium`), and the levels after that measure a throttled
+   host. A new instance may start with a lower balance than the long-running pilot. Check it:
+
+   ```bash
+   START="$(( $(date +%s) - 3600 ))" END="$(date +%s)"
+   metric AWS/EC2 CPUCreditBalance Minimum 300
+   ```
+
+   If the latest value is below 30, wait for it to grow (a `t4g.medium` earns 24 credits an hour;
+   one credit is one vCPU at 100% for a minute) and check again.
+5. Dispatch the workflow from `main`. `base_url` is the environment's address, the scheme and host
+   only (it must equal its `APP_ORIGIN`); keep the default `levels` and `duration` unless there is
+   a reason to change them, and state any change in the report:
+
+   ```bash
+   gh workflow run load-test.yml --ref main -f base_url=https://loadtest.example.dev \
+     -f levels=10,20,40,80 -f duration=120
+   sleep 5
+   RUN_ID="$(gh run list --workflow load-test.yml --limit 1 \
+     --json databaseId --jq '.[0].databaseId')"
+   gh run watch "$RUN_ID"
+   ```
+
+   The run's Summary page shows the network baseline (the median connection and TLS times of 20
+   requests to `/healthz`) and the table. A level that misses a target ends the run there with a
+   notice, and the job still succeeds; it fails only when `perf_check` cannot set up (exit status
+   2), for example because `base_url` is not the environment's address or the release is not
+   running. The step's log names the cause.
+6. Download the artifact (`backend/evals/out/` is ignored by Git):
+
+   ```bash
+   gh run download "$RUN_ID" --name load-test --dir backend/evals/out/load-test
+   ```
+
+   It holds `level-<users>.json` for each level that ran (the `perf_check --json` summary, with
+   the commit from `/version`), `network.txt` and `network.md` with the baseline, and
+   `load-test.md` with the baseline and the table from `evals/load_report.py`.
+7. Read the peak CPU and memory of each level. The log has each level's start; a level ends when
+   the next one starts, or when the step ends:
+
+   ```bash
+   gh run view "$RUN_ID" --log | grep -E 'Level: [0-9]+ users'    # each level's start time
+   gh run view "$RUN_ID" --json startedAt,updatedAt              # the run's start and end
+   START=<the run's start, for example 2026-10-09T14:00:00Z>
+   END=<the run's end>
+   metric AWS/EC2 CPUUtilization Maximum 60       # percent of both vCPUs, per minute
+   metric CWAgent mem_used_percent Maximum 60     # percent of the host's memory, per minute
+   metric AWS/EC2 CPUCreditBalance Minimum 300    # whether the balance reached zero
+   ```
+
+   A level's peak is the highest value among the minutes within it.
+8. Destroy the stack and delete its parameters (["The drill or the load
+   test"](#the-drill-or-the-load-test)).
+9. Write `docs/reports/load-test.md` from the artifact's `load-test.md` and the readings: the steps
+   and inputs to rerun it (the workflow inputs, the variable file's settings with `example.dev` as
+   the domain, and the commit); the hardware (instance type, vCPUs, memory, and volumes); the
+   configuration (fake mode, the raised limits, no rate limit); the duration; the network baseline,
+   noting that the runner's region is not guaranteed; each level's p95 latency and error rate by
+   category; the highest level that meets every target, or "at least 80" when every level does;
+   each level's peak CPU and memory; and the credit balance at the start and its minimum. If peak
+   memory stays under half of the host, research R1 calls for trying a `t4g.small`; record the
+   result in ADR 0010.
+
 ## Tearing down
 
 ### The drill or the load test

@@ -136,3 +136,18 @@ outputs, with the review status label of each set.
 ## Validation record
 
 Filled in during final validation: dates, results, and any scenario not run, with the reason.
+
+**2026-10-08, automated checks** (every command in "Automated checks", run locally):
+
+- Backend: `ruff check`, `ruff format --check`, `mypy src`, and `pytest`: 1,502 passed.
+- Frontend: `npm run lint`, `npm run typecheck`, and `npm run build` pass; `npm run test:e2e`
+  against the stack in fake mode: 10 passed.
+- Infrastructure: `terraform fmt -check` and `validate` for both modules; `shellcheck`; `bats`:
+  67 tests, one skipped (it needs Docker Compose inside the bats container and runs on Ubuntu);
+  `actionlint`; `docker compose config` for `deploy/compose.yml`; `caddy validate`; the CloudWatch
+  agent's configuration translator; and production builds of both images.
+
+**Not run yet**: every scenario that needs the AWS account, the domain, the pilot GitHub App, or
+model provider keys (scenarios 1 to 19, the fault tests, the recovery exercise, the load test, the
+evaluation, and the cost checks). They wait for the developer actions T038, T057, T062, T064,
+T068, T071, T075, and T077.

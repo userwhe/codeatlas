@@ -947,10 +947,10 @@ of the same form; every number in both reports has its denominator, commit, and 
 
 **Purpose**: Log hygiene, documentation links, scans, and final validation
 
-- [ ] T073 [P] Extend backend/tests/integration/test_logging.py: a denied sign-in, each operator
+- [X] T073 [P] Extend backend/tests/integration/test_logging.py: a denied sign-in, each operator
   command, and a rate-limited request log no token, cookie, OAuth `code` or `state`, or webhook
   secret.
-- [ ] T074 [P] Documentation:
+- [X] T074 [P] Documentation:
   - In README.md, describe the pilot deployment, link specs/004-pilot-deployment (spec, plan,
     research, data model, both contracts, and quickstart), and add ADRs 0010 to 0013 to the
     decision list.

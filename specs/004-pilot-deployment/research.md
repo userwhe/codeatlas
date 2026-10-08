@@ -807,6 +807,11 @@ and the guarded upsert already prevents concurrent submissions from exceeding a 
   guaranteed, which the report states.
 - **Resources**: the host's CPU and memory during each level come from EC2's CPU metric and the
   CloudWatch agent, which the load test environment also runs (R10).
+- **CPU credits**: the environments use standard credits, and a newly launched host may hold too
+  few to run at full speed for the whole test, which would understate the pilot's capacity (a
+  long-running pilot usually holds a full balance). The operations guide therefore waits until the
+  load test host's `CPUCreditBalance` reaches 30 before the run, and the report records the balance
+  at the start.
 - **Report**: `docs/reports/load-test.md`: the steps and inputs to rerun it (workflow inputs,
   variable file, commit), hardware, configuration, duration, the network baseline, and each level's
   p95 latency and error rate by category, the highest level that meets every target (or "at least
