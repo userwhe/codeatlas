@@ -1,0 +1,374 @@
+{
+  "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/2": {
+    "claude": {
+      "skipped": false,
+      "true_positives": [
+        {
+          "golden_comment": "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+          "severity": "Critical",
+          "category": "bug",
+          "matched_candidate": "Negative offset vulnerability in OptimizedCursorPaginator allows negative offsets when enable_advanced_features is True, bypassing normal boundary checks. Negative list slicing in Python can expose unintended data and bypass pagination logic",
+          "confidence": 0.95,
+          "reasoning": "The candidate issue identifies the same vulnerability as the golden comment - the negative offset handling in OptimizedCursorPaginator when enable_advanced_features is True. Both point to the same problem: negative cursor.offset values being passed directly to queryset slicing, which can lead to unintended behavior due to Python's negative list slicing semantics."
+        },
+        {
+          "golden_comment": "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+          "severity": "High",
+          "category": "bug",
+          "matched_candidate": "Negative offset vulnerability in OptimizedCursorPaginator allows negative offsets when enable_advanced_features is True, bypassing normal boundary checks. Negative list slicing in Python can expose unintended data and bypass pagination logic",
+          "confidence": 0.85,
+          "reasoning": "Both issues identify the same underlying vulnerability: negative offset values being allowed in pagination, which can lead to negative list slicing. The golden comment specifically points to BasePaginator.get_result() when cursor.is_prev is True, while the candidate mentions OptimizedCursorPaginator with enable_advanced_features. These appear to be related code paths dealing with the same negative offset vulnerability in cursor-based pagination."
+        },
+        {
+          "golden_comment": "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users.",
+          "severity": "High",
+          "category": "bug",
+          "matched_candidate": "Missing null check on organization_context.member - accessing .has_global_access on None will cause AttributeError for users without organization membership including superusers viewing organizations they're not members of",
+          "confidence": 0.95,
+          "reasoning": "Both comments identify the same issue: accessing .has_global_access on organization_context.member can raise an AttributeError. The golden comment specifies this happens when organization_context is None, while the candidate focuses on when member is None. Both are pointing to the same null safety concern with the same code path and potential AttributeError."
+        }
+      ],
+      "false_positives": [
+        {
+          "candidate": "Authorization uses overly permissive 'or' condition where any member with global_access can enable advanced features including negative offset pagination"
+        },
+        {
+          "candidate": "Redis data structure changed from SET to ZSET without migration strategy - existing SET data will not be readable by new ZSET operations, potentially causing data loss or errors"
+        },
+        {
+          "candidate": "Django QuerySets do not support negative indexing - the code claims Django ORM handles negative slicing automatically but this is false, will cause TypeError or force full queryset evaluation"
+        },
+        {
+          "candidate": "Removed span count validation (max_segment_spans check) from _load_segment_data() reduces defensive programming and could hide Lua script eviction failures"
+        },
+        {
+          "candidate": "Lua script redirect depth limit reduced from 10000 to 1000 without monitoring metrics to detect when segment trees are being truncated"
+        }
+      ],
+      "false_negatives": [
+        {
+          "golden_comment": "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError.",
+          "severity": "High",
+          "category": "bug"
+        }
+      ],
+      "errors": [],
+      "total_candidates": 7,
+      "total_golden": 4,
+      "tp": 3,
+      "fp": 5,
+      "fn": 1,
+      "errors_count": 0,
+      "precision": 0.42857142857142855,
+      "recall": 0.75,
+      "tool": "claude",
+      "repo_name": "sentry__sentry-greptile__claude__PR2__20260127",
+      "pr_url": "https://github.com/code-review-benchmark/sentry__sentry-greptile__claude__PR2__20260127/pull/1"
+    },
+    "cubic-v2": {
+      "skipped": false,
+      "true_positives": [
+        {
+          "golden_comment": "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+          "severity": "Critical",
+          "category": "bug",
+          "matched_candidate": "Django QuerySet does not support negative indexing - queryset[negative:stop] raises AssertionError. This code path will crash at runtime whenever enable_advanced_features=True and cursor.offset < 0. The comment claiming Django handles this automatically is incorrect.",
+          "confidence": 0.95,
+          "reasoning": "Both comments identify the same issue: when enable_advanced_features=True and cursor.offset < 0, the code passes a negative offset to Django QuerySet slicing, which will fail because Django doesn't support negative indexing. The candidate provides more detail about the specific error (AssertionError) and notes the incorrect comment, but it's fundamentally the same bug."
+        },
+        {
+          "golden_comment": "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+          "severity": "High",
+          "category": "bug",
+          "matched_candidate": "Django QuerySet does not support negative indexing - queryset[negative:stop] raises AssertionError. This code path will crash at runtime whenever enable_advanced_features=True and cursor.offset < 0. The comment claiming Django handles this automatically is incorrect.",
+          "confidence": 0.85,
+          "reasoning": "Both comments identify the same core issue: negative offset values being passed to Django queryset slicing. The golden comment specifically mentions BasePaginator.get_result() not clamping start_offset when cursor.is_prev is True, while the candidate describes the same problem from the perspective of Django QuerySet not supporting negative indexing. They're pointing to the same bug - negative offsets causing issues in queryset slicing."
+        },
+        {
+          "golden_comment": "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError.",
+          "severity": "High",
+          "category": "bug",
+          "matched_candidate": "math.floor and math.ceil will raise TypeError if the key attribute is a datetime. Unlike DateTimePaginator, this method does not convert datetime values to a numeric representation before applying floor/ceil.",
+          "confidence": 1.0,
+          "reasoning": "The candidate issue identifies exactly the same problem as the golden comment: OptimizedCursorPaginator.get_item_key uses math.floor/ceil on datetime values, which will cause a TypeError because datetime objects cannot be used with these functions without conversion to numeric representation."
+        }
+      ],
+      "false_positives": [
+        {
+          "candidate": "OptimizedCursorPaginator cannot paginate the datetime sort key in organization_auditlogs.py - optimized requests will raise when it tries to floor/ceil an AuditLogEntry.datetime value. Should use DateTimePaginator instead."
+        }
+      ],
+      "false_negatives": [
+        {
+          "golden_comment": "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users.",
+          "severity": "High",
+          "category": "bug"
+        }
+      ],
+      "errors": [],
+      "total_candidates": 3,
+      "total_golden": 4,
+      "tp": 3,
+      "fp": 1,
+      "fn": 1,
+      "errors_count": 0,
+      "precision": 1.0,
+      "recall": 0.75,
+      "tool": "cubic-v2",
+      "repo_name": "sentry__sentry-greptile__cubic-v2__PR2__20260313",
+      "pr_url": "https://github.com/code-review-benchmark/sentry__sentry-greptile__cubic-v2__PR2__20260313/pull/1"
+    }
+  },
+  "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/5": {
+    "claude": {
+      "skipped": false,
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": [
+        {
+          "golden_comment": "The BrowserReportingCollectorEndpoint returns HttpResponse objects but the endpoint inherits from Endpoint which expects rest_framework.response.Response objects.",
+          "severity": "Medium",
+          "category": "api"
+        },
+        {
+          "golden_comment": "In BaseDetectorTypeValidator.update(), the validator incorrectly updates instance.type using validated_data.get('detector_type') instead of validated_data.get('type').",
+          "severity": "Medium",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "Using zip(error_ids, events.values()) assumes the get_multi result preserves the input order; dict value order is not guaranteed to match error_ids, so event data can be paired with the wrong ID (missing nodes also shift alignment).",
+          "severity": "Low",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "Hardcoded empty data passed to TableWidgetVisualization causes it to always render an empty table instead of displaying actual results when the feature flag is enabled.",
+          "severity": "Medium",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "Validation logic incorrectly uses .get('timestamp'), which treats a timestamp of 0 as absent. It should directly check 'timestamp' in self.initial_data to ensure proper field presence detection, preventing both 'age=0' and 'timestamp' from passing mutual-exclusion validation.",
+          "severity": "High",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "Analytics events are recorded before the feature flag check, resulting in analytics being logged for all requests, including those that return 404 due to the feature being disabled. This can lead to misleading analytics data.",
+          "severity": "Medium",
+          "category": "bug"
+        }
+      ],
+      "errors": [],
+      "total_candidates": 0,
+      "total_golden": 6,
+      "tp": 0,
+      "fp": 0,
+      "fn": 6,
+      "errors_count": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tool": "claude",
+      "repo_name": "sentry__sentry-greptile__claude__PR5__20260127",
+      "pr_url": "https://github.com/code-review-benchmark/sentry__sentry-greptile__claude__PR5__20260127/pull/1"
+    },
+    "cubic-v2": {
+      "skipped": false,
+      "true_positives": [
+        {
+          "golden_comment": "Hardcoded empty data passed to TableWidgetVisualization causes it to always render an empty table instead of displaying actual results when the feature flag is enabled.",
+          "severity": "Medium",
+          "category": "bug",
+          "matched_candidate": "This feature-flagged path drops the real table results and always renders an empty table for flagged organizations",
+          "confidence": 0.95,
+          "reasoning": "Both comments identify the same issue: when the feature flag is enabled, the code passes empty/hardcoded data to the table visualization instead of the actual results, causing an empty table to be rendered. The candidate uses slightly different wording ('drops the real table results') but describes the exact same bug."
+        },
+        {
+          "golden_comment": "Validation logic incorrectly uses .get('timestamp'), which treats a timestamp of 0 as absent. It should directly check 'timestamp' in self.initial_data to ensure proper field presence detection, preventing both 'age=0' and 'timestamp' from passing mutual-exclusion validation.",
+          "severity": "High",
+          "category": "bug",
+          "matched_candidate": "Truthiness check on `.get(\"age\")` will miss `age=0` (a valid value meaning \"just generated\"), allowing both `timestamp` and `age` to coexist. Use `\"age\" in self.initial_data` to test for key presence instead of relying on the value being truthy",
+          "confidence": 0.85,
+          "reasoning": "Both comments identify the same underlying issue: using truthiness checks (.get()) instead of key presence checks ('in self.initial_data') for validation. The golden comment focuses on timestamp while the candidate focuses on age, but they're both pointing to the same mutual-exclusion validation bug where values of 0 would be incorrectly treated as absent."
+        }
+      ],
+      "false_positives": [
+        {
+          "candidate": "`attempts` should allow `0`; the Reporting API sends first-delivery reports with `attempts: 0`, so this validation rejects valid browser reports"
+        },
+        {
+          "candidate": "The error response for invalid reports now includes a JSON body (`{\"error\": ..., \"details\": ...}`) where the old code returned an empty-body `HttpResponse(status=422)`. This is a breaking change in the API contract \u2014 the non-list branch still returns a body-less `Response(status=422)`, creating inconsistent error formats within the same endpoint"
+        }
+      ],
+      "false_negatives": [
+        {
+          "golden_comment": "The BrowserReportingCollectorEndpoint returns HttpResponse objects but the endpoint inherits from Endpoint which expects rest_framework.response.Response objects.",
+          "severity": "Medium",
+          "category": "api"
+        },
+        {
+          "golden_comment": "In BaseDetectorTypeValidator.update(), the validator incorrectly updates instance.type using validated_data.get('detector_type') instead of validated_data.get('type').",
+          "severity": "Medium",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "Using zip(error_ids, events.values()) assumes the get_multi result preserves the input order; dict value order is not guaranteed to match error_ids, so event data can be paired with the wrong ID (missing nodes also shift alignment).",
+          "severity": "Low",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "Analytics events are recorded before the feature flag check, resulting in analytics being logged for all requests, including those that return 404 due to the feature being disabled. This can lead to misleading analytics data.",
+          "severity": "Medium",
+          "category": "bug"
+        }
+      ],
+      "errors": [],
+      "total_candidates": 4,
+      "total_golden": 6,
+      "tp": 2,
+      "fp": 2,
+      "fn": 4,
+      "errors_count": 0,
+      "precision": 0.5,
+      "recall": 0.3333333333333333,
+      "tool": "cubic-v2",
+      "repo_name": "sentry__sentry-greptile__cubic-v2__PR5__20260313",
+      "pr_url": "https://github.com/code-review-benchmark/sentry__sentry-greptile__cubic-v2__PR5__20260313/pull/1"
+    }
+  },
+  "https://github.com/getsentry/sentry/pull/80528": {
+    "claude": {
+      "skipped": false,
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": [
+        {
+          "golden_comment": "The function modifies the config variable to include display values but then returns the original monitor.config instead of the modified version.",
+          "severity": "High",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "The code fetches MonitorCheckIn objects by ID when the required data already exists in previous_checkins. This creates an unnecessary database query.",
+          "severity": "Low",
+          "category": "perf"
+        }
+      ],
+      "errors": [],
+      "total_candidates": 0,
+      "total_golden": 2,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "errors_count": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tool": "claude",
+      "repo_name": "sentry__sentry__claude__PR80528__20260127",
+      "pr_url": "https://github.com/code-review-benchmark/sentry__sentry__claude__PR80528__20260127/pull/1"
+    },
+    "cubic-v2": {
+      "skipped": false,
+      "true_positives": [
+        {
+          "golden_comment": "The function modifies the config variable to include display values but then returns the original monitor.config instead of the modified version.",
+          "severity": "High",
+          "category": "bug",
+          "matched_candidate": "Bug: `config` is copied and updated with the human-readable `schedule_type`, but the return dict references `monitor_environment.monitor.config` (the original) instead of the local `config`. The `schedule_type` transformation is lost.",
+          "confidence": 0.95,
+          "reasoning": "Both comments identify the same bug: the function creates a modified 'config' variable with display values (schedule_type transformation) but returns the original monitor.config instead of the modified config, causing the transformation to be lost."
+        },
+        {
+          "golden_comment": "The code fetches MonitorCheckIn objects by ID when the required data already exists in previous_checkins. This creates an unnecessary database query.",
+          "severity": "Low",
+          "category": "perf",
+          "matched_candidate": "The `failed_checkin: MonitorCheckIn` parameter forces the caller to re-query `MonitorCheckIn` objects from the database even though `previous_checkins` already contains the relevant check-in data and `monitor_environment` is already known at the call site. Consider passing `monitor_environment` and `trace_id` directly instead of requiring a full model fetch.",
+          "confidence": 0.9,
+          "reasoning": "Both comments identify the same underlying issue: unnecessary database queries for MonitorCheckIn objects when the required data is already available in previous_checkins. The candidate issue specifically mentions that previous_checkins already contains the relevant check-in data, which matches the golden comment's concern about fetching MonitorCheckIn objects by ID when data already exists."
+        }
+      ],
+      "false_positives": [
+        {
+          "candidate": "Require at least `failure_issue_threshold` check-ins before opening the incident."
+        }
+      ],
+      "false_negatives": [],
+      "errors": [],
+      "total_candidates": 3,
+      "total_golden": 2,
+      "tp": 2,
+      "fp": 1,
+      "fn": 0,
+      "errors_count": 0,
+      "precision": 0.6666666666666666,
+      "recall": 1.0,
+      "tool": "cubic-v2",
+      "repo_name": "sentry__sentry__cubic-v2__PR80528__20260313",
+      "pr_url": "https://github.com/code-review-benchmark/sentry__sentry__cubic-v2__PR80528__20260313/pull/1"
+    }
+  },
+  "https://github.com/calcom/cal.com/pull/22345": {
+    "claude": {
+      "skipped": false,
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": [
+        {
+          "golden_comment": "In getBaseConditions(), the else if (filterConditions) and final else branches are unreachable. This is because getAuthorizationConditions() always returns a non-null Prisma.Sql object, making authConditions always truthy, which means only the first two if/else if conditions are ever evaluated.",
+          "severity": "Low",
+          "category": "bug"
+        },
+        {
+          "golden_comment": "Fetching userIdsFromOrg only when teamsFromOrg.length > 0 can exclude org-level members for orgs without child teams; consider deriving from teamIds (which includes orgId) or removing the guard so org-only orgs still include member user bookings.",
+          "severity": "Medium",
+          "category": "speculative"
+        }
+      ],
+      "errors": [],
+      "total_candidates": 0,
+      "total_golden": 2,
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "errors_count": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tool": "claude",
+      "repo_name": "cal_dot_com__cal.com__claude__PR22345__20260127",
+      "pr_url": "https://github.com/code-review-benchmark/cal_dot_com__cal.com__claude__PR22345__20260127/pull/1"
+    },
+    "cubic-v2": {
+      "skipped": false,
+      "true_positives": [
+        {
+          "golden_comment": "In getBaseConditions(), the else if (filterConditions) and final else branches are unreachable. This is because getAuthorizationConditions() always returns a non-null Prisma.Sql object, making authConditions always truthy, which means only the first two if/else if conditions are ever evaluated.",
+          "severity": "Low",
+          "category": "bug",
+          "matched_candidate": "getAuthorizationConditions() always returns a Prisma.Sql object (never null/undefined), so authConditions is always truthy and the else if (filterConditions) and else branches are unreachable dead code - should simplify to just two branches or add explicit nullability path if intended",
+          "confidence": 1.0,
+          "reasoning": "The candidate issue identifies exactly the same problem as the golden comment: getAuthorizationConditions() always returns a Prisma.Sql object (never null/undefined), making authConditions always truthy, which causes the else if (filterConditions) and else branches to be unreachable dead code. The candidate even suggests the same fix of simplifying to just two branches."
+        }
+      ],
+      "false_positives": [
+        {
+          "candidate": "Org-scope assertion is order-dependent even though the service fetches team/member IDs without orderBy, so the test can fail nondeterministically on valid SQL"
+        }
+      ],
+      "false_negatives": [
+        {
+          "golden_comment": "Fetching userIdsFromOrg only when teamsFromOrg.length > 0 can exclude org-level members for orgs without child teams; consider deriving from teamIds (which includes orgId) or removing the guard so org-only orgs still include member user bookings.",
+          "severity": "Medium",
+          "category": "speculative"
+        }
+      ],
+      "errors": [],
+      "total_candidates": 2,
+      "total_golden": 2,
+      "tp": 1,
+      "fp": 1,
+      "fn": 1,
+      "errors_count": 0,
+      "precision": 0.5,
+      "recall": 0.5,
+      "tool": "cubic-v2",
+      "repo_name": "cal_dot_com__cal.com__cubic-v2__PR22345__20260313",
+      "pr_url": "https://github.com/code-review-benchmark/cal_dot_com__cal.com__cubic-v2__PR22345__20260313/pull/1"
+    }
+  }
+}

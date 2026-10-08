@@ -1,0 +1,135 @@
+name: Load test
+
+# Runs evals/perf_check.py against a load test environment at increasing concurrency, stopping
+# after the first level that misses a target, and uploads each level's JSON summary and the
+# rendered table (specs/004-pilot-deployment research R15, contracts/operations.md "Load test
+# workflow"). The environment runs in fake mode with raised limits; it needs no credentials here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: The load test environment's URL, equal to its APP_ORIGIN (https://<host>)
+        required: true
+        type: string
+      levels:
+        description: Concurrent users per level, increasing, comma-separated
+        default: "10,20,40,80"
+        type: string
+      duration:
+        description: Seconds of load per level
+        default: 120
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-test
+  cancel-in-progress: false
+
+jobs:
+  load-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: backend
+    env:
+      BASE_URL: ${{ inputs.base_url }}
+      LEVELS: ${{ inputs.levels }}
+      DURATION: ${{ inputs.duration }}
+      # Relative to backend/; gitignored.
+      OUT: evals/out/load-test
+    steps:
+      - name: Check the inputs
+        working-directory: .
+        run: |
+          url_pattern='^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'
+          levels_pattern='^[1-9][0-9]*(,[1-9][0-9]*)*$'
+          if [[ ! $BASE_URL =~ $url_pattern ]]; then
+            echo "::error::base_url must be a scheme and host with no path or trailing slash, for example https://loadtest.example.dev"
+            exit 1
+          fi
+          if [[ ! $LEVELS =~ $levels_pattern ]]; then
+            echo "::error::levels must be comma-separated positive integers, for example 10,20,40,80"
+            exit 1
+          fi
+          previous=0
+          IFS=',' read -ra level_list <<< "$LEVELS"
+          for level in "${level_list[@]}"; do
+            if (( level <= previous )); then
+              echo "::error::levels must increase"
+              exit 1
+            fi
+            previous=$level
+          done
+          if [[ ! $DURATION =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::duration must be a positive whole number of seconds"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Measure the network baseline
+        # Median connection and TLS times of 20 new connections to /healthz, so the report can
+        # separate network time from server time. The runner's region is not guaranteed.
+        run: |
+          mkdir -p "$OUT"
+          for _ in $(seq 20); do
+            curl -sS --fail -o /dev/null --max-time 30 \
+              -w '%{time_connect} %{time_appconnect}\n' "$BASE_URL/healthz"
+          done > "$OUT/network.txt"
+          median_ms() {
+            sort -g | awk '{ v[NR] = $1 } END {
+              m = NR % 2 ? v[(NR + 1) / 2] : (v[NR / 2] + v[NR / 2 + 1]) / 2
+              printf "%.1f", m * 1000
+            }'
+          }
+          connect_ms="$(awk '{ print $1 }' "$OUT/network.txt" | median_ms)"
+          tls_ms="$(awk '{ print $2 }' "$OUT/network.txt" | median_ms)"
+          {
+            echo "Network baseline: over 20 \`curl\` calls to \`$BASE_URL/healthz\` from this"
+            echo "runner (its region is not guaranteed), the median \`time_connect\` was"
+            echo "$connect_ms ms and the median \`time_appconnect\` (TLS handshake done) $tls_ms ms."
+          } > "$OUT/network.md"
+          cat "$OUT/network.md"
+      - name: Run each level
+        # perf_check exits 1 when a level misses a target (later levels are not run) and 2 when
+        # it cannot set up, which fails the job.
+        run: |
+          IFS=',' read -ra level_list <<< "$LEVELS"
+          for level in "${level_list[@]}"; do
+            echo "Level: $level users"
+            status=0
+            uv run python -m evals.perf_check --base-url "$BASE_URL" --origin "$BASE_URL" \
+              --users "$level" --duration "$DURATION" --json "$OUT/level-$level.json" || status=$?
+            if [ "$status" -eq 1 ]; then
+              echo "::notice::$level users missed a target; later levels were not run."
+              break
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::perf_check could not run $level users (exit $status)."
+              exit "$status"
+            fi
+          done
+      - name: Render the table
+        if: ${{ !cancelled() && hashFiles('backend/evals/out/load-test/level-*.json') != '' }}
+        run: |
+          {
+            echo "# Load test"
+            echo
+            cat "$OUT/network.md"
+            echo
+            uv run python -m evals.load_report "$OUT"/level-*.json
+          } > "$OUT/load-test.md"
+          cat "$OUT/load-test.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the results
+        if: ${{ !cancelled() && hashFiles('backend/evals/out/load-test/*') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test
+          path: backend/evals/out/load-test/
+          if-no-files-found: error

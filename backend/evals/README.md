@@ -2,15 +2,16 @@
 
 > **Draft: needs human review before use.** The questions, answerability labels, splits, and
 > evidence ranges in `qa_v1.jsonl` were drafted and checked mechanically, but no person has
-> reviewed them yet. Do not report any number measured with this set until a reviewer has worked
-> through the [review checklist](#review-checklist) and recorded the review in the
-> [review log](#review-log). The pull request review set has its own
-> [draft notice](#pull-request-review-evaluation).
+> reviewed them yet. Until a reviewer has worked through the [review checklist](#review-checklist)
+> and recorded the review in the [review log](#review-log), report a number measured with this
+> set only with its [review-status label](#review-status-labels). The pull request review set has
+> its own [draft notice](#pull-request-review-evaluation).
 
 This directory holds the versioned question set for repository Q&A and the runner that measures
-it against the success criteria in `specs/001-repository-qa/spec.md`, and the pull request
-review set and runner for `specs/003-pr-review/spec.md`
-([Pull request review evaluation](#pull-request-review-evaluation)):
+it against the success criteria in `specs/001-repository-qa/spec.md`, the pull request review set
+and runner for `specs/003-pr-review/spec.md`
+([Pull request review evaluation](#pull-request-review-evaluation)), and the runner for a public
+benchmark with labels written by people ([Code Review Bench](#code-review-bench)):
 
 | File | Purpose |
 | --- | --- |
@@ -20,7 +21,8 @@ review set and runner for `specs/003-pr-review/spec.md`
 | `review_v1.jsonl` | Version 1, superseded by version 2 after the review recorded in the [review-set log](#review-set-log); kept because its numbers were reported |
 | `review_fixtures/` | One overlay per directory: the edits a review item makes to its base commit |
 | `run_review_eval.py` | The review runner: builds each pull request from its overlay, reviews it, and writes the report |
-| `out/` | Reports, audit sheets, scratch clones, and the archive cache (gitignored; never commit it) |
+| `run_bench_eval.py` | The Code Review Bench runner: reviews the benchmark's Python and TypeScript pull requests, runs its judge, and compares the results with the published tools |
+| `out/` | Reports, audit sheets, scratch clones, the archive cache, and the benchmark copy (gitignored; never commit it) |
 
 ## The question set
 
@@ -313,8 +315,9 @@ which is gitignored.
 > drafted and checked mechanically (`--check`). Codex then applied the
 > [review-set checklist](#review-set-checklist) to every item of `review_v1.jsonl`, and
 > `review_v2.jsonl` applies its findings (see the [review-set log](#review-set-log)). Label
-> numbers measured with it as coming from a set without a full human review, until a person has
-> worked through the checklist and recorded that review in the log.
+> numbers measured with it as coming from a set without a full human review
+> ([review-status labels](#review-status-labels)), until a person has worked through the
+> checklist and recorded that review in the log.
 
 The review set measures `specs/003-pr-review/spec.md` SC-002, SC-003, SC-005, and SC-007, and
 samples risks for the SC-004 audit (research R14). Each item is a small pull request made by
@@ -569,3 +572,234 @@ excerpts and fill in:
 SC-004 is met when at least 80% of the sampled risks are `yes`. Count `partial` as not correct,
 and record the sample, the reviewer, and the result next to the run's report. The reports and
 the sheet quote third-party source, so keep them in `evals/out/`.
+
+## Review-status labels
+
+Every number that a report gives from the project's own sets carries the label of its set, until a
+person has reviewed the set and recorded it in the set's log (004 FR-028):
+
+| Set | Label |
+| --- | --- |
+| `qa_v1.jsonl` | "measured on a set no person has reviewed yet" |
+| `review_v2.jsonl` | "measured on a set reviewed only by a model" |
+
+The human audits (001 SC-005 for answers, 003 SC-004 for review risks) are listed as deferred in
+any report that gives these numbers. Code Review Bench needs no such label: its golden comments
+were written and verified by people. Its numbers name the judge model instead.
+
+## Code Review Bench
+
+`run_bench_eval.py` measures CodeAtlas's reviews on a public benchmark whose expected findings
+were written and verified by people (004 FR-027, research R16): the Python and TypeScript pull
+requests of the offline set of Code Review Bench (`withmartian/code-review-benchmark`, MIT
+license). The benchmark scores a review with its own judge, a model that decides whether each
+candidate issue matches each expected finding (a "golden comment"), and publishes the results of
+other review tools judged the same way.
+
+| Golden-comments file | Repository | Language | Pull requests | Golden comments |
+| --- | --- | --- | --- | --- |
+| `offline/golden_comments/sentry.json` | `getsentry/sentry` (6) and its fork `ai-code-review-evaluation/sentry-greptile` (4) | Python | 10 | 36 |
+| `offline/golden_comments/cal_dot_com.json` | `calcom/cal.com`, which now redirects to `calcom/cal.diy` | TypeScript | 10 | 41 |
+
+The benchmark's Go, Ruby, and Java pull requests are left out: CodeAtlas extracts declarations
+only from Python and TypeScript.
+
+### Pinned commit
+
+Pass the benchmark commit with `--bench-commit`; every report records it. The commit read while
+planning is `e616e849755441da38f18bf3adba2c9583b03803`. The runner checks that the selected pull
+requests are in the benchmark's `results/benchmark_data.json` with the same golden comments as
+the golden-comments files, before any model call. Before moving to a newer commit, check that its
+golden comments, `benchmark_data.json`, and the step scripts keep the structures described here.
+
+### Keys
+
+Set these in the environment or in `.env` (at the repository root or in `backend/`):
+
+| Key | Needed for |
+| --- | --- |
+| `GEMINI_API_KEY` | The reviews, with `CODEATLAS_FAKE_EXTERNALS` unset or `0`. `ANSWER_MODEL` and `ANSWER_THINKING_LEVEL` are read as the application reads them |
+| `GITHUB_TOKEN` | Optional, and read-only (for example `gh auth token`): it only raises GitHub's rate limit. The runner makes two REST requests per pull request; without a token GitHub allows 60 an hour |
+| `ANTHROPIC_API_KEY` | The default judge, Claude Opus 4.5 |
+| `OPENAI_API_KEY` | The fallback judge, GPT-5.2 (`--judge-model gpt-5.2`) |
+
+The benchmark's steps read their judge from `MARTIAN_API_KEY`, `MARTIAN_BASE_URL`, and
+`MARTIAN_MODEL`. The runner sets the three from the judge's table below and starts the steps with
+no other credential from its environment: they get only `PATH`, `HOME`, the locale, proxy and
+certificate settings, and the `UV_*` and `XDG_*` variables. The steps also read `offline/.env` in
+the benchmark copy, but the runner's values take precedence.
+
+### Judges
+
+Use the judges in this order, and check each provider's model deprecation page before a run
+([Anthropic](https://docs.claude.com/en/docs/about-claude/model-deprecations),
+[OpenAI](https://platform.openai.com/docs/deprecations)), because a retired judge makes the
+published results impossible to reproduce. Run the evaluation early either way.
+
+| Order | `--judge-model` | Endpoint (`MARTIAN_BASE_URL`) | Published results read from |
+| --- | --- | --- | --- |
+| 1 (default) | `claude-opus-4-5-20251101`, the default judge of the benchmark's dashboard | `https://api.anthropic.com/v1/` (Anthropic's OpenAI-compatible endpoint) | `offline/results/anthropic_claude-opus-4-5-20251101/` |
+| 2 | `gpt-5.2` | `https://api.openai.com/v1` | `offline/results/openai_gpt-5.2/` |
+
+Claude Sonnet 4.5, the benchmark's third judge, was reported deprecated on 2026-09-30 and
+retiring on 2026-11-30, so the runner does not offer it. If neither judge is served, the
+evaluation report re-judges the compared tools' published candidates with a current model and
+says so (FR-027); the runner does not do that. Such a model may reject the benchmark client's
+`temperature=0`, and removing it must be recorded in the report.
+
+### Running
+
+From `backend/`. The first command checks the setup on two pull requests without the judge:
+
+```bash
+# Reviews only, two pull requests, no judge calls (Gemini key only).
+uv run python -m evals.run_bench_eval --bench-commit e616e849755441da38f18bf3adba2c9583b03803 \
+  --skip-judge --limit 2
+# The full run with the default judge.
+uv run python -m evals.run_bench_eval --bench-commit e616e849755441da38f18bf3adba2c9583b03803
+# The fallback judge, if Claude Opus 4.5 is no longer served.
+uv run python -m evals.run_bench_eval --bench-commit e616e849755441da38f18bf3adba2c9583b03803 \
+  --judge-model gpt-5.2
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--bench-commit SHA` | The benchmark commit, a full 40-character SHA (required) |
+| `--out DIR` | Where the benchmark copy and the reports go (default `evals/out/bench`) |
+| `--limit N` | Review at most N pull requests, in file order (Sentry first) |
+| `--judge-model MODEL` | `claude-opus-4-5-20251101` (default) or `gpt-5.2` |
+| `--exclude-flagged` | Skip the pull requests that the benchmark flags with a data warning (below) |
+| `--skip-judge` | Review and export only; the steps 2.5 and 3 do not run |
+
+The runner:
+
+1. downloads the benchmark at the commit from codeload into `--out` once, and reads both
+   golden-comments files, keeping every item by its URL (`original_url` and `az_comment` too);
+2. resolves each pull request's base and head commits (`GET /repos/{owner}/{repo}/pulls/{n}`) and
+   their merge base (`GET /repos/{base repository}/compare/{base}...{head}`), following redirects;
+3. downloads the head and merge-base archives into `evals/out/cache/` with the review runner's
+   `download_archive`, all of them before the first model call;
+4. reads both archives with the review job's `read_tree` under the raised limits below, and calls
+   the job's `analyze` with GitHub's rename hints, the real model, and the pull request's title
+   and description from GitHub, as `run_review_eval.py` does (the benchmark's step 0 copied those
+   into the pull requests that the published tools reviewed; `pr_title` is a summary, not the
+   title);
+5. writes the reviews into the benchmark copy for the tool `codeatlas` (below);
+6. unless `--skip-judge`, runs the benchmark's deduplication (step 2.5) and judge (step 3):
+   `uv run --directory <copy>/offline python -m code_review_benchmark.<step> --tool codeatlas
+   --force`, which also creates the benchmark's own environment in `offline/.venv` on the first
+   run (`uv` must be on `PATH`);
+7. compares the results and writes the report.
+
+Exit codes: `0` when the run completes, including when some reviews failed (each is listed), and
+`2` on a setup error: an invalid commit, a missing key, a failed download or GitHub lookup,
+golden comments that differ from `benchmark_data.json`, or a failed judge step. When a judge step
+fails after the reviews, the report is still written, with the failure.
+
+### Raised limits
+
+Both repositories exceed the repository limits of 001 FR-009 (a 2025 Sentry head has about 17,000
+eligible files, 2.8 million lines, and 105 MB of text). The runner raises them for its own process
+only, on a copy of the settings, and every report records the values; the pilot keeps the
+defaults and would refuse these repositories.
+
+| Setting | Default | Benchmark runs |
+| --- | --- | --- |
+| `max_files_per_snapshot` | 5,000 | 50,000 |
+| `max_source_lines_per_snapshot` | 100,000 | 10,000,000 |
+| `max_expanded_bytes` | 100 MiB | 1 GiB |
+| `max_archive_members` | 100,000 | 200,000 |
+| `max_archive_bytes` | 1 GiB | 2 GiB |
+
+The per-file limit (`max_file_bytes`) and the review limits (`REVIEW_MAX_*`) keep the application's
+values, so a large pull request is reviewed in part, as it would be in the pilot, and the report
+marks it partial. A review that still exceeds a limit is recorded as a failure.
+
+### Results directories
+
+The runner writes into its copy of the benchmark, `evals/out/bench/code-review-benchmark-<commit>/`,
+in the places the benchmark's steps read:
+
+| Path under `offline/results/` | Contents |
+| --- | --- |
+| `benchmark_data.json` | One review entry per reviewed pull request for the tool `codeatlas`, keyed by the golden comment's URL, with one review comment per risk; step 3 iterates these entries |
+| `<judge>/candidates.json` | One candidate per risk for `codeatlas`, keyed by golden URL; `<judge>` is `MARTIAN_MODEL` with `/` replaced by `_`, the directory the steps use (for example `claude-opus-4-5-20251101/`) |
+| `<judge>/dedup_groups.json`, `<judge>/evaluations.json` | Written by steps 2.5 and 3 for `codeatlas` |
+| `anthropic_claude-opus-4-5-20251101/`, `openai_gpt-5.2/` | The published results, read only |
+
+Everything is keyed by the golden comment's URL, not by the title (9 of the 20 titles differ from
+the upstream or fork titles). Each run first removes the earlier `codeatlas` entries, and the
+steps run with `--force`, so the judge sees exactly the current run; every other tool's data is
+left as published. Step 3 runs without `--dedup-groups`, because it finds `dedup_groups.json` in
+its directory itself, and the steps run with `--directory`, because `offline/` has no build system
+(so `--project` fails) and the steps find `results/` from the working directory.
+
+### Candidates
+
+The judge reads only a candidate's text. Each CodeAtlas risk becomes one candidate: its title, the
+file and line range of each cited evidence item (or a rule risk's file), and its explanation, for
+example `Viewers can write (app/auth.py lines 10-12): The role check is gone, ...`. The published
+tools' candidates were extracted from their comments by the benchmark's step 2 with a model;
+CodeAtlas's risks are already one issue each, so step 2 is skipped for CodeAtlas.
+
+### Comparison
+
+For CodeAtlas and every published tool, the runner sums true positives (golden comments matched),
+false positives (candidates matching no golden comment), and false negatives over the same pull
+requests, as the benchmark's step 3 sums them, and reports precision `TP / (TP + FP)` and recall
+`TP / (TP + FN)` with their denominators. It counts golden comments of every category, which is
+the dashboard's "All" profile; the dashboard defaults to its "Core" profile, which leaves out
+style and speculative golden comments, so its numbers differ. Pull requests whose CodeAtlas review
+failed or was not fully judged are left out for every tool and listed as failures.
+
+Two tables are given, with and without the four flagged Sentry items, whose `az_comment` carries a
+data warning: `sentry-greptile` pull requests 1, 2, and 3 ("reviewed commit is not in the repo")
+and 5 ("there is no such PR, it is a mix of many PRs").
+
+Some published evaluations were made against an older version of the golden comments: at the
+pinned commit, 28 of the 49 tools judged by Claude Opus 4.5 (25 by GPT-5.2) were judged on 14 of
+these 20 pull requests against golden comments that differ from the current ones. The runner
+detects this by comparing each evaluation's matched and missed golden comments with the current
+ones, and lists those tools in a separate table with the number of such pull requests, because
+their numbers do not measure the same labels. `evaluations.json` also holds superseded tool
+versions that the dashboard hides; the report lists every tool.
+
+### Cost
+
+- Reviews: one model call per pull request, or two when a review needs a repair: about $0.03 to
+  $0.38 each, so at most about $8 for the 20 (research R16). The report estimates each review's
+  cost from its tokens at the prices of 001 research R11.
+- Judge: step 3 makes one call per golden comment and candidate (77 golden comments times the
+  number of risks), and step 2.5 one call per pull request with at least two candidates; a few
+  dollars in all. The report counts these calls; the runner cannot see the provider's bill.
+- Disk and network: up to 40 archives in `evals/out/cache/`, several GB (a Cal.com archive is
+  about 275 MB, a Sentry archive about 40 MB).
+
+### Outputs
+
+Each run writes two files to `--out`, named with the UTC start time:
+
+- `bench-eval-<time>.md`: the benchmark commit, the review model and prompt version, the judge and
+  its directories, the limits used, the comparison tables (all items and without the flagged
+  items), the flagged items, a row per pull request (files reviewed, partial, risks, golden
+  comments, TP, FP, FN, seconds, tokens, and estimated cost), the cost, the caveats, and the
+  failures.
+- `bench-eval-<time>.json`: the same data, with each pull request's commits and candidates.
+
+### Caveats
+
+Every report of these numbers states:
+
+- the pull requests come from well-known public repositories, so the models may have seen them,
+  and their fixes, in training;
+- the judge is a model, and another judge may match differently;
+- CodeAtlas reports risks only, so golden comments about style or documentation count against its
+  recall;
+- step 2 was skipped for CodeAtlas, while the published tools' candidates went through it;
+- the flagged items carry the benchmark's own data warnings, so results are given with and without
+  them;
+- some published tools were judged against an older version of the golden comments, and are
+  listed apart;
+- the repository limits differ from the pilot's.
+
+The reports quote the risks' explanations of third-party code, so keep them in `evals/out/`.

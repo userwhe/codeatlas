@@ -90,12 +90,13 @@ aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" \
 zone, the alert topic `codeatlas-alerts` with an email subscription, and the monthly budget
 `codeatlas-monthly`. Copy the examples and fill them in: the account ID in `backend.hcl`; the
 domain, the alert email address, the monthly budget, and the repository's OIDC subject prefix in
-`shared.tfvars` (the release workflow uses the prefix later, but the variable is required now).
+`shared.tfvars` (the release workflow uses the prefix later, in ["Setting up
+releases"](#setting-up-releases), but the variable is required now).
 
 ```bash
 cp infra/shared/backend.hcl.example infra/shared/backend.hcl
 cp infra/shared/shared.tfvars.example infra/shared/shared.tfvars
-gh api repos/<owner>/<repo>/actions/oidc/customization/sub   # the OIDC subject prefix
+gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix   # the OIDC subject prefix
 
 terraform -chdir=infra/shared init -backend-config=backend.hcl
 terraform -chdir=infra/shared plan -var-file=shared.tfvars -out=plan.out
@@ -192,15 +193,217 @@ boot; in the pilot it also installs the backup and certificate check timers. Wai
 sudo cloud-init status --wait    # "status: done"
 ```
 
-Then release the current `main` commit by hand (next section) and add the pilot users (["Managing
-pilot users"](#managing-pilot-users)), starting with yourself.
+Then release the current `main` commit by hand (["Releasing by hand"](#releasing-by-hand)) and add
+the pilot users (["Managing pilot users"](#managing-pilot-users)), starting with yourself.
+
+### Setting up releases
+
+Once the pilot runs, releases go through the `Release` workflow (["Releases"](#releases)). It needs
+the release role from `infra/shared`, the GitHub environment `pilot`, and six repository variables.
+GitHub holds no AWS key: the workflow's `release` job gets short-lived credentials through GitHub's
+OIDC provider for the role `codeatlas-release`, which trusts only this repository's jobs in the
+`pilot` environment.
+
+1. Read the repository's OIDC subject prefix:
+
+   ```bash
+   gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix
+   ```
+
+   The repository uses GitHub's immutable subject format, so the prefix has the form
+   `repo:<owner>@<owner ID>/<repo>@<repo ID>`. Set `github_oidc_subject_prefix` to it in
+   `infra/shared/shared.tfvars`. Transferring or recreating the repository changes the IDs, and so
+   the prefix; a wrong prefix makes the release job fail with "Not authorized to perform
+   sts:AssumeRoleWithWebIdentity".
+2. Apply `infra/shared` as in ["Shared resources"](#shared-resources). The plan adds the OIDC
+   provider for `token.actions.githubusercontent.com`, the role `codeatlas-release`, and its policy:
+   pushing to the two image repositories, uploading under `releases/` in the bucket, Run Command on
+   instances tagged `codeatlas:environment=pilot`, reading the command's results, and publishing to
+   `codeatlas-alerts`. An account has one provider per URL; if yours already has GitHub's, import it
+   before planning:
+
+   ```bash
+   terraform -chdir=infra/shared import -var-file=shared.tfvars aws_iam_openid_connect_provider.github \
+     "arn:aws:iam::<account ID>:oidc-provider/token.actions.githubusercontent.com"
+   ```
+
+3. Create the environment `pilot` (repository Settings, Environments, New environment). Under
+   "Deployment protection rules", check "Required reviewers" and add yourself; leave "Prevent
+   self-review" off, since you approve the releases of your own merges. Under "Deployment branches
+   and tags", choose "Selected branches and tags" and add the branch `main`. Add no secrets. Or from
+   the command line:
+
+   ```bash
+   gh api -X PUT repos/<owner>/<repo>/environments/pilot --input - <<EOF
+   {"reviewers": [{"type": "User", "id": $(gh api user --jq .id)}],
+    "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+   EOF
+   gh api -X POST repos/<owner>/<repo>/environments/pilot/deployment-branch-policies \
+     -f name=main -f type=branch
+   ```
+
+4. Set the repository variables (Settings, Secrets and variables, Actions, Variables). They are
+   settings, not secrets:
+
+   ```bash
+   gh variable set AWS_REGION --body us-east-1
+   gh variable set RELEASE_ROLE_ARN --body "$(terraform -chdir=infra/shared output -raw release_role_arn)"
+   gh variable set RELEASE_BUCKET --body "$(terraform -chdir=infra/shared output -raw bucket)"
+   gh variable set ALERT_TOPIC_ARN --body "$(terraform -chdir=infra/shared output -raw alert_topic_arn)"
+   gh variable set ECR_REGISTRY --body "$(terraform -chdir=infra/shared output -json ecr_repositories |
+     jq -r '."codeatlas/api" | split("/")[0]')"
+   gh variable set PILOT_HOSTNAME --body codeatlas.example.dev
+   ```
+
+5. Check that GitHub holds no AWS key, in the repository or the environment (quickstart scenario
+   18):
+
+   ```bash
+   gh secret list
+   gh secret list --env pilot
+   ```
+
+## Releases
+
+Every push to `main` whose CI run succeeds starts the `Release` workflow
+(`.github/workflows/release.yml`) for that commit. Nothing is written to AWS until you approve it:
+
+1. `build` builds both images for the commit on Arm runners, without cloud credentials, and keeps
+   them as workflow artifacts for 3 days.
+2. `summary` writes the release summary on the run's Summary page: first the schema changes (every
+   file the commit adds under `backend/alembic/versions/` since the running version, with the
+   expand-then-contract reminder), then the commit, the commit the pilot runs (from `/version`),
+   and the commits in between. On a first release, or when the pilot does not answer, the running
+   version is unknown.
+3. `release` waits in the `pilot` environment. Read the summary, then choose "Review deployments",
+   select `pilot`, and approve. The environment's deployment history records the commit, who
+   approved it, when, and the outcome.
+
+After approval, the `release` job assumes `codeatlas-release`; pushes `codeatlas/api:<sha>` and
+`codeatlas/web:<sha>` unless the tag exists; uploads `deploy/` as `releases/<sha>/deploy.tar.gz`;
+and sends the Run Command that extracts the bundle on the instance tagged
+`codeatlas:environment=pilot` and runs its `release.sh <sha>`, as in ["Releasing by
+hand"](#releasing-by-hand). Meanwhile it probes `https://codeatlas.example.dev/readyz` and `/`
+once a second, and waits up to 20 minutes for the command to end. It writes the outcome and the
+longest outage (the longest run of failed probes) to the Summary page, and on any failure emails
+the commit and the outcome through `codeatlas-alerts`.
+
+`release.sh` checks the new release for up to 120 seconds through Caddy: `/readyz` and `/` must
+return 200, and `/version` must report the commit. Its exit status is the outcome:
+
+| Exit status | Meaning | What to do |
+| --- | --- | --- |
+| 0 | Released and checked | Nothing |
+| 2 | Failed before the switch: configuration, registry login, pull, or migration. The previous release still serves, untouched | Read the output, which names the failing step; fix it and release again |
+| 3 | The check failed (or a step after the switch did), and the previous release serves again. The database keeps the new release's migrations | Read the output: its "the check failed" line shows what `/readyz`, `/`, and `/version` returned |
+| 4 | The previous release did not become ready either, or the host had none to return to (the new `api`, `worker`, and `web` are then stopped) | The pilot is down: look at the services (on the host: `sudo codeatlas-compose ps`, `sudo codeatlas-compose logs --tail 100 api`), then fix forward or release a known good commit |
+
+The host's output is in the log group `/codeatlas/pilot/releases`, and each outcome is a line in
+`/var/log/codeatlas/releases.log` (shipped to `/codeatlas/pilot/host`):
+
+```bash
+aws logs tail /codeatlas/pilot/releases --since 1h
+```
+
+To release another commit of `main`, or the same commit again, dispatch the workflow from `main`
+(Actions, Release, Run workflow), or:
+
+```bash
+gh workflow run release.yml --ref main -f commit=<full SHA>
+```
+
+A dispatched commit must be on `main` with a successful CI run; otherwise `summary` fails, and
+nothing waits for approval.
+
+### Rejecting a stale run
+
+One release job runs at a time (the concurrency group `release-pilot`). A run waiting for approval
+holds the group, so newer runs queue behind it, and of those GitHub keeps only the newest. When
+several merges land before you approve, release only the newest: reject each older run that waits
+(its "Review deployments", `pilot`, Reject). The newest run then waits for your approval. A
+rejected run writes nothing and sends no alert. From the command line:
+
+```bash
+gh run list --workflow release.yml --status waiting
+ENVIRONMENT_ID="$(gh api repos/<owner>/<repo>/environments/pilot --jq .id)"
+gh api -X POST repos/<owner>/<repo>/actions/runs/<run ID>/pending_deployments \
+  -F "environment_ids[]=$ENVIRONMENT_ID" -f state=rejected -f comment="Superseded by a newer commit"
+```
+
+### Migrations: expand, then contract
+
+A release migrates the database before it switches, and a rollback restores the previous images,
+not the database. Every migration must therefore keep the previous release working:
+
+- **Expand** in one release: add tables, nullable columns or columns with a server default, and
+  indexes. The previous release ignores what it does not know.
+- **Contract** in a later release, once neither the running release nor `state/previous` uses the
+  old shape: drop the old column or table, or tighten a constraint.
+- Never drop, rename, or change the type of a column in the release that stops using it. A rename
+  takes three releases: add the new column and write both (with a backfill); read only the new one;
+  drop the old one.
+
+The summary lists a release's new migrations first. Before approving one, check it against these
+rules.
+
+### Rolling back
+
+A failed check rolls back by itself (exit status 3). To leave a release whose check passed but which
+misbehaves:
+
+- **No migration since the previous release**: release the previous commit. Its bundle is on the
+  host (on the host):
+
+  ```bash
+  PREVIOUS="$(cat /var/lib/codeatlas/state/previous)"
+  sudo /opt/codeatlas/releases/$PREVIOUS/release.sh "$PREVIOUS"
+  ```
+
+  Or dispatch the workflow with that commit; its summary warns that the pilot runs a newer one.
+- **The release added a migration**: releasing the previous commit stops at its migration with exit
+  status 2 and changes nothing, because the previous image's Alembic does not know the database's
+  newer revision. Instead, release the running commit again with a check that cannot pass. It
+  starts the previous release without migrating, as an automatic rollback does, and exits 3 (on the
+  host):
+
+  ```bash
+  RUNNING="$(cat /var/lib/codeatlas/state/running)"
+  sudo /opt/codeatlas/releases/$RUNNING/release.sh "$RUNNING" --expect-version rollback
+  ```
+
+  Afterward `state/running` names the previous commit and `state/previous` the one you left, so
+  releasing `state/previous` later goes forward again. Through the workflow, this is the rehearsal
+  below, with an alert at the end.
+
+Both need the previous release's bundle on the host; a replaced host has only the bundles released
+to it.
+
+### Rehearsing a rollback
+
+The forced rollback (SC-010, quickstart scenario 14) proves that a failed check restores the
+previous release. First check that the host has a previous release to return to: on the host,
+`cat /var/lib/codeatlas/state/previous` names a commit whose bundle is in
+`/opt/codeatlas/releases/`. Without one, the rehearsal stops the pilot (exit status 4). Then:
+
+```bash
+gh workflow run release.yml --ref main -f expect_version=wrong
+```
+
+Approve the run, and note the time. It releases the head of `main` (again, if the pilot runs it),
+the check fails because `/version` does not report `wrong`, and `release.sh` starts the previous
+release and exits 3. Expect the job to fail, an alert email, `/version` reporting the previous
+commit within 5 minutes of the approval, and the longest outage on the Summary page. Record the
+times in the quickstart's validation record, then release the newest commit again (dispatch without
+`expect_version`).
 
 ## Releasing by hand
 
-A release puts one commit on a host: both images tagged with the full commit SHA in ECR, the
-commit's `deploy/` directory as a bundle in S3, and a Run Command that runs the bundle's
-`release.sh`. The script renders the configuration, pulls the images, migrates, switches to the
-new release, and waits until `/readyz` answers through Caddy.
+The pilot normally releases through the workflow (["Releases"](#releases)). The first release, the
+drill, the load test, and a replaced host use these steps. A release puts one commit on a host: both
+images tagged with the full commit SHA in ECR, the commit's `deploy/` directory as a bundle in S3,
+and a Run Command that runs the bundle's `release.sh`. The script renders the configuration, pulls
+the images, migrates, switches to the new release, checks `/readyz`, `/`, and `/version` through
+Caddy, and rolls back if the check fails.
 
 Set the commit and the environment (the drill and the load test use their own names):
 
@@ -280,22 +483,11 @@ aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "$INSTAN
 curl -s https://codeatlas.example.dev/version
 ```
 
-`release.sh` exits with:
-
-- **0**: released; `/version` reports the commit and the footer shows its first seven characters.
-- **2**: it failed before the switch (configuration, registry login, pull, or migration). The
-  previous release is still serving, untouched; the output names the failing step, for example a
-  missing parameter.
-- **1**: it started the new release, but `/readyz` did not answer within 120 seconds. Look at the
-  services (on the host: `sudo codeatlas-compose ps` and `sudo codeatlas-compose logs api`), then
-  fix forward or roll back.
-
-To roll back by hand, release the previous commit. Its bundle is still on the host (on the host):
-
-```bash
-PREVIOUS="$(cat /var/lib/codeatlas/state/previous)"
-sudo /opt/codeatlas/releases/$PREVIOUS/release.sh "$PREVIOUS"
-```
+`release.sh` exits 0 when the release passed its check: `/version` reports the commit, and the
+footer shows its first seven characters. The other exit statuses (2, 3, and 4) are in the table
+under ["Releases"](#releases); `--expect-version V` makes the check expect `V` instead of the commit
+(["Rehearsing a rollback"](#rehearsing-a-rollback)). To roll back by hand, see ["Rolling
+back"](#rolling-back).
 
 `/opt/codeatlas/releases/` keeps every bundle released on the host; remove old ones by hand when
 the disk needs it, never the ones named in `state/running` and `state/previous`.
@@ -306,7 +498,8 @@ The drill, the load test, and a replaced host use the same steps for a commit th
 before: set `ENVIRONMENT` to the host's environment, skip the image builds (the tags exist), upload
 the bundle again only if it expired, and send the Run Command to that host. A replaced pilot host
 takes the commit recorded on its data volume, in `/var/lib/codeatlas/state/running`; `/version`
-shows it too while the old host still answers.
+shows it too while the old host still answers. For the pilot, dispatching the workflow with the
+commit (["Releases"](#releases)) does the same after your approval.
 
 ## Temporary settings
 
@@ -318,15 +511,16 @@ The optional limits and switches (`DAILY_QUESTION_LIMIT`, `DAILY_REVIEW_LIMIT`,
 deploy/put-secrets.sh pilot --set PILOT_DAILY_QUESTION_LIMIT=2
 ```
 
-Then release the running commit again. Its bundle is on the host, so this is enough (on the host):
+Then refresh the running release's configuration (on the host):
 
 ```bash
 RUNNING="$(cat /var/lib/codeatlas/state/running)"
-sudo /opt/codeatlas/releases/$RUNNING/release.sh "$RUNNING"
+sudo /opt/codeatlas/current/release.sh "$RUNNING" --refresh-config
 ```
 
-The release renders the new configuration and recreates the services whose configuration
-changed. To return to the default, remove the setting and release again:
+It renders the new configuration and recreates `api` and `worker`, which read these settings
+(["Replacing a credential"](#replacing-a-credential) has the details). Releasing the running commit
+again also works, more slowly. To return to the default, remove the setting and refresh again:
 
 ```bash
 deploy/put-secrets.sh pilot --unset PILOT_DAILY_QUESTION_LIMIT
@@ -366,27 +560,38 @@ is still listed (remove it first) or when no such user exists.
 
 ## Replacing a credential
 
-Replace the parameter, then release the running commit again (see ["Temporary
-settings"](#temporary-settings)): the release renders the new value and recreates `api` and
-`worker`.
+Replace the parameter (on your machine), then refresh the running release's configuration (on the
+host):
 
 ```bash
 deploy/put-secrets.sh pilot --overwrite <NAME>
 ```
 
+```bash
+RUNNING="$(cat /var/lib/codeatlas/state/running)"
+sudo /opt/codeatlas/current/release.sh "$RUNNING" --refresh-config
+```
+
+`--refresh-config` renders the configuration from the parameters again and recreates `api` and
+`worker` (a restart would keep their old environment and key file), then runs the release check.
+It pulls and migrates nothing, changes neither `.env` nor `current`, and accepts only the running
+commit. It exits 0 when the check passes; 2 when rendering fails, for example on a missing
+parameter, with nothing recreated; and 4 when the check fails afterward. There is nothing to roll
+back to then, because the previous configuration is gone: fix the parameter and refresh again.
+
 | Credential | Steps |
 | --- | --- |
-| `GEMINI_API_KEY`, `VOYAGE_API_KEY` | Create a new key in the provider's console, overwrite the parameter, release, then revoke the old key |
-| `GITHUB_APP_CLIENT_SECRET` | Generate a new client secret in the App's settings, overwrite, release, then delete the old secret |
-| `GITHUB_APP_PRIVATE_KEY` | Generate a new private key in the App's settings, run `put-secrets.sh pilot --overwrite GITHUB_APP_PRIVATE_KEY --github-app-private-key <file>`, release, then delete the old key in the App's settings and the downloaded file |
-| `GITHUB_WEBHOOK_SECRET` | Generate one with `openssl rand -hex 32`, overwrite, release, and set it in the App's webhook settings right away. Deliveries in between fail their signature check; redeliver them from the App's Recent Deliveries page, or let the daily check find the missed pushes |
-| `TOKEN_ENCRYPTION_KEY` | `put-secrets.sh pilot --overwrite TOKEN_ENCRYPTION_KEY` generates a new key; release. The stored GitHub tokens become unreadable, so every user is asked to sign in again; their repositories stay connected |
+| `GEMINI_API_KEY`, `VOYAGE_API_KEY` | Create a new key in the provider's console, overwrite the parameter, refresh, then revoke the old key |
+| `GITHUB_APP_CLIENT_SECRET` | Generate a new client secret in the App's settings, overwrite, refresh, then delete the old secret |
+| `GITHUB_APP_PRIVATE_KEY` | Generate a new private key in the App's settings, run `put-secrets.sh pilot --overwrite GITHUB_APP_PRIVATE_KEY --github-app-private-key <file>`, refresh, then delete the old key in the App's settings and the downloaded file |
+| `GITHUB_WEBHOOK_SECRET` | Generate one with `openssl rand -hex 32`, overwrite, refresh, and set it in the App's webhook settings right away. Deliveries in between fail their signature check; redeliver them from the App's Recent Deliveries page, or let the daily check find the missed pushes |
+| `TOKEN_ENCRYPTION_KEY` | `put-secrets.sh pilot --overwrite TOKEN_ENCRYPTION_KEY` generates a new key; refresh. The stored GitHub tokens become unreadable, so every user is asked to sign in again; their repositories stay connected |
 
 ### Replacing the database password
 
 PostgreSQL reads `POSTGRES_PASSWORD` only when it creates its data directory, so the password
 changes in the database first, then in the parameter, then in the running services. `put-secrets.sh`
-refuses to overwrite it for that reason. Do the three steps back to back: until the release, new
+refuses to overwrite it for that reason. Do the three steps back to back: until the refresh, new
 connections from `api` and `worker` fail.
 
 1. Generate a new password on your machine with `openssl rand -hex 24` (only letters and digits:
@@ -417,8 +622,9 @@ connections from `api` and `worker` fail.
    rm -f "$PASSWORD_FILE"
    ```
 
-4. Release the running commit again. It writes the new `DATABASE_URL` and recreates `api`, `worker`,
-   and `db`.
+4. Refresh the configuration (`release.sh "$RUNNING" --refresh-config`, above). It writes the new
+   `DATABASE_URL` and recreates `api` and `worker`; `db` needs no restart, because PostgreSQL reads
+   `POSTGRES_PASSWORD` only when it creates its data directory.
 
 ## Monitoring
 

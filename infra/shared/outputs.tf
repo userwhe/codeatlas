@@ -13,6 +13,11 @@ output "alert_topic_arn" {
   value       = aws_sns_topic.alerts.arn
 }
 
+output "release_role_arn" {
+  description = "The role that the release workflow assumes; the repository variable RELEASE_ROLE_ARN."
+  value       = aws_iam_role.release.arn
+}
+
 output "zone_id" {
   description = "The hosted zone of the domain."
   value       = aws_route53_zone.main.zone_id

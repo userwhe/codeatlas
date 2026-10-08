@@ -26,16 +26,30 @@ re-index submissions. Latency is measured on the client, from sending a request 
 response. Submissions measure the acknowledgement only; the worker answers them afterwards. A
 category passes when it has no errors and its p95 is under the SC-007 limit. The exit status is 0
 when every category passes, 1 when one fails, and 2 when setup fails.
+
+`--json PATH` also writes the run's summary, whether it passes or fails (not after a setup
+failure): `base_url`, `commit` (read from the API's `GET /version`), `users`, `duration`, an
+overall `passed`, and per category in `categories`: `count` (its requests, including the failed
+ones), `errors` and `error_kinds` (failed requests, by status or exception), `p50` and `p95`
+(seconds, over the successful requests; null when none succeeded), `limit` (seconds), and
+`passed`. The load test workflow (`.github/workflows/load-test.yml`, specs/004-pilot-deployment
+research R15) runs the check once per concurrency level against a load test environment, with
+`--origin` equal to its URL, and `evals/load_report.py` renders the level files as one table:
+
+    uv run python -m evals.perf_check --base-url https://<host> --origin https://<host> \\
+        --users 20 --json evals/out/load-test/level-20.json
 """
 
 import argparse
 import asyncio
+import json
 import math
 import random
 import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -107,6 +121,18 @@ def _expect(response: httpx.Response, status: int, action: str) -> dict[str, Any
         raise SetupError(f"{action}: HTTP {response.status_code} {response.text[:300]}")
     body: dict[str, Any] = response.json() if response.content else {}
     return body
+
+
+async def read_commit(client: httpx.AsyncClient) -> str:
+    """The commit the API runs, from `GET /version`."""
+    response = await client.get("/version")
+    try:
+        commit = _expect(response, 200, "read the running version").get("commit")
+    except ValueError as exc:
+        raise SetupError(f"read the running version: not JSON ({exc})") from exc
+    if not isinstance(commit, str) or not commit:
+        raise SetupError(f"read the running version: no commit in {response.text[:300]}")
+    return commit
 
 
 async def sign_in(base_url: str, login: str) -> str:
@@ -247,46 +273,76 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[max(1, math.ceil(fraction * len(ordered))) - 1]
 
 
-def _ms(values: list[float], fraction: float) -> str:
-    return f"{percentile(values, fraction) * 1000:.0f}" if values else "-"
+def summarize(
+    results: Results, *, base_url: str, commit: str, users: int, duration: float
+) -> dict[str, Any]:
+    """The run's summary, as `--json` writes it (see the module docstring)."""
+    categories: dict[str, dict[str, Any]] = {}
+    for category, limit in LIMITS.items():
+        values, errors = results.latencies[category], results.errors[category]
+        p95 = percentile(values, 0.95) if values else None
+        categories[category] = {
+            "count": len(values) + errors.total(),
+            "errors": errors.total(),
+            "error_kinds": dict(errors.most_common()),
+            "p50": percentile(values, 0.5) if values else None,
+            "p95": p95,
+            "limit": limit,
+            "passed": p95 is not None and p95 < limit and errors.total() == 0,
+        }
+    return {
+        "base_url": base_url,
+        "commit": commit,
+        "users": users,
+        "duration": duration,
+        "passed": all(category["passed"] for category in categories.values()),
+        "categories": categories,
+    }
 
 
-def report(results: Results, args: argparse.Namespace, elapsed: float) -> bool:
-    count = sum(len(values) for values in results.latencies.values())
-    count += sum(sum(errors.values()) for errors in results.errors.values())
-    users = min(args.users, len(FAKE_LOGINS))
-    print(f"SC-007 check against {args.base_url}: {args.users} clients ({users} fake users)")
+def _ms(seconds: float | None) -> str:
+    return "-" if seconds is None else f"{seconds * 1000:.0f}"
+
+
+def report(summary: dict[str, Any], results: Results, elapsed: float) -> None:
+    categories: dict[str, dict[str, Any]] = summary["categories"]
+    count = sum(category["count"] for category in categories.values())
+    users = min(summary["users"], len(FAKE_LOGINS))
+    print(
+        f"SC-007 check against {summary['base_url']} at {summary['commit']}: "
+        f"{summary['users']} clients ({users} fake users)"
+    )
     print(f"{count} requests in {elapsed:.0f} s ({count / elapsed:.1f} per second)")
     print()
     print(
         f"{'category':<10} {'count':>7} {'p50 ms':>8} {'p95 ms':>8} {'limit ms':>9} {'errors':>7}"
     )
-    passed = True
-    for category, limit in LIMITS.items():
-        values, errors = results.latencies[category], results.errors[category]
-        ok = bool(values) and not errors and percentile(values, 0.95) < limit
-        passed = passed and ok
-        detail = ", ".join(f"{name} x{n}" for name, n in errors.most_common())
+    for name, category in categories.items():
+        detail = ", ".join(f"{kind} x{n}" for kind, n in category["error_kinds"].items())
         line = (
-            f"{category:<10} {len(values):>7} {_ms(values, 0.5):>8} {_ms(values, 0.95):>8} "
-            f"{limit * 1000:>9.0f} {sum(errors.values()):>7}  {'PASS' if ok else 'FAIL'}  {detail}"
+            f"{name:<10} {category['count']:>7} {_ms(category['p50']):>8} "
+            f"{_ms(category['p95']):>8} {category['limit'] * 1000:>9.0f} {category['errors']:>7}  "
+            f"{'PASS' if category['passed'] else 'FAIL'}  {detail}"
         )
         print(line.rstrip())
     print()
     print(f"{'operation':<20} {'count':>7} {'p50 ms':>8} {'p95 ms':>8}")
     for operation, values in sorted(results.operations.items()):
-        print(f"{operation:<20} {len(values):>7} {_ms(values, 0.5):>8} {_ms(values, 0.95):>8}")
+        p50, p95 = _ms(percentile(values, 0.5)), _ms(percentile(values, 0.95))
+        print(f"{operation:<20} {len(values):>7} {p50:>8} {p95:>8}")
     print()
     if results.errors["question"]["HTTP 429"]:
         print("Question submissions hit the daily limit: restart the API with a high")
         print("DAILY_QUESTION_LIMIT, for example 100000.")
     if any(errors["HTTP 403"] for errors in results.errors.values()):
         print("Requests were refused with 403: --origin must equal the API's APP_ORIGIN.")
-    print(f"Overall: {'PASS' if passed else 'FAIL'}")
-    return passed
+    print(f"Overall: {'PASS' if summary['passed'] else 'FAIL'}")
 
 
-async def run(args: argparse.Namespace) -> bool:
+async def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Run the check, print its report, and return its summary."""
+    async with httpx.AsyncClient(base_url=args.base_url, timeout=REQUEST_TIMEOUT) as client:
+        commit = await read_commit(client)
     logins = [FAKE_LOGINS[index % len(FAKE_LOGINS)] for index in range(args.users)]
     sessions = [await sign_in(args.base_url, login) for login in logins]
     clients = [
@@ -315,7 +371,15 @@ async def run(args: argparse.Namespace) -> bool:
                 for index, (client, login) in enumerate(zip(clients, logins, strict=True))
             )
         )
-        return report(results, args, time.monotonic() - started)
+        summary = summarize(
+            results,
+            base_url=args.base_url,
+            commit=commit,
+            users=args.users,
+            duration=args.duration,
+        )
+        report(summary, results, time.monotonic() - started)
+        return summary
     finally:
         await asyncio.gather(*(client.aclose() for client in clients))
 
@@ -338,6 +402,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="repository to connect in each workspace (default: the sample-app fixture)",
     )
     parser.add_argument("--seed", type=int, default=0, help="seed for the request mix")
+    parser.add_argument(
+        "--json", type=Path, metavar="PATH", help="also write the run's summary to PATH as JSON"
+    )
     args = parser.parse_args(argv)
     if args.users < 1 or args.duration <= 0:
         parser.error("--users must be at least 1 and --duration positive")
@@ -347,11 +414,15 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        passed = asyncio.run(run(args))
+        summary = asyncio.run(run(args))
     except (SetupError, httpx.HTTPError) as exc:
         print(f"perf_check: setup failed: {exc}", file=sys.stderr)
         return 2
-    return 0 if passed else 1
+    if args.json is not None:
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        print(f"Summary: {args.json}")
+    return 0 if summary["passed"] else 1
 
 
 if __name__ == "__main__":

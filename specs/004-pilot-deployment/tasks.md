@@ -757,7 +757,7 @@ minutes; dispatch a release with `expect_version=wrong` and see the previous com
 
 ### Tests for User Story 3 ⚠️ (write first, confirm they fail)
 
-- [ ] T058 [P] [US3] Extend deploy/tests/release.bats (research R18): with the stub `curl`
+- [X] T058 [P] [US3] Extend deploy/tests/release.bats (research R18): with the stub `curl`
   failing the check, the previous bundle is started again, `current` points back at it, and the
   script exits 3; with no `state/running` (first release on a host) it stops the new services and
   exits 4; when the restart of the previous release also fails, it exits 4; `--expect-version V`
@@ -766,7 +766,7 @@ minutes; dispatch a release with `expect_version=wrong` and see the previous com
 
 ### Implementation for User Story 3
 
-- [ ] T059 [US3] Complete deploy/release.sh (research R7, steps 5 and 6; contracts/operations.md):
+- [X] T059 [US3] Complete deploy/release.sh (research R7, steps 5 and 6; contracts/operations.md):
   - After `up -d`, check for up to 120 seconds that `/readyz` and `/` return 200 and `/version`
     returns the expected commit (`--expect-version V` overrides it) through
     `curl --resolve <hostname>:443:127.0.0.1`.
@@ -777,7 +777,7 @@ minutes; dispatch a release with `expect_version=wrong` and see the previous com
   - `--refresh-config`: re-render configuration and run `codeatlas-compose up -d --force-recreate
     api worker` on the running tag (a restart would keep the old environment).
   - Append the outcome to `/var/log/codeatlas/releases.log`.
-- [ ] T060 [US3] Extend infra/shared/ with GitHub's OIDC provider
+- [X] T060 [US3] Extend infra/shared/ with GitHub's OIDC provider
   (`token.actions.githubusercontent.com`, audience `sts.amazonaws.com`) and one role,
   `codeatlas-release`, trusted only when `sub` equals
   `${var.github_oidc_subject_prefix}:environment:pilot`, allowed:
@@ -790,7 +790,7 @@ minutes; dispatch a release with `expect_version=wrong` and see the previous com
   - `sns:Publish` on `codeatlas-alerts`.
   - Output `release_role_arn`; document in shared.tfvars.example how to read the prefix with
     `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`.
-- [ ] T061 [US3] Create .github/workflows/release.yml (contracts/operations.md, "Release
+- [X] T061 [US3] Create .github/workflows/release.yml (contracts/operations.md, "Release
   workflow"; research R7):
   - Triggers: `workflow_run` of `CI` (`types: [completed]`, `branches: [main]`), and
     `workflow_dispatch` with `commit` and `expect_version`. Workflow `permissions: contents: read`;
@@ -828,7 +828,7 @@ minutes; dispatch a release with `expect_version=wrong` and see the previous com
 - [ ] T062 [US3] Developer action: read the OIDC subject prefix and add it to `shared.tfvars`;
   apply the OIDC changes to `infra/shared`; create the GitHub environment `pilot` with the
   developer as required reviewer and only `main` allowed; set the repository variables of T061.
-- [ ] T063 [US3] Extend docs/operations.md: setting up releases (reading the OIDC subject prefix,
+- [X] T063 [US3] Extend docs/operations.md: setting up releases (reading the OIDC subject prefix,
   applying `infra/shared`, creating the `pilot` environment, and the repository variables); the
   release flow and the summary; rejecting a stale
   run that waits for approval (it blocks newer runs); the expand-then-contract rule for
@@ -854,12 +854,12 @@ of the same form; every number in both reports has its denominator, commit, and 
 
 ### Tests for User Story 4 ⚠️ (write first, confirm they fail)
 
-- [ ] T065 [P] [US4] Unit tests in backend/tests/unit/test_perf_check.py: the summary that
+- [X] T065 [P] [US4] Unit tests in backend/tests/unit/test_perf_check.py: the summary that
   `--json` writes has `base_url`, `commit`, `users`, `duration`, and per category `count`,
   `errors`, `p50`, `p95`, `limit`, and `passed`, plus an overall `passed`; and
   backend/evals/load_report.py renders several level files into one Markdown table, in level
   order, marking the highest level that passes, or "at least <highest level>" when all pass.
-- [ ] T066 [P] [US4] Unit tests in backend/tests/unit/test_bench_eval.py (research R16), with small
+- [X] T066 [P] [US4] Unit tests in backend/tests/unit/test_bench_eval.py (research R16), with small
   fixtures copied from the pinned benchmark commit:
   - Parsing a golden-comments file (a list of `{pr_title, url, comments: [{comment, severity,
     category}], ...}` with optional `original_url` and `az_comment`) keeps every item, keyed by its
@@ -874,7 +874,7 @@ of the same form; every number in both reports has its denominator, commit, and 
 
 ### Implementation for User Story 4
 
-- [ ] T067 [P] [US4] Load test tooling:
+- [X] T067 [P] [US4] Load test tooling:
   - Add `--json PATH` to backend/evals/perf_check.py, writing T065's summary; read `commit` from
     `GET /version`.
   - Create backend/evals/load_report.py (level JSON files in, Markdown table out).
@@ -892,7 +892,7 @@ of the same form; every number in both reports has its denominator, commit, and 
   rate by category, the highest level meeting every target (or "at least 80"), and peak CPU and
   memory. If peak memory stays under half the host, record the `t4g.small` decision in ADR 0010.
   Add a "Running the load test" section to docs/operations.md with these steps.
-- [ ] T069 [P] [US4] Create backend/evals/run_bench_eval.py (FR-027, research R16), with options
+- [X] T069 [P] [US4] Create backend/evals/run_bench_eval.py (FR-027, research R16), with options
   `--bench-commit` (required), `--out` (default `evals/out/bench`), `--limit`, `--judge-model`
   (default `claude-opus-4-5-20251101`), `--exclude-flagged`, and `--skip-judge`:
   - Download the benchmark at the pinned commit into `--out` from codeload, and read
@@ -917,7 +917,7 @@ of the same form; every number in both reports has its denominator, commit, and 
     with and without the flagged items; write `bench-eval-<time>.md` and `.json` with the benchmark
     commit, judge, limits, per-item results, cost, and duration.
   - Exit codes: 0 on a completed run, 2 on setup errors.
-- [ ] T070 [US4] Extend backend/evals/README.md: a "Code Review Bench" section (keys, cost, the
+- [X] T070 [US4] Extend backend/evals/README.md: a "Code Review Bench" section (keys, cost, the
   pinned commit, the judge order, checking the providers' deprecation pages before a run, the
   results directories, the raised limits, and the caveats in research R16), and the review-status
   labels that reports must use for `qa_v1.jsonl` and `review_v2.jsonl` (FR-028).

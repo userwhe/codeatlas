@@ -1,6 +1,6 @@
 # Resources shared by every environment (specs/004-pilot-deployment research R6, R8, R10, and
 # R12): the image repositories, the bucket for release bundles and backups, the hosted zone, the
-# alert topic, and the monthly budget.
+# alert topic, and the monthly budget. The release workflow's credentials are in release.tf.
 
 data "aws_caller_identity" "current" {}
 

@@ -5,7 +5,9 @@ region = "us-east-1"
 # The domain delegated to the hosted zone.
 domain = "example.dev"
 
-# The repository's OIDC subject prefix, read with:
+# The repository's OIDC subject prefix, in GitHub's immutable format
+# repo:<owner>@<owner ID>/<repo>@<repo ID>. The release role trusts only
+# "<prefix>:environment:pilot". Read it with:
 #   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
 github_oidc_subject_prefix = "repo:<owner>@<owner ID>/<repo>@<repo ID>"
 

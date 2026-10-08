@@ -368,6 +368,12 @@ developer approves the release.
      stops the new services.
 - **`--refresh-config`** re-renders configuration and runs `up -d --force-recreate api worker` on
   the running tag; a plain restart would keep the containers' old environment.
+- **Rolling back by hand**: re-releasing the previous commit runs its own `alembic upgrade head`,
+  which fails once a newer migration has run ("Can't locate revision"), so it exits 2 and changes
+  nothing. The working method is `release.sh <running sha> --expect-version rollback`, which fails
+  the check on purpose and takes the automatic rollback path, the same mechanism as the rehearsal.
+  Whether `release.sh` should skip migrations when the database is ahead of the bundle is left
+  open; it would need a spec change.
 - **Releasing a commit again by hand** (the drill, the load test, a replaced host): the images
   already exist and ECR tags are immutable, so the procedure skips pushing a tag that exists, and
   it uploads the bundle again from a checkout of the commit when `releases/<sha>/` has expired
@@ -866,7 +872,16 @@ can be rerun by anyone with the repository.
     published `evaluations.json` from the published directory of the same judge.
   - **Comparison**: from the benchmark's published `evaluations.json` for the same judge, the
     runner sums each tool's true positives, false positives, and false negatives over the same 20
-    golden URLs, and the report shows precision and recall side by side.
+    golden URLs, and the report shows precision and recall side by side. At the pinned commit,
+    many published tools (28 of 49 for Opus 4.5) were judged on some of these pull requests against
+    an older version of the golden comments, so the runner compares each evaluation's matched and
+    missed comments with the current ones: tools that match exactly form the main table with
+    CodeAtlas, and the others go in a separate table with the number of pull requests judged on
+    older labels. The sums correspond to the benchmark's "All" profile; its dashboard defaults to
+    "Core", which leaves out style and speculative comments, so the numbers differ from the
+    dashboard's.
+  - **Reruns**: step 3 skips pairs it has already judged, so the runner passes `--force` with
+    `--tool codeatlas`, which clears only CodeAtlas's earlier results.
   - **Cost**: 20 reviews at $0.03 to $0.38 each, and a few dollars of judge calls.
   - **Caveats in the report**: the pull requests come from well-known repositories that models may
     have seen in training; the judge is a model; CodeAtlas reports risks only, so missed style

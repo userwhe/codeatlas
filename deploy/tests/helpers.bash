@@ -11,6 +11,9 @@
 #   ssm (aws ssm), ecr-login (aws ecr get-login-password), docker-login, pull, migrate,
 #   up (codeatlas-compose up), curl, s3-download (aws s3 cp from S3), s3-upload
 #   (aws s3api put-object), metric (aws cloudwatch put-metric-data).
+# The `curl` stub answers as the release that $CODEATLAS_ROOT/.env names: 200 for every path, and
+# /version reports that release's IMAGE_TAG, or $STUB_VERSION when set. $STUB_BROKEN lists what
+# answers 502 instead: a tag (every path of that release) or TAG:PATH (one path, such as `<tag>:/`).
 
 DEPLOY_DIR="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 export DEPLOY_DIR
@@ -37,6 +40,7 @@ setup_host() {
 	export CODEATLAS_LOG_DIR="$BATS_TEST_TMPDIR/log"
 	export STUB_LOG="$BATS_TEST_TMPDIR/calls.log"
 	export STUB_FAIL=""
+	export STUB_BROKEN="" STUB_VERSION=""
 	export STUB_SSM_RESPONSE="$BATS_TEST_TMPDIR/parameters.json"
 	export STUB_VALUES="$BATS_TEST_TMPDIR/values"
 	export STUB_BUCKET="$BATS_TEST_TMPDIR/bucket"
@@ -179,6 +183,8 @@ EOF
 	cat >"$bin/codeatlas-compose" <<'EOF'
 #!/usr/bin/env bash
 echo "codeatlas-compose $*" >>"$STUB_LOG"
+# The real wrapper reads IMAGE_TAG from /opt/codeatlas/.env, and the environment would override it.
+[ -z "${IMAGE_TAG:-}" ] || echo "IMAGE_TAG=$IMAGE_TAG in the environment of codeatlas-compose" >>"$STUB_LOG"
 case " $STUB_FAIL " in *" up "*) [ "$1" = up ] && exit 1 ;; esac
 case "$1" in
 exec | run)
@@ -205,6 +211,25 @@ EOF
 #!/usr/bin/env bash
 echo "curl $*" >>"$STUB_LOG"
 case " $STUB_FAIL " in *" curl "*) exit 7 ;; esac
+url="${!#}"
+path="/${url#https://*/}"
+tag="$(sed -n 's/^IMAGE_TAG=//p' "$CODEATLAS_ROOT/.env" 2>/dev/null)"
+code=200
+for broken in ${STUB_BROKEN:-}; do
+	case "$broken" in "$tag" | "$tag:$path") code=502 ;; esac
+done
+case " $* " in
+*" -w "* | *" --write-out "*)
+	# -o /dev/null -w '%{http_code}': only the status.
+	printf '%s' "$code"
+	exit 0
+	;;
+esac
+# Otherwise the body, failing on an error status as --fail does.
+[ "$code" = 200 ] || exit 22
+case "$path" in
+/version) printf '{"commit":"%s"}\n' "${STUB_VERSION:-$tag}" ;;
+esac
 exit 0
 EOF
 
