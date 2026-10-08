@@ -2,7 +2,8 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-03
-- **Scope**: `specs/001-repository-qa`; revisit at cloud deployment
+- **Scope**: `specs/001-repository-qa`; revisited for `specs/004-pilot-deployment` and kept
+  (ADR 0010)
 
 ## Context
 
