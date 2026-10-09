@@ -73,24 +73,28 @@ async function openUnreviewedReviewApp(page: Page) {
 /**
  * In fake mode a review takes a fraction of a second, so the review page replaces its progress
  * with the review as soon as the job's last poll reports it finished. Until the returned function
- * is called, this holds back each response for the run that shows it finished, so the stages stay
- * on screen. Responses are passed on unchanged, only later.
+ * is called, this reports each response for the run that shows it finished as still running, so
+ * the page keeps the stages on screen and keeps polling. The review can finish before the page's
+ * first request, so the response is rewritten rather than held back: a held first response would
+ * leave the page loading. After release, responses pass unchanged and the next poll shows the
+ * review.
  */
 async function holdFinishedRun(page: Page) {
-  let release = () => {};
-  const released = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  let released = false;
   const matches = (url: URL) => RUN_REQUEST.test(url.pathname);
   await page.route(matches, async (route) => {
     const response = await route.fetch();
-    const { status } = (await response.json()) as { status?: string };
-    if (status !== undefined && FINISHED_STATUSES.includes(status)) await released;
+    const run = (await response.json()) as { status?: string };
+    const finished = run.status !== undefined && FINISHED_STATUSES.includes(run.status);
     // The page may have dropped the request in the meantime.
-    await route.fulfill({ response }).catch(() => {});
+    if (finished && !released) {
+      await route.fulfill({ response, json: { ...run, status: "running" } }).catch(() => {});
+    } else {
+      await route.fulfill({ response }).catch(() => {});
+    }
   });
   return async () => {
-    release();
+    released = true;
     await page.unroute(matches);
   };
 }
