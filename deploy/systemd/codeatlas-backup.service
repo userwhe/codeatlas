@@ -1,0 +1,15 @@
+# The nightly backup (specs/004-pilot-deployment research R12), started by codeatlas-backup.timer.
+# Installed in the pilot only, by the host's bootstrap. Its output is in
+# /var/log/codeatlas/backup.log, which the CloudWatch agent ships to /codeatlas/pilot/host.
+[Unit]
+Description=CodeAtlas nightly backup
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+RequiresMountsFor=/var/lib/codeatlas
+
+[Service]
+Type=oneshot
+ExecStart=/opt/codeatlas/current/backup.sh
+# A backup that hangs would block the next night's run.
+TimeoutStartSec=2h

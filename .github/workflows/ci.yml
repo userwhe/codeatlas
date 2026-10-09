@@ -35,6 +35,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src
       - run: uv run pytest
+      - name: Build the release image
+        run: docker build .
 
   frontend:
     runs-on: ubuntu-latest
@@ -52,6 +54,63 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - name: Build the release image
+        run: docker build --target production .
+
+  infra:
+    # The deployment's definition and host scripts (specs/004-pilot-deployment research R8 and R18).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.4
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive infra
+      - name: Validate infra/shared
+        working-directory: infra/shared
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Validate infra/stack
+        working-directory: infra/stack
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Check the host scripts
+        run: docker run --rm -v "$PWD":/mnt -w /mnt koalaman/shellcheck:v0.11.0 deploy/*.sh
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Test the host scripts
+        # Runs as a non-root user with jq, openssl, and docker compose, as on the runner image.
+        run: bats deploy/tests
+      - name: Check the Compose file
+        # With placeholder interpolation variables and empty runtime files, in a directory standing
+        # in for /opt/codeatlas.
+        env:
+          ENVIRONMENT: pilot
+          AWS_REGION: us-east-1
+          REGISTRY: 123456789012.dkr.ecr.us-east-1.amazonaws.com
+          CODEATLAS_HOSTNAME: codeatlas.example.dev
+          IMAGE_TAG: 0000000000000000000000000000000000000000
+        run: |
+          project="$(mktemp -d)"
+          mkdir "$project/runtime"
+          touch "$project/runtime/app.env" "$project/runtime/db.env"
+          docker compose --project-directory "$project" -f deploy/compose.yml config --quiet
+      - name: Check the Caddyfile
+        run: >-
+          docker run --rm -e CODEATLAS_HOSTNAME=example.com -v "$PWD/deploy:/etc/caddy"
+          caddy:2.10 caddy validate --config /etc/caddy/Caddyfile
+      - name: Check the CloudWatch agent configuration
+        # The agent's own translator checks it against the agent's schema, as the host's
+        # bootstrap does with the latest agent.
+        run: >-
+          docker run --rm -v "$PWD/deploy:/deploy:ro" -e RUN_IN_CONTAINER=False -e AWS_REGION=us-east-1
+          --entrypoint /opt/aws/amazon-cloudwatch-agent/bin/config-translator
+          public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest
+          --input /deploy/cloudwatch-agent.json --input-dir /tmp/none --output /tmp/agent.toml
+          --mode onPremise --os linux
 
   e2e:
     needs: [backend, frontend]
@@ -69,6 +128,9 @@ jobs:
             echo "CODEATLAS_FAKE_EXTERNALS=1"
             echo "TOKEN_ENCRYPTION_KEY=$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
             echo "GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET"
+            echo "RATE_LIMIT_PER_MINUTE=0"
+            echo "PILOT_DAILY_QUESTION_LIMIT=1000"
+            echo "PILOT_DAILY_REVIEW_LIMIT=1000"
           } > .env
           # Playwright signs its webhook deliveries with the same per-run secret.
           echo "GITHUB_WEBHOOK_SECRET=$WEBHOOK_SECRET" >> "$GITHUB_ENV"

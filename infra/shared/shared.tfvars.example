@@ -1,0 +1,17 @@
+# Copy to shared.tfvars (ignored by Git) and fill in, then plan with -var-file=shared.tfvars.
+
+region = "us-east-1"
+
+# The domain delegated to the hosted zone.
+domain = "example.dev"
+
+# The repository's OIDC subject prefix, in GitHub's immutable format
+# repo:<owner>@<owner ID>/<repo>@<repo ID>. The release role trusts only
+# "<prefix>:environment:pilot". Read it with:
+#   gh api repos/<owner>/<repo>/actions/oidc/customization/sub
+github_oidc_subject_prefix = "repo:<owner>@<owner ID>/<repo>@<repo ID>"
+
+# The address that receives alerts and budget notifications.
+alert_email = "alerts@example.dev"
+
+monthly_budget_usd = 40

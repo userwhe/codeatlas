@@ -87,6 +87,31 @@ def test_sign_in_flow(fake: FakeGitHub) -> None:
         gateway.get_authenticated_user("not-a-token")
 
 
+def test_users_by_login(fake: FakeGitHub) -> None:
+    gateway: GitHubGateway = fake
+
+    assert (gateway.get_user_by_login("octocat").id, gateway.get_user_by_login("hubot").id) == (
+        1001,
+        1002,
+    )
+    monalisa = gateway.get_user_by_login("monalisa")
+    assert (monalisa.id, monalisa.login) == (1003, "monalisa")
+    with pytest.raises(GitHubNotFound):
+        gateway.get_user_by_login("nobody")
+
+
+def test_a_user_without_installations_signs_in(fake: FakeGitHub) -> None:
+    tokens = fake.exchange_code("fake:monalisa")
+
+    assert fake.get_authenticated_user(tokens.access_token).login == "monalisa"
+    assert fake.list_accessible_repositories(tokens.access_token) == []
+    assert fake.list_installation_ids(tokens.access_token) == set()
+    # As on GitHub, public repositories are visible to every user.
+    assert fake.get_repository(tokens.access_token, SOLO_ID).full_name == "octocat/solo"
+    with pytest.raises(GitHubNotFound):
+        fake.get_repository(tokens.access_token, SAMPLE_APP_PRIVATE_ID)
+
+
 def test_access_per_user(fake: FakeGitHub) -> None:
     octocat_ids = {repo.id for repo in fake.list_accessible_repositories(OCTOCAT)}
     assert octocat_ids == set(range(2001, 2009)) | {REVIEW_APP_ID, REVIEW_APP_PRIVATE_ID}
@@ -317,6 +342,7 @@ GATEWAY_CALLS: dict[str, Callable[[FakeGitHub], object]] = {
     "exchange_code": lambda fake: fake.exchange_code("fake:octocat"),
     "refresh_user_token": lambda fake: fake.refresh_user_token("fake-refresh-octocat"),
     "get_authenticated_user": lambda fake: fake.get_authenticated_user(OCTOCAT),
+    "get_user_by_login": lambda fake: fake.get_user_by_login("octocat"),
     "list_accessible_repositories": lambda fake: fake.list_accessible_repositories(OCTOCAT),
     "get_repository": lambda fake: fake.get_repository(OCTOCAT, SAMPLE_APP_ID),
     "list_installation_ids": lambda fake: fake.list_installation_ids(OCTOCAT),

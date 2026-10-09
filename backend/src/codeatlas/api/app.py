@@ -1,15 +1,19 @@
-"""FastAPI application: error handling, request IDs, Origin check, and routers."""
+"""FastAPI application: error handling, request IDs and log lines, Origin check, and routers."""
 
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from codeatlas.api.errors import ApiError, error_body
+from codeatlas.api.ratelimit import SlidingWindowLimiter
 from codeatlas.api.routes import (
     analysis_runs,
     auth,
@@ -23,14 +27,20 @@ from codeatlas.api.routes import (
     webhooks,
 )
 from codeatlas.config import get_settings
+from codeatlas.db import new_session
 from codeatlas.logging import configure_logging, request_id_var
 
 logger = logging.getLogger(__name__)
+# One line per request, for the dashboard's request counts and latency (research R9).
+request_logger = logging.getLogger("codeatlas.request")
 
+API_PREFIX = "/v1"
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # GitHub calls these paths, and their signature check replaces the Origin check
 # (specs/002-push-reindexing, research R2).
 WEBHOOK_PATH_PREFIX = "/webhooks/"
+# The endpoints reachable without a session: sign-in and GitHub's deliveries (FR-006).
+RATE_LIMITED_PATH_PREFIXES = ("/auth/", WEBHOOK_PATH_PREFIX)
 
 
 def _request_id(request: Request) -> str | None:
@@ -46,6 +56,36 @@ def _error_response(
         content=error_body(
             code=code, message=message, retryable=retryable, request_id=_request_id(request)
         ),
+    )
+
+
+def _route_template(request: Request) -> str:
+    """The matched route's path template, such as `/v1/repositories/{repository_id}`.
+
+    The router records the matched route on the request's scope, with its path relative to the
+    `include_router` prefix, so the prefix is added back here. The app's route list cannot be
+    searched instead: FastAPI 0.142 keeps included routers there without a path (research R9).
+    """
+    path = getattr(request.scope.get("route"), "path", None)
+    if not isinstance(path, str):
+        return "unmatched"
+    if request.url.path.startswith(f"{API_PREFIX}/"):
+        return API_PREFIX + path
+    return path
+
+
+def _log_request(request: Request, status: int, started: float) -> None:
+    # The method and route template only: no query string, body, or path parameter values.
+    request_logger.info(
+        "request",
+        extra={
+            "fields": {
+                "method": request.method,
+                "route": _route_template(request),
+                "status": status,
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+            }
+        },
     )
 
 
@@ -66,6 +106,21 @@ def create_app() -> FastAPI:
                 )
         return await call_next(request)
 
+    # Registered before `request_ids`, so it runs inside it and the line carries the request ID.
+    @app.middleware("http")
+    async def request_log(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            # The exception handler answers 500 outside this middleware.
+            _log_request(request, 500, started)
+            raise
+        _log_request(request, response.status_code, started)
+        return response
+
     @app.middleware("http")
     async def request_ids(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -79,6 +134,30 @@ def create_app() -> FastAPI:
             request_id_var.reset(token)
         response.headers["X-Request-ID"] = request_id
         return response
+
+    limiter = SlidingWindowLimiter(get_settings().rate_limit_per_minute)
+
+    # Registered last, so it runs first: a refused request reaches no Origin or signature check,
+    # route, or database (research R4). Behind Caddy, uvicorn takes the client address from
+    # X-Forwarded-For.
+    @app.middleware("http")
+    async def rate_limit(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        if request.url.path.startswith(RATE_LIMITED_PATH_PREFIXES):
+            address = request.client.host if request.client is not None else "unknown"
+            retry_after = limiter.check(address)
+            if retry_after is not None:
+                refused = _error_response(
+                    request,
+                    429,
+                    "rate_limited",
+                    "Too many requests. Try again later.",
+                    retryable=True,
+                )
+                refused.headers["Retry-After"] = str(int(retry_after))
+                return refused
+        return await call_next(request)
 
     @app.exception_handler(ApiError)
     async def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
@@ -121,14 +200,32 @@ def create_app() -> FastAPI:
             request, 500, "internal_error", "Something went wrong.", retryable=True
         )
 
+    # Liveness, readiness, and the running version (specs/004-pilot-deployment, research R11).
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/readyz", include_in_schema=False)
+    def readyz(request: Request) -> JSONResponse:
+        # Only the database: GitHub and model provider outages leave the service ready (FR-011).
+        try:
+            with new_session() as db:
+                db.execute(text("SET LOCAL statement_timeout = '2s'"))
+                db.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            return _error_response(
+                request, 503, "not_ready", "The database is unavailable.", retryable=True
+            )
+        return JSONResponse({"status": "ready"})
+
+    @app.get("/version", include_in_schema=False)
+    def version() -> dict[str, str]:
+        return {"commit": get_settings().release}
+
     app.include_router(auth.router)
     app.include_router(webhooks.router)
     for module in (me, usage, jobs, github, repositories, snapshots, search, analysis_runs):
-        app.include_router(module.router, prefix="/v1")
+        app.include_router(module.router, prefix=API_PREFIX)
     return app
 
 

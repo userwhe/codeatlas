@@ -5,7 +5,7 @@ import { useEffect } from "react";
 
 import { useMe } from "@/lib/api/me";
 
-export function SignIn({ failed }: { failed: boolean }) {
+export function SignIn({ failed, notInvited }: { failed: boolean; notInvited: boolean }) {
   const router = useRouter();
   const { data: me } = useMe();
 
@@ -13,6 +13,20 @@ export function SignIn({ failed }: { failed: boolean }) {
   useEffect(() => {
     if (me) router.replace("/repositories");
   }, [me, router]);
+
+  // GitHub accounts that are not on the pilot's access list are turned away at sign-in, so
+  // offering to sign in again would only repeat the refusal.
+  if (notInvited) {
+    return (
+      <div className="mx-auto mt-16 flex w-full max-w-md flex-col gap-6 text-center">
+        <h1 className="text-3xl font-semibold tracking-tight">CodeAtlas is in a private pilot</h1>
+        <p className="text-zinc-600 dark:text-zinc-400">
+          Your GitHub account is not on the pilot&apos;s access list. CodeAtlas did not keep any
+          data from this sign-in.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto mt-16 flex w-full max-w-md flex-col gap-6 text-center">

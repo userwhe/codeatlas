@@ -24,7 +24,10 @@ export function ExternalProcessingAcceptance({
         onChange={(event) => onChange(event.target.checked)}
         className="mt-0.5"
       />
-      <span>{EXTERNAL_PROCESSING_DISCLOSURE}. I accept this for this private repository.</span>
+      <span>
+        {EXTERNAL_PROCESSING_DISCLOSURE}. Deleted data can remain in encrypted backups for up to 10
+        days after deletion. I accept this for this private repository.
+      </span>
     </label>
   );
 }

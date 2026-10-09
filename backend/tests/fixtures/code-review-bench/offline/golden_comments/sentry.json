@@ -1,0 +1,83 @@
+[
+  {
+    "pr_title": "Optimize spans buffer insertion with eviction during insert",
+    "url": "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/2",
+    "original_url": "https://github.com/getsentry/sentry/pull/92393",
+    "az_comment": "reviewed commit is not in the repo",
+    "comments": [
+      {
+        "comment": "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+        "severity": "Critical",
+        "category": "bug"
+      },
+      {
+        "comment": "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users.",
+        "severity": "High",
+        "category": "bug"
+      }
+    ]
+  },
+  {
+    "pr_title": "Replays Self-Serve Bulk Delete System",
+    "url": "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/5",
+    "az_comment": "there is no such PR, it is a mix of many PRs",
+    "comments": [
+      {
+        "comment": "The BrowserReportingCollectorEndpoint returns HttpResponse objects but the endpoint inherits from Endpoint which expects rest_framework.response.Response objects.",
+        "severity": "Medium",
+        "category": "api"
+      },
+      {
+        "comment": "In BaseDetectorTypeValidator.update(), the validator incorrectly updates instance.type using validated_data.get('detector_type') instead of validated_data.get('type').",
+        "severity": "Medium",
+        "category": "bug"
+      },
+      {
+        "comment": "Using zip(error_ids, events.values()) assumes the get_multi result preserves the input order; dict value order is not guaranteed to match error_ids, so event data can be paired with the wrong ID (missing nodes also shift alignment).",
+        "severity": "Low",
+        "category": "bug"
+      },
+      {
+        "comment": "Hardcoded empty data passed to TableWidgetVisualization causes it to always render an empty table instead of displaying actual results when the feature flag is enabled.",
+        "severity": "Medium",
+        "category": "bug"
+      },
+      {
+        "comment": "Validation logic incorrectly uses .get('timestamp'), which treats a timestamp of 0 as absent. It should directly check 'timestamp' in self.initial_data to ensure proper field presence detection, preventing both 'age=0' and 'timestamp' from passing mutual-exclusion validation.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "Analytics events are recorded before the feature flag check, resulting in analytics being logged for all requests, including those that return 404 due to the feature being disabled. This can lead to misleading analytics data.",
+        "severity": "Medium",
+        "category": "bug"
+      }
+    ]
+  },
+  {
+    "pr_title": "ref(crons): Reorganize incident creation / issue occurrence logic",
+    "url": "https://github.com/getsentry/sentry/pull/80528",
+    "comments": [
+      {
+        "comment": "The function modifies the config variable to include display values but then returns the original monitor.config instead of the modified version.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "The code fetches MonitorCheckIn objects by ID when the required data already exists in previous_checkins. This creates an unnecessary database query.",
+        "severity": "Low",
+        "category": "perf"
+      }
+    ]
+  }
+]

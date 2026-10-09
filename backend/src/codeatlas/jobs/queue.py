@@ -9,18 +9,23 @@ Requests with the same dedupe key share a job. At most one job per key waits (`q
 (specs/002-push-reindexing, research R3).
 """
 
+import logging
 import random
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Select, and_, exists, func, or_, select
+from sqlalchemy import ColumnElement, Select, and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
+from codeatlas import metrics
 from codeatlas.config import get_settings
+from codeatlas.logging import log_context
 from codeatlas.models import ACTIVE_JOB_STATUSES, Job, JobEvent, Repository
+
+logger = logging.getLogger(__name__)
 
 LEASE_DURATION = timedelta(seconds=60)
 BACKOFF_BASE_SECONDS = 5.0
@@ -36,6 +41,9 @@ DEADLINES = {
     "answer_question": ("question_deadline", "Answering the question"),
     "review_pull_request": ("review_deadline", "Reviewing the pull request"),
 }
+# Permanent failures that still count toward the `jobs-failing` alarm; other permanent failures
+# come from the input or from access (specs/004-pilot-deployment, research R10).
+COUNTED_PERMANENT_CODES = frozenset({"timeout", "internal_error"})
 
 
 class LeaseLost(Exception):
@@ -294,22 +302,34 @@ def request_automatic_run(
     return waiting
 
 
-def _claimable(now: datetime) -> Select[Job]:
+def _waiting_and_due(now: datetime) -> ColumnElement[bool]:
+    return and_(Job.status.in_(WAITING_STATUSES), Job.run_after <= now)
+
+
+def _no_other_running() -> ColumnElement[bool]:
     running = aliased(Job)
-    other_running = exists().where(
+    return ~exists().where(
         running.workspace_id == Job.workspace_id,
         running.kind == Job.kind,
         running.status == "running",
         running.id != Job.id,
     )
+
+
+def runnable_waiting(now: datetime) -> ColumnElement[bool]:
+    """Waiting jobs that `claim_next` could claim at `now`; the queue-age metric reads them."""
+    return and_(_waiting_and_due(now), _no_other_running())
+
+
+def _claimable(now: datetime) -> Select[Job]:
     return (
         select(Job)
         .where(
             or_(
-                and_(Job.status.in_(WAITING_STATUSES), Job.run_after <= now),
+                _waiting_and_due(now),
                 and_(Job.status == "running", Job.lease_expires_at < now),
             ),
-            ~other_running,
+            _no_other_running(),
         )
         .order_by(Job.created_at, Job.id)
         .limit(1)
@@ -330,6 +350,12 @@ def _failure_on_claim(job: Job, now: datetime) -> JobFailure | None:
 
 
 def _mark_failed(db: Session, job: Job, failure: JobFailure, now: datetime) -> None:
+    """Fail the job, log its outcome, and count the failure if it matters.
+
+    Both `fail` and `claim_next` end here, so failures found at claim time are logged too, with
+    the job's ID (research R9). A failure counts toward `JobsFailed` when its retries are used up,
+    it timed out, or it is an internal error (research R10).
+    """
     job.status = "failed"
     job.error_code = failure.code
     job.error_message = failure.message
@@ -339,6 +365,13 @@ def _mark_failed(db: Session, job: Job, failure: JobFailure, now: datetime) -> N
     append_event(
         db, job.id, event_type="failed", message=failure.message, data={"code": failure.code}
     )
+    with log_context(job_id=str(job.id)):
+        logger.info(
+            "job_finished",
+            extra={"fields": {"kind": job.kind, "outcome": "failed", "attempt": job.attempt}},
+        )
+    if not failure.permanent or failure.code in COUNTED_PERMANENT_CODES:
+        metrics.emit({"JobsFailed": 1})
 
 
 def claim_next(db: Session, *, now: datetime | None = None) -> Claim | None:
@@ -450,11 +483,12 @@ def fail(
     permanent: bool,
     retryable: bool | None = None,
     now: datetime | None = None,
-) -> None:
+) -> str:
     """Record a failed attempt: schedule a retry, or fail the job. Commits.
 
     The job fails when the failure is permanent, no attempts are left, or the deadline has
-    passed (then with code `timeout`). Raises `LeaseLost` if `token` no longer owns the job.
+    passed (then with code `timeout`). Returns the job's new status, `retry_wait` or `failed`.
+    Raises `LeaseLost` if `token` no longer owns the job.
     """
     current = _now(now)
     try:
@@ -479,7 +513,9 @@ def fail(
             message=f"Attempt {job.attempt} of {job.max_attempts} failed. Retrying soon.",
             data={"code": code, "attempt": job.attempt, "retry_in_seconds": round(delay, 1)},
         )
+    status = job.status
     db.commit()
+    return status
 
 
 def cancel_for_repository(

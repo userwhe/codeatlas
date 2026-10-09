@@ -1,0 +1,6 @@
+# Copy to drill.tfvars (ignored by Git) and fill in. State key: stack/drill.tfstate.
+# The drill restores the pilot's backup and reads the pilot's parameters, with its own name.
+environment     = "drill"
+domain          = "example.dev"
+hostname        = "drill.example.dev"
+parameters_path = "/codeatlas/pilot"

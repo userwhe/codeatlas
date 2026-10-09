@@ -1,0 +1,4 @@
+# Copy to pilot.tfvars (ignored by Git) and fill in. State key: stack/pilot.tfstate.
+environment = "pilot"
+domain      = "example.dev"
+hostname    = "codeatlas.example.dev"

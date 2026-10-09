@@ -10,10 +10,19 @@ from sqlalchemy.orm import Session
 
 from codeatlas.auth.crypto import DecryptionError, decrypt, encrypt
 from codeatlas.auth.sessions import create_session
+from codeatlas.config import get_settings
 from codeatlas.db import session_scope
 from codeatlas.github.gateway import GitHubGateway, UserAuthorizationInvalid, UserTokens
 from codeatlas.jobs.queue import request_automatic_run
-from codeatlas.models import GitHubCredential, Membership, Repository, User, UserSession, Workspace
+from codeatlas.models import (
+    GitHubCredential,
+    Membership,
+    PilotUser,
+    Repository,
+    User,
+    UserSession,
+    Workspace,
+)
 from codeatlas.workspace.access import resume
 from codeatlas.workspace.audit import record
 
@@ -24,6 +33,14 @@ TOKEN_REFRESH_MARGIN = timedelta(minutes=1)
 
 class SignInError(Exception):
     """Sign-in could not be completed; the user is sent back to the sign-in page."""
+
+
+class NotInvited(SignInError):
+    """The GitHub user is not on the pilot's access list (specs/004-pilot-deployment, FR-003)."""
+
+    def __init__(self, github_login: str) -> None:
+        super().__init__("the GitHub user is not on the access list")
+        self.github_login = github_login
 
 
 @dataclass(frozen=True)
@@ -73,10 +90,27 @@ def complete_login(
     """Finish sign-in and return a new session token. The caller commits.
 
     Signing in again also resumes the automatic updates that paused because sign-in was required.
+    When the access list applies, a user not on it gets `NotInvited` before any row is written,
+    and the token GitHub issued is discarded (research R13).
     """
     _check_state(state, state_cookie)
     tokens = gateway.exchange_code(code)
     github_user = gateway.get_authenticated_user(tokens.access_token)
+    if get_settings().access_list_enforced:
+        # Imported here because access_list imports this module.
+        from codeatlas.auth import access_list
+
+        if not access_list.is_allowed(db, github_user.id):
+            raise NotInvited(github_user.login)
+        # Keep the listed login current, so a rename stays visible to the developer.
+        db.execute(
+            update(PilotUser)
+            .where(
+                PilotUser.github_user_id == github_user.id,
+                PilotUser.github_login != github_user.login,
+            )
+            .values(github_login=github_user.login)
+        )
 
     now = datetime.now(UTC)
     user = db.scalar(select(User).where(User.github_user_id == github_user.id))

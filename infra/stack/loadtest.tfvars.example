@@ -1,0 +1,5 @@
+# Copy to loadtest.tfvars (ignored by Git) and fill in. State key: stack/loadtest.tfstate.
+# Write its parameters first with deploy/put-secrets.sh loadtest.
+environment = "loadtest"
+domain      = "example.dev"
+hostname    = "loadtest.example.dev"

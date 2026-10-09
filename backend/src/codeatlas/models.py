@@ -1,8 +1,9 @@
 """Database tables.
 
 See specs/001-repository-qa/data-model.md for the rules behind each field,
-specs/002-push-reindexing/data-model.md for the access-state, trigger, and webhook additions, and
-specs/003-pr-review/data-model.md for the pull request review additions.
+specs/002-push-reindexing/data-model.md for the access-state, trigger, and webhook additions,
+specs/003-pr-review/data-model.md for the pull request review additions, and
+specs/004-pilot-deployment/data-model.md for the pilot access list and pilot-wide usage.
 """
 
 import uuid
@@ -82,6 +83,9 @@ AUDIT_ACTIONS = (
     "automatic_updates_paused",
     "automatic_updates_resumed",
     "pull_request_review_submit",
+    "pilot_user_add",
+    "pilot_user_remove",
+    "pilot_user_delete_data",
 )
 AUDIT_OUTCOMES = ("success", "denied", "failure")
 
@@ -567,6 +571,32 @@ class IdempotencyRecord(Base):
     response_body: Mapped[dict[str, Any]]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     expires_at: Mapped[datetime]
+
+
+class PilotUser(Base):
+    """A GitHub account invited to the pilot (specs/004-pilot-deployment, research R13).
+
+    No foreign key to `users`: a pilot user may be added before they first sign in.
+    """
+
+    __tablename__ = "pilot_users"
+    __table_args__ = (CheckConstraint("note IS NULL OR char_length(note) <= 200", name="note"),)
+
+    github_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    # The login when added; updated at each sign-in, so a rename stays visible.
+    github_login: Mapped[str] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    added_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class PilotUsageCounter(Base):
+    """Questions and reviews accepted across every workspace on one UTC day (research R14)."""
+
+    __tablename__ = "pilot_usage_counters"
+
+    usage_date: Mapped[date] = mapped_column(primary_key=True)
+    questions_count: Mapped[int] = mapped_column(default=0, server_default="0")
+    reviews_count: Mapped[int] = mapped_column(default=0, server_default="0")
 
 
 class UsageCounter(Base):

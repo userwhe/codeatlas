@@ -1,0 +1,168 @@
+{
+  "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/2": {
+    "pr_title": "Optimize spans buffer insertion with eviction during insert",
+    "original_url": "https://github.com/getsentry/sentry/pull/92393",
+    "source_repo": "sentry-greptile",
+    "golden_comments": [
+      {
+        "comment": "OptimizedCursorPaginator's negative-offset branch in get_result() passes cursor.offset directly as start_offset to queryset slicing when enable_advanced_features is True and cursor.offset < 0.",
+        "severity": "Critical",
+        "category": "bug"
+      },
+      {
+        "comment": "In BasePaginator.get_result(), when cursor.is_prev is True, it sets start_offset = offset without clamping, allowing negative offset values to be passed to queryset slicing.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "OptimizedCursorPaginator.get_item_key uses floor/ceil on a datetime key (order_by='-datetime'), causing TypeError.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "Accessing .has_global_access on organization_context.member can raise an AttributeError when organization_context is None, particularly for non-superuser non-member users.",
+        "severity": "High",
+        "category": "bug"
+      }
+    ],
+    "golden_source_file": "sentry.json",
+    "az_comment": "reviewed commit is not in the repo",
+    "reviews": [
+      {
+        "tool": "cubic-v2",
+        "repo_name": "sentry__sentry-greptile__cubic-v2__PR2__20260313",
+        "pr_url": "https://github.com/code-review-benchmark/sentry__sentry-greptile__cubic-v2__PR2__20260313/pull/1",
+        "review_comments": [
+          {
+            "path": "src/sentry/api/endpoints/organization_auditlogs.py",
+            "line": 82,
+            "body": "<!-- metadata:{\"confidence\":9} -->\nP1: `OptimizedCursorPaginator` cannot paginate the `datetime` sort key here; optimized requests will raise when it tries to floor/ceil an `AuditLogEntry.datetime` value.\n\n<details>\n<summary>Prompt for AI agents</summary>\n\n```text\nCheck if this issue is valid \u2014 if so, understand the root cause and fix it. At src/sentry/api/endpoints/organization_auditlogs.py, line 79:\n\n<comment>`OptimizedCursorPaginator` cannot paginate the `datetime` sort key here; optimized requests will raise when it tries to floor/ceil an `AuditLogEntry.datetime` value.</comment>\n\n<file context>\n@@ -65,12 +65,29 @@ def get(\n+            response = self.paginate(\n+                request=request,\n+                queryset=queryset,\n+                paginator_cls=OptimizedCursorPaginator,\n+                order_by=\"-datetime\",\n+                on_results=lambda x: serialize(x, request.user),\n</file context>\n```\n\n</details>\n\n```suggestion\n                paginator_cls=DateTimePaginator,\n                order_by=\"-datetime\",\n                on_results=lambda x: serialize(x, request.user),\n```\n\n<a href=\"https://www.cubic.dev/action/fix/violation/075d1595-b190-463c-9fb2-743b2c2b3639\" target=\"_blank\" rel=\"noopener noreferrer\" data-no-image-dialog=\"true\">\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n    <source media=\"(prefers-color-scheme: light)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-light.svg\">\n    <img alt=\"Fix with Cubic\" src=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n  </picture>\n</a>",
+            "created_at": "2026-03-13T14:07:54Z"
+          }
+        ]
+      }
+    ]
+  },
+  "https://github.com/ai-code-review-evaluation/sentry-greptile/pull/5": {
+    "pr_title": "Replays Self-Serve Bulk Delete System",
+    "original_url": null,
+    "source_repo": "sentry-greptile",
+    "golden_comments": [
+      {
+        "comment": "The BrowserReportingCollectorEndpoint returns HttpResponse objects but the endpoint inherits from Endpoint which expects rest_framework.response.Response objects.",
+        "severity": "Medium",
+        "category": "api"
+      },
+      {
+        "comment": "In BaseDetectorTypeValidator.update(), the validator incorrectly updates instance.type using validated_data.get('detector_type') instead of validated_data.get('type').",
+        "severity": "Medium",
+        "category": "bug"
+      },
+      {
+        "comment": "Using zip(error_ids, events.values()) assumes the get_multi result preserves the input order; dict value order is not guaranteed to match error_ids, so event data can be paired with the wrong ID (missing nodes also shift alignment).",
+        "severity": "Low",
+        "category": "bug"
+      },
+      {
+        "comment": "Hardcoded empty data passed to TableWidgetVisualization causes it to always render an empty table instead of displaying actual results when the feature flag is enabled.",
+        "severity": "Medium",
+        "category": "bug"
+      },
+      {
+        "comment": "Validation logic incorrectly uses .get('timestamp'), which treats a timestamp of 0 as absent. It should directly check 'timestamp' in self.initial_data to ensure proper field presence detection, preventing both 'age=0' and 'timestamp' from passing mutual-exclusion validation.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "Analytics events are recorded before the feature flag check, resulting in analytics being logged for all requests, including those that return 404 due to the feature being disabled. This can lead to misleading analytics data.",
+        "severity": "Medium",
+        "category": "bug"
+      }
+    ],
+    "golden_source_file": "sentry.json",
+    "az_comment": "there is no such PR, it is a mix of many PRs",
+    "reviews": [
+      {
+        "tool": "cubic-v2",
+        "repo_name": "sentry__sentry-greptile__cubic-v2__PR5__20260313",
+        "pr_url": "https://github.com/code-review-benchmark/sentry__sentry-greptile__cubic-v2__PR5__20260313/pull/1",
+        "review_comments": [
+          {
+            "path": "static/app/views/dashboards/widgetCard/chart.tsx",
+            "line": 166,
+            "body": "<!-- metadata:{\"confidence\":10} -->\nP1: This feature-flagged path drops the real table results and always renders an empty table for flagged organizations.\n\n<details>\n<summary>Prompt for AI agents</summary>\n\n```text\nCheck if this issue is valid \u2014 if so, understand the root cause and fix it. At static/app/views/dashboards/widgetCard/chart.tsx, line 166:\n\n<comment>This feature-flagged path drops the real table results and always renders an empty table for flagged organizations.</comment>\n\n<file context>\n@@ -162,23 +161,36 @@ class WidgetCardChart extends Component<WidgetCardChartProps> {\n-          />\n+          {organization.features.includes('use-table-widget-visualization') ? (\n+            <TableWidgetVisualization\n+              columns={[]}\n+              tableData={{\n+                data: [],\n</file context>\n```\n\n</details>\n\n<a href=\"https://www.cubic.dev/action/fix/violation/034d5345-586e-4882-ae6b-77cd771137ce\" target=\"_blank\" rel=\"noopener noreferrer\" data-no-image-dialog=\"true\">\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n    <source media=\"(prefers-color-scheme: light)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-light.svg\">\n    <img alt=\"Fix with Cubic\" src=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n  </picture>\n</a>",
+            "created_at": "2026-03-13T14:06:45Z"
+          }
+        ]
+      }
+    ]
+  },
+  "https://github.com/getsentry/sentry/pull/80528": {
+    "pr_title": "ref(crons): Reorganize incident creation / issue occurrence logic",
+    "original_url": null,
+    "source_repo": "sentry",
+    "golden_comments": [
+      {
+        "comment": "The function modifies the config variable to include display values but then returns the original monitor.config instead of the modified version.",
+        "severity": "High",
+        "category": "bug"
+      },
+      {
+        "comment": "The code fetches MonitorCheckIn objects by ID when the required data already exists in previous_checkins. This creates an unnecessary database query.",
+        "severity": "Low",
+        "category": "perf"
+      }
+    ],
+    "golden_source_file": "sentry.json",
+    "az_comment": null,
+    "reviews": [
+      {
+        "tool": "cubic-v2",
+        "repo_name": "sentry__sentry__cubic-v2__PR80528__20260313",
+        "pr_url": "https://github.com/code-review-benchmark/sentry__sentry__cubic-v2__PR80528__20260313/pull/1",
+        "review_comments": [
+          {
+            "path": "src/sentry/monitors/logic/incidents.py",
+            "line": 48,
+            "body": "<!-- metadata:{\"confidence\":9} -->\nP1: Require at least `failure_issue_threshold` check-ins before opening the incident.\n\n<details>\n<summary>Prompt for AI agents</summary>\n\n```text\nCheck if this issue is valid \u2014 if so, understand the root cause and fix it. At src/sentry/monitors/logic/incidents.py, line 48:\n\n<comment>Require at least `failure_issue_threshold` check-ins before opening the incident.</comment>\n\n<file context>\n@@ -0,0 +1,104 @@\n+            )\n+\n+            # reverse the list after slicing in order to start with oldest check-in\n+            previous_checkins = list(reversed(previous_checkins[:failure_issue_threshold]))\n+\n+            # If we have any successful check-ins within the threshold of\n</file context>\n```\n\n</details>\n\n<a href=\"https://www.cubic.dev/action/fix/violation/dc22942c-06d9-4151-b200-726221b52316\" target=\"_blank\" rel=\"noopener noreferrer\" data-no-image-dialog=\"true\">\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n    <source media=\"(prefers-color-scheme: light)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-light.svg\">\n    <img alt=\"Fix with Cubic\" src=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n  </picture>\n</a>",
+            "created_at": "2026-03-13T14:07:39Z"
+          }
+        ]
+      }
+    ]
+  },
+  "https://github.com/calcom/cal.com/pull/22345": {
+    "pr_title": "feat: convert InsightsBookingService to use Prisma.sql raw queries",
+    "original_url": null,
+    "source_repo": "cal.com",
+    "golden_comments": [
+      {
+        "comment": "In getBaseConditions(), the else if (filterConditions) and final else branches are unreachable. This is because getAuthorizationConditions() always returns a non-null Prisma.Sql object, making authConditions always truthy, which means only the first two if/else if conditions are ever evaluated.",
+        "severity": "Low",
+        "category": "bug"
+      },
+      {
+        "comment": "Fetching userIdsFromOrg only when teamsFromOrg.length > 0 can exclude org-level members for orgs without child teams; consider deriving from teamIds (which includes orgId) or removing the guard so org-only orgs still include member user bookings.",
+        "severity": "Medium",
+        "category": "speculative"
+      }
+    ],
+    "golden_source_file": "cal_dot_com.json",
+    "az_comment": null,
+    "reviews": [
+      {
+        "tool": "cubic-v2",
+        "repo_name": "cal_dot_com__cal.com__cubic-v2__PR22345__20260313",
+        "pr_url": "https://github.com/code-review-benchmark/cal_dot_com__cal.com__cubic-v2__PR22345__20260313/pull/1",
+        "review_comments": [
+          {
+            "path": "packages/lib/server/service/__tests__/insightsBooking.integration-test.ts",
+            "line": 295,
+            "body": "<!-- metadata:{\"confidence\":9} -->\nP2: This org-scope assertion is order-dependent even though the service fetches team/member IDs without `orderBy`, so the test can fail nondeterministically on valid SQL.\n\n<details>\n<summary>Prompt for AI agents</summary>\n\n```text\nCheck if this issue is valid \u2014 if so, understand the root cause and fix it. At packages/lib/server/service/__tests__/insightsBooking.integration-test.ts, line 295:\n\n<comment>This org-scope assertion is order-dependent even though the service fetches team/member IDs without `orderBy`, so the test can fail nondeterministically on valid SQL.</comment>\n\n<file context>\n@@ -296,24 +292,11 @@ describe(\"InsightsBookingService Integration Tests\", () => {\n-          },\n-        ],\n-      });\n+      expect(conditions).toEqual(\n+        Prisma.sql`((\"teamId\" = ${testData.team.id}) AND (\"isTeamBooking\" = true)) OR ((\"userId\" = ANY(${[\n+          testData.user.id,\n</file context>\n```\n\n</details>\n\n<a href=\"https://www.cubic.dev/action/fix/violation/43a4c44a-9469-4419-814a-2b8e5c85fc71\" target=\"_blank\" rel=\"noopener noreferrer\" data-no-image-dialog=\"true\">\n  <picture>\n    <source media=\"(prefers-color-scheme: dark)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n    <source media=\"(prefers-color-scheme: light)\" srcset=\"https://cubic.dev/buttons/fix-with-cubic-light.svg\">\n    <img alt=\"Fix with Cubic\" src=\"https://cubic.dev/buttons/fix-with-cubic-dark.svg\">\n  </picture>\n</a>",
+            "created_at": "2026-03-13T14:07:17Z"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+# Copy to backend.hcl (ignored by Git) and fill in. Each environment has its own state key, given
+# at init; -reconfigure switches between them:
+#   terraform -chdir=infra/stack init -reconfigure -backend-config=backend.hcl \
+#     -backend-config=key=stack/pilot.tfstate
+# Use stack/drill.tfstate or stack/loadtest.tfstate with drill.tfvars or loadtest.tfvars.
+bucket  = "codeatlas-tfstate-<account ID>"
+region  = "us-east-1"
+encrypt = true

@@ -142,13 +142,18 @@ class GitHubClient:
         with self._client() as http:
             response = self._api(http, "GET", "/user", user_token)
         _check(response, unauthorized=UserAuthorizationInvalid)
-        data = _json(response)
-        return GitHubUser(
-            id=int(data["id"]),
-            login=str(data["login"]),
-            name=_optional_str(data.get("name")),
-            avatar_url=_optional_str(data.get("avatar_url")),
-        )
+        return _user(_json(response))
+
+    def get_user_by_login(self, login: str) -> GitHubUser:
+        # Public data, so no credential is sent; GitHub allows 60 such requests an hour per
+        # address, plenty for the operator commands.
+        with self._client() as http:
+            request = http.build_request(
+                "GET", f"{GITHUB_API}/users/{quote(login, safe='')}", headers=API_HEADERS
+            )
+            response = _send(http, request)
+        _check(response, unauthorized=GitHubAccessDenied)
+        return _user(_json(response))
 
     # Repositories
 
@@ -577,6 +582,15 @@ def _repo_path(full_name: str) -> str:
     if not owner or not name or "/" in name:
         raise ValueError(f"invalid repository full name: {full_name!r}")
     return f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+
+
+def _user(data: Mapping[str, Any]) -> GitHubUser:
+    return GitHubUser(
+        id=int(data["id"]),
+        login=str(data["login"]),
+        name=_optional_str(data.get("name")),
+        avatar_url=_optional_str(data.get("avatar_url")),
+    )
 
 
 def _repository(data: Mapping[str, Any], installation_id: int | None = None) -> GitHubRepository:

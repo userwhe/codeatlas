@@ -10,6 +10,7 @@ from codeatlas.auth.crypto import DecryptionError
 from codeatlas.auth.github_login import (
     STATE_COOKIE,
     STATE_TTL,
+    NotInvited,
     SignInError,
     complete_login,
     start_login,
@@ -60,6 +61,21 @@ def callback(
             request_id=request_id,
         )
         db.commit()
+    except NotInvited as exc:
+        # Nothing was written for this user; only the denial is recorded (FR-003).
+        db.rollback()
+        logger.info("sign-in refused: not on the access list")
+        record(
+            db,
+            action="sign_in",
+            outcome="denied",
+            request_id=request_id,
+            detail={"reason": "not_invited", "github_login": exc.github_login},
+        )
+        db.commit()
+        refused = RedirectResponse("/?error=not_invited", status_code=302)
+        refused.delete_cookie(STATE_COOKIE, path=STATE_COOKIE_PATH)
+        return refused
     except (SignInError, DecryptionError, GitHubError) as exc:
         db.rollback()
         logger.warning("sign-in failed: %s", type(exc).__name__)

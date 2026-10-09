@@ -1,0 +1,359 @@
+# Releases a commit to the pilot after the developer approves it (specs/004-pilot-deployment
+# research R7; contracts/operations.md, "Release workflow"; ADR 0011).
+#
+# `build` and `summary` run without cloud credentials. Only `release`, in the `pilot` environment,
+# waits for the developer's approval, and only then assumes the release role, pushes the images,
+# uploads the bundle, and runs release.sh on the pilot through Run Command.
+name: Release
+
+on:
+  # The branch filter only keeps runs of other branches out: a fork's pull request can also name its
+  # branch main, so every job checks the triggering run as well.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full SHA of a commit on main (default the head of the branch dispatched from)
+        required: false
+        default: ""
+      expect_version:
+        description: Version the check expects instead of the commit; "wrong" rehearses a rollback
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  COMMIT: ${{ github.event.workflow_run.head_sha || inputs.commit || github.sha }}
+  EXPECT_VERSION: ${{ inputs.expect_version }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # A dispatch, or a successful CI run of a push to this repository's main.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    name: build (${{ matrix.image }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - image: api
+            context: backend
+            target: ""
+            release_arg: CODEATLAS_RELEASE
+          - image: web
+            context: frontend
+            target: production
+            release_arg: NEXT_PUBLIC_RELEASE
+    env:
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+      NAME: ${{ matrix.image }}
+      CONTEXT: ${{ matrix.context }}
+      TARGET: ${{ matrix.target }}
+      RELEASE_ARG: ${{ matrix.release_arg }}
+    steps:
+      - name: Check the inputs and settings
+        run: |
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be a full 40-character SHA"; exit 1; }
+          [[ -n "$ECR_REGISTRY" ]] || { echo "::error::the repository variable ECR_REGISTRY is not set"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT }}
+          persist-credentials: false
+      - name: Build the image
+        run: |
+          image="$ECR_REGISTRY/codeatlas/$NAME:$COMMIT"
+          options=(--build-arg "$RELEASE_ARG=$COMMIT" --tag "$image")
+          [[ -z "$TARGET" ]] || options+=(--target "$TARGET")
+          docker build "${options[@]}" "$CONTEXT"
+          docker save "$image" | gzip >"$RUNNER_TEMP/$NAME.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.image }}
+          path: ${{ runner.temp }}/${{ matrix.image }}.tar.gz
+          retention-days: 3
+          # The archive is already compressed.
+          compression-level: 0
+          if-no-files-found: error
+
+  summary:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PILOT_HOSTNAME: ${{ vars.PILOT_HOSTNAME }}
+    steps:
+      - name: Check the inputs
+        run: |
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be a full 40-character SHA"; exit 1; }
+          [[ "$EXPECT_VERSION" =~ ^[A-Za-z0-9._-]{0,64}$ ]] ||
+            { echo "::error::expect_version may hold only letters, digits, '.', '_', and '-'"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check a dispatched commit
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          git merge-base --is-ancestor "$COMMIT" origin/main ||
+            { echo "::error::$COMMIT is not on main"; exit 1; }
+          successful="$(gh run list --workflow CI --commit "$COMMIT" --status success --json databaseId --jq length)"
+          [[ "$successful" -gt 0 ]] || { echo "::error::CI has not succeeded for $COMMIT"; exit 1; }
+      - name: Write the release summary
+        run: |
+          # The commit the pilot runs now, if it answers with a commit of this repository.
+          running=""
+          if body="$(curl -fsS --max-time 10 "https://$PILOT_HOSTNAME/version" 2>/dev/null)"; then
+            running="$(jq -r '.commit // empty' <<<"$body" 2>/dev/null || true)"
+          fi
+          if [[ ! "$running" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "$running^{commit}" 2>/dev/null; then
+            running=""
+          fi
+
+          {
+            echo "## Release candidate \`${COMMIT:0:7}\`"
+            echo
+            if [[ -z "$running" ]]; then
+              echo "The pilot reports no version of this repository (a first release, or the pilot is down), so"
+              echo "the changes since the running version are unknown. Every migration in the commit runs."
+              echo
+            elif ! git merge-base --is-ancestor "$running" "$COMMIT"; then
+              echo "> [!WARNING]"
+              echo "> The pilot runs a newer commit. The database keeps that commit's migrations, so this"
+              echo "> commit must work with them."
+              echo
+            else
+              # Schema changes first: a rollback restores the images, not the database.
+              migrations="$(git diff --name-only --diff-filter=A "$running" "$COMMIT" -- backend/alembic/versions)"
+              if [[ -n "$migrations" ]]; then
+                echo "### Schema changes"
+                echo
+                echo "> [!IMPORTANT]"
+                echo "> Expand, then contract: each migration must keep the running version working (add, never"
+                echo "> drop or rename in the same release), because a rollback restores the images, not the"
+                echo "> database."
+                echo
+                while IFS= read -r file; do
+                  echo "- \`$file\`"
+                done <<<"$migrations"
+                echo
+              fi
+            fi
+            echo "- Commit: [\`$COMMIT\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$COMMIT)"
+            if [[ -n "$running" ]]; then
+              echo "- Running on the pilot: \`$running\`"
+            else
+              echo "- Running on the pilot: unknown"
+            fi
+            if [[ -n "$EXPECT_VERSION" ]]; then
+              echo "- The check expects the version \`$EXPECT_VERSION\` instead of the commit."
+            fi
+            if [[ -n "$running" ]]; then
+              echo
+              echo "### Commits since the running version"
+              echo
+              echo '```text'
+              git log --oneline "$running..$COMMIT"
+              echo '```'
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    needs: [build, summary]
+    # Pinned: loading and pushing the Arm image archives is proven on this image's Docker.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Requires the developer's approval and allows only main.
+    environment:
+      name: pilot
+      url: https://${{ vars.PILOT_HOSTNAME }}
+    # One release at a time. Only this job joins the group, so runs whose jobs are skipped never
+    # replace a release that waits for approval.
+    concurrency:
+      group: release-pilot
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REGISTRY: ${{ vars.ECR_REGISTRY }}
+      RELEASE_BUCKET: ${{ vars.RELEASE_BUCKET }}
+      PILOT_HOSTNAME: ${{ vars.PILOT_HOSTNAME }}
+      ALERT_TOPIC_ARN: ${{ vars.ALERT_TOPIC_ARN }}
+    steps:
+      - name: Check the inputs and settings
+        env:
+          RELEASE_ROLE_ARN: ${{ vars.RELEASE_ROLE_ARN }}
+        run: |
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::commit must be a full 40-character SHA"; exit 1; }
+          [[ "$EXPECT_VERSION" =~ ^[A-Za-z0-9._-]{0,64}$ ]] ||
+            { echo "::error::expect_version may hold only letters, digits, '.', '_', and '-'"; exit 1; }
+          for name in AWS_REGION RELEASE_ROLE_ARN RELEASE_BUCKET PILOT_HOSTNAME ALERT_TOPIC_ARN ECR_REGISTRY; do
+            [[ -n "${!name}" ]] || { echo "::error::the repository variable $name is not set"; exit 1; }
+          done
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT }}
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.RELEASE_ROLE_ARN }}
+          role-session-name: codeatlas-release-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: ${{ runner.temp }}/images
+          merge-multiple: true
+      - name: Push the images
+        run: |
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+          for name in api web; do
+            # Tags are immutable: a commit released before keeps its images.
+            if output="$(aws ecr describe-images --repository-name "codeatlas/$name" --image-ids "imageTag=$COMMIT" 2>&1)"; then
+              echo "codeatlas/$name:$COMMIT is already in the registry"
+              continue
+            elif [[ "$output" != *ImageNotFoundException* ]]; then
+              echo "$output" >&2
+              exit 1
+            fi
+            gunzip -c "$RUNNER_TEMP/images/$name.tar.gz" | docker load
+            docker push "$ECR_REGISTRY/codeatlas/$name:$COMMIT"
+          done
+      - name: Upload the bundle
+        run: |
+          git archive --format=tar.gz -o "$RUNNER_TEMP/deploy.tar.gz" "$COMMIT:deploy"
+          aws s3 cp "$RUNNER_TEMP/deploy.tar.gz" "s3://$RELEASE_BUCKET/releases/$COMMIT/deploy.tar.gz"
+      - name: Release on the pilot
+        run: |
+          # Probe the site once a second while the release runs; a probe fails when /readyz or / does.
+          probes="$RUNNER_TEMP/probes.txt"
+          while :; do
+            if curl -fsS -o /dev/null --max-time 2 "https://$PILOT_HOSTNAME/readyz" 2>/dev/null &&
+              curl -fsS -o /dev/null --max-time 2 "https://$PILOT_HOSTNAME/" 2>/dev/null; then
+              echo "$(date +%s) up"
+            else
+              echo "$(date +%s) down"
+            fi
+            sleep 1
+          done >"$probes" &
+          prober=$!
+          trap 'kill "$prober" 2>/dev/null || true' EXIT
+
+          # Extract the bundle on the pilot and run its release.sh; the output goes to the log group.
+          parameters="$(jq -n --arg sha "$COMMIT" --arg expect "$EXPECT_VERSION" '{
+            executionTimeout: ["1200"],
+            commands: [
+              "set -eu",
+              ". /opt/codeatlas/environment",
+              "bundle=/opt/codeatlas/releases/\($sha)",
+              "mkdir -p \"$bundle\"",
+              "aws s3 cp --region \"$AWS_REGION\" \"s3://$BUCKET/releases/\($sha)/deploy.tar.gz\" - | tar -xz -C \"$bundle\"",
+              "\"$bundle/release.sh\" \([$sha] + (if $expect == "" then [] else ["--expect-version", $expect] end) | @sh)"
+            ]}')"
+          command_id="$(aws ssm send-command \
+            --document-name AWS-RunShellScript \
+            --targets '[{"Key": "tag:codeatlas:environment", "Values": ["pilot"]}]' \
+            --timeout-seconds 300 \
+            --comment "release $COMMIT" \
+            --cloud-watch-output-config CloudWatchOutputEnabled=true,CloudWatchLogGroupName=/codeatlas/pilot/releases \
+            --parameters "$parameters" \
+            --query Command.CommandId --output text)"
+          echo "Run Command $command_id"
+
+          # Wait for the command to reach the pilot, then for it to end (at most 20 minutes).
+          deadline=$((SECONDS + 1200))
+          instance=""
+          for _ in $(seq 24); do
+            sleep 5
+            instance="$(aws ssm list-command-invocations --command-id "$command_id" \
+              --query 'CommandInvocations[0].InstanceId' --output text 2>/dev/null || true)"
+            [[ -z "$instance" || "$instance" == None ]] || break
+            instance=""
+          done
+          status="NotDelivered"
+          code="none"
+          if [[ -n "$instance" ]]; then
+            status="Pending"
+            while :; do
+              sleep 10
+              if result="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$instance" \
+                --query '[Status, ResponseCode]' --output text 2>/dev/null)"; then
+                read -r status code <<<"$result"
+              fi
+              case "$status" in
+              Pending | InProgress | Delayed | Cancelling) ;;
+              *) break ;;
+              esac
+              if ((SECONDS >= deadline)); then
+                status="StillRunning"
+                break
+              fi
+            done
+          fi
+          kill "$prober" 2>/dev/null || true
+
+          # The longest run of failed probes, from the first failure to the next success.
+          outage="$(awk '
+            $2 == "down" { if (!start) start = $1; last = $1 }
+            $2 == "up" { if (start) { if ($1 - start > longest) longest = $1 - start; start = 0 } }
+            END { if (start && last - start + 1 > longest) longest = last - start + 1; print longest + 0 }
+          ' "$probes")"
+
+          case "$status:$code" in
+          Success:0) outcome="released" ;;
+          *:2) outcome="failed before the switch; the previous release still serves (exit status 2)" ;;
+          *:3) outcome="the check failed; the previous release serves again (exit status 3)" ;;
+          *:4) outcome="the check failed, and the rollback failed or there was no previous release (exit status 4)" ;;
+          NotDelivered:*) outcome="no instance tagged codeatlas:environment=pilot received the command" ;;
+          StillRunning:*) outcome="the command did not end within 20 minutes" ;;
+          *) outcome="Run Command ended with $status (exit status $code)" ;;
+          esac
+          echo "RELEASE_OUTCOME=$outcome" >>"$GITHUB_ENV"
+          {
+            echo "## Release of \`${COMMIT:0:7}\` to the pilot"
+            echo
+            echo "- Outcome: $outcome"
+            echo "- Longest outage of \`/readyz\` or \`/\`: $outage seconds (probed once a second)"
+            echo "- Host output: log group \`/codeatlas/pilot/releases\`, command \`$command_id\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "$outcome; longest outage $outage seconds"
+          [[ "$status:$code" == Success:0 ]]
+      - name: Alert on failure
+        if: failure()
+        run: |
+          aws sns publish --topic-arn "$ALERT_TOPIC_ARN" --subject "CodeAtlas release failed" \
+            --message "The release of $COMMIT to the pilot failed: ${RELEASE_OUTCOME:-a step before the host release failed}.
+          Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null

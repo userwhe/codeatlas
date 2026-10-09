@@ -1,0 +1,136 @@
+# The pilot's services on one host (specs/004-pilot-deployment research R1, R2, R7, and R9).
+#
+# Run through `codeatlas-compose`, which adds `--project-directory /opt/codeatlas`, so relative paths
+# resolve there: `./current/` is the running release bundle and `./runtime/` the configuration
+# rendered by render-config.sh. Interpolation variables come from /opt/codeatlas/.env, which
+# release.sh writes: ENVIRONMENT, AWS_REGION, REGISTRY, CODEATLAS_HOSTNAME, and IMAGE_TAG.
+name: codeatlas
+
+# Docker ships each service's logs to CloudWatch with the instance role; containers hold no AWS
+# credentials. Non-blocking mode keeps an unreachable CloudWatch from stalling the services.
+x-awslogs: &awslogs
+  awslogs-region: ${AWS_REGION}
+  mode: non-blocking
+  max-buffer-size: 4m
+
+# The API image runs the API, the worker, and the migrations, with the same configuration.
+x-app: &app
+  image: ${REGISTRY}/codeatlas/api:${IMAGE_TAG}
+  env_file: ./runtime/app.env
+  volumes:
+    - ./runtime/github-app.pem:/run/secrets/github-app.pem:ro
+
+services:
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CODEATLAS_HOSTNAME: ${CODEATLAS_HOSTNAME}
+    volumes:
+      # A bind-mounted file stays pinned in a running container, so release.sh recreates caddy
+      # when the bundle's Caddyfile changes.
+      - ./current/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live on the data volume and survive a host replacement.
+      - /var/lib/codeatlas/caddy:/data
+      - caddy-config:/config
+    logging:
+      driver: awslogs
+      options:
+        <<: *awslogs
+        awslogs-group: /codeatlas/${ENVIRONMENT}/caddy
+
+  web:
+    image: ${REGISTRY}/codeatlas/web:${IMAGE_TAG}
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        <<: *awslogs
+        awslogs-group: /codeatlas/${ENVIRONMENT}/web
+
+  api:
+    <<: *app
+    command:
+      - uvicorn
+      - codeatlas.api.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      # Caddy sets X-Forwarded-For; only containers on this network can reach the API.
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    restart: unless-stopped
+    healthcheck:
+      # The image has no curl.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: awslogs
+      options:
+        <<: *awslogs
+        awslogs-group: /codeatlas/${ENVIRONMENT}/api
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "codeatlas.jobs.worker"]
+    restart: unless-stopped
+    # The worker stops after its current job on SIGTERM; a job still running after this is resumed
+    # by the next worker once its lease lapses (research R7).
+    stop_grace_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: awslogs
+      options:
+        <<: *awslogs
+        awslogs-group: /codeatlas/${ENVIRONMENT}/worker
+
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    env_file: ./runtime/db.env
+    command: ["postgres", "-c", "shared_buffers=512MB", "-c", "max_connections=50"]
+    volumes:
+      - /var/lib/codeatlas/postgres:/var/lib/postgresql/data
+      # Staging for backups and restores.
+      - /var/lib/codeatlas/backup:/backup
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codeatlas -d codeatlas"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging:
+      driver: awslogs
+      options:
+        <<: *awslogs
+        awslogs-group: /codeatlas/${ENVIRONMENT}/db
+
+  # One-shot: release.sh runs it with `run --rm migrate` before switching to a new release.
+  # alembic/env.py loads the full settings, so it needs the same configuration and key as the API.
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: [tools]
+    restart: "no"
+
+volumes:
+  caddy-config:

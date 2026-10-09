@@ -2,6 +2,7 @@
 
 import logging
 import math
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -190,6 +191,53 @@ def test_texts_and_key_are_not_logged(
 
     assert caplog.records, "retries should be logged"
     for text in (caplog.text, str(raised.value)):
+        assert "private design notes" not in text
+        assert API_KEY not in text
+
+
+ADAPTER_LOGGER = "codeatlas.providers.embeddings"
+TRANSIENT = voyage_errors.ServiceUnavailableError("overloaded", http_status=503)
+# The stub client, whether the call raises, and the warnings logged.
+PROVIDER_ERRORS: dict[str, tuple[Callable[[], StubClient], bool, int]] = {
+    "retried": (
+        lambda: StubClient(voyage_errors.RateLimitError("rate limited", http_status=429)),
+        False,
+        1,
+    ),
+    "rejected": (
+        lambda: StubClient(voyage_errors.AuthenticationError("invalid key", http_status=401)),
+        True,
+        1,
+    ),
+    "unexpected response": (lambda: StubClient(dimensions=512), True, 1),
+    "retries exhausted": (lambda: StubClient(TRANSIENT, TRANSIENT, TRANSIENT), True, 3),
+}
+
+
+@pytest.mark.parametrize(
+    ("make_client", "raises", "warnings"), PROVIDER_ERRORS.values(), ids=PROVIDER_ERRORS.keys()
+)
+def test_provider_errors_are_logged_with_the_provider_field(
+    make_client: Callable[[], StubClient],
+    raises: bool,
+    warnings: int,
+    sleeps: list[float],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    embedder = voyage(make_client(), sleeps)
+
+    if raises:
+        with pytest.raises(ProviderUnavailable):
+            embedder.embed_documents(["private design notes"])
+    else:
+        embedder.embed_documents(["private design notes"])
+
+    records = [record for record in caplog.records if record.name == ADAPTER_LOGGER]
+    assert [(r.levelname, getattr(r, "fields", None)) for r in records] == [
+        ("WARNING", {"provider": "voyage"})
+    ] * warnings
+    for text in (caplog.text, *(record.getMessage() for record in records)):
         assert "private design notes" not in text
         assert API_KEY not in text
 

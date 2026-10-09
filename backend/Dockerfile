@@ -17,7 +17,18 @@ COPY alembic ./alembic
 COPY src ./src
 RUN uv sync --frozen --no-dev
 
-RUN useradd --create-home app
+# Fixture repositories and pull requests for fake mode (the load test); fake mode stays refused in
+# production. The rest of tests/ is not copied.
+COPY tests/fixtures/repos ./tests/fixtures/repos
+COPY tests/fixtures/pull-requests ./tests/fixtures/pull-requests
+
+# A fixed UID: render-config gives the containers' secret files to UID 1000.
+RUN useradd --uid 1000 --create-home app
+
+# The commit SHA, reported by /version. Set after the dependency layers to keep them cached.
+ARG CODEATLAS_RELEASE=development
+ENV CODEATLAS_RELEASE=$CODEATLAS_RELEASE
+
 USER app
 
 EXPOSE 8000

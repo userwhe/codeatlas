@@ -44,7 +44,8 @@ Option 1, with the daily check from option 2 as a backstop:
   - One endpoint for every installation.
 - **Accepted**:
   - A public, unauthenticated endpoint. Each forged request costs one signature check and one
-    audit row, until edge rate limiting arrives with deployment.
+    audit row. Since `specs/004-pilot-deployment`, the API limits each client address to 60
+    requests a minute on this endpoint, refused before the signature check.
   - Local development needs a forwarding service, such as Smee, to receive deliveries.
   - Restoration events are ignored; the next check restores access.
 - **Revisit when**: a feature needs events beyond these (for example, pull requests or CI), or
