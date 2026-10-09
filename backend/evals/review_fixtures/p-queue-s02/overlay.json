@@ -1,0 +1,15 @@
+{
+  "edits": [
+    {
+      "path": "source/index.ts",
+      "find": [
+        "\t\t// Instantly resolve if none pending and if nothing else is queued",
+        "\t\tif (this.#pending === 0 && this.#queue.size === 0) {"
+      ],
+      "replace": [
+        "\t\t// Nothing to wait for when no task is running or nothing is queued",
+        "\t\tif (this.#pending === 0 || this.#queue.size === 0) {"
+      ]
+    }
+  ]
+}

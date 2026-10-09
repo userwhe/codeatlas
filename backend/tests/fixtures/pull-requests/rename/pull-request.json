@@ -1,0 +1,14 @@
+{
+  "number": 5,
+  "title": "Rename text helpers",
+  "body": "Moves `app/text.py` to `app/strings.py`.",
+  "author": "octocat",
+  "draft": false,
+  "state": "open",
+  "base_ref": "main",
+  "head_ref": "rename-text-helpers",
+  "head_owner": null,
+  "remove": [],
+  "rename": {"app/text.py": "app/strings.py"},
+  "updated_at": "2026-10-05T12:00:00Z"
+}

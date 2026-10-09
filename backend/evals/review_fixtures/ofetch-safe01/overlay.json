@@ -1,0 +1,39 @@
+{
+  "edits": [
+    {
+      "path": "src/utils.ts",
+      "find": [
+        "  \"application/html\",",
+        "]);"
+      ],
+      "replace": [
+        "  \"application/html\",",
+        "  \"application/javascript\",",
+        "]);"
+      ]
+    }
+  ],
+  "add": {
+    "test/utils.test.ts": [
+      "import { describe, expect, it } from \"vitest\";",
+      "import { detectResponseType } from \"../src/utils.ts\";",
+      "",
+      "describe(\"detectResponseType\", () => {",
+      "  it(\"parses JSON content types as json\", () => {",
+      "    expect(detectResponseType(\"application/json\")).toBe(\"json\");",
+      "    expect(",
+      "      detectResponseType(\"application/problem+json; charset=utf-8\")",
+      "    ).toBe(\"json\");",
+      "  });",
+      "",
+      "  it(\"reads JavaScript as text\", () => {",
+      "    expect(detectResponseType(\"application/javascript\")).toBe(\"text\");",
+      "  });",
+      "",
+      "  it(\"keeps binary types as blobs\", () => {",
+      "    expect(detectResponseType(\"application/octet-stream\")).toBe(\"blob\");",
+      "  });",
+      "});"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "edits": [
+    {
+      "path": "src/utils.ts",
+      "find": [
+        "  return {",
+        "    ...defaults,",
+        "    ...input,",
+        "    query,"
+      ],
+      "replace": [
+        "  return {",
+        "    // Send cookies with every request so that session-based APIs work",
+        "    // without extra configuration.",
+        "    credentials: \"include\",",
+        "    ...defaults,",
+        "    ...input,",
+        "    query,"
+      ]
+    }
+  ]
+}

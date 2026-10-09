@@ -1,0 +1,14 @@
+{
+  "number": 8,
+  "title": "Document the test command",
+  "body": "Work in progress.",
+  "author": "octocat",
+  "draft": true,
+  "state": "open",
+  "base_ref": "main",
+  "head_ref": "document-tests",
+  "head_owner": null,
+  "remove": [],
+  "rename": {},
+  "updated_at": "2026-10-05T09:00:00Z"
+}

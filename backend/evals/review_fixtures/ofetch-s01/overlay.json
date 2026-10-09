@@ -1,0 +1,12 @@
+{
+  "edits": [
+    {
+      "path": "src/fetch.ts",
+      "find": "        retries = isPayloadMethod(context.options.method) ? 0 : 1;",
+      "replace": [
+        "        // Transient failures are retried once, whatever the method.",
+        "        retries = 1;"
+      ]
+    }
+  ]
+}

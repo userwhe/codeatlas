@@ -1,8 +1,8 @@
 # CodeAtlas
 
-CodeAtlas answers questions about a GitHub repository and cites its evidence. Every claim in an
-answer points to exact file and line ranges at the indexed commit, and a question the code does
-not answer gets an "insufficient evidence" result instead of a guess.
+CodeAtlas answers questions about a GitHub repository and reviews its pull requests, citing its
+evidence. Every claim in an answer points to exact file and line ranges at the indexed commit, and
+a question the code does not answer gets an "insufficient evidence" result instead of a guess.
 
 ## What it does
 
@@ -15,11 +15,16 @@ not answer gets an "insufficient evidence" result instead of a guess.
   citation opens the cited lines in the file browser.
 - **Browse and search** the indexed commit: a file tree, file views, and text, path, symbol, and
   documentation search.
-- **Stay contained**: each user has a private workspace, questions have a daily allowance, and
-  disconnecting a repository hides its data at once and purges it within 24 hours. When the owner
-  loses access on GitHub, CodeAtlas stops serving the repository at once, and purges it unless
-  access returns within 7 days. CodeAtlas never writes to GitHub and never executes repository
-  code.
+- **Review pull requests** on request: a summary of the change, risks ranked by severity with an
+  overall risk level, a checklist for the human reviewer, and test suggestions. Every item cites
+  the changed lines or related code on the correct side of the change, the review is pinned to
+  the base, head, and merge-base commits, and it shows when new commits make it outdated. A review
+  can be copied as Markdown; CodeAtlas never posts it to GitHub.
+- **Stay contained**: each user has a private workspace, questions and reviews have daily
+  allowances, and disconnecting a repository hides its data at once and purges it within 24 hours.
+  When the owner loses access on GitHub, CodeAtlas stops serving the repository at once, and purges
+  it unless access returns within 7 days. CodeAtlas never writes to GitHub and never executes
+  repository code.
 
 ## Architecture
 
@@ -29,14 +34,15 @@ not answer gets an "insufficient evidence" result instead of a guess.
   scoping, job creation, browsing, and search.
 - **Worker** (`backend/src/codeatlas/jobs`): a Python process sharing the API's package. It
   downloads commit tarballs, extracts Python and TypeScript declarations with tree-sitter, builds
-  the search indexes, and generates answers.
+  the search indexes, generates answers, and reviews pull requests by diffing the merge-base and
+  head archives.
 - **PostgreSQL** with pgvector and pg_trgm is the only data store. It holds records, file
   contents, trigram and full-text search, documentation embeddings, and the job queue (claimed
   with `FOR UPDATE SKIP LOCKED`, with leases and fencing tokens).
-- **GitHub App**: one App provides sign-in, read-only repository access, and webhook
-  notifications of pushes and installation changes, verified by their HMAC signature.
-- **Model providers**: Gemini 3.8 Flash generates answers in the worker from a bounded set of
-  evidence as structured JSON, and the server validates every citation. Voyage AI embeds
+- **GitHub App**: one App provides sign-in, read-only repository and pull request access, and
+  webhook notifications of pushes and installation changes, verified by their HMAC signature.
+- **Model providers**: Gemini 3.8 Flash generates answers and reviews in the worker from a bounded
+  set of evidence as structured JSON, and the server validates every citation. Voyage AI embeds
   documentation during indexing and search queries in the API.
 
 ## Run it
@@ -93,11 +99,19 @@ docstring for the required settings).
   [webhook contract](specs/002-push-reindexing/contracts/github-webhooks.md),
   [HTTP API changes](specs/002-push-reindexing/contracts/http-api.md), and
   [quickstart](specs/002-push-reindexing/quickstart.md)
+- Pull request review: [specification](specs/003-pr-review/spec.md), with the
+  [plan](specs/003-pr-review/plan.md),
+  [research notes](specs/003-pr-review/research.md),
+  [data model](specs/003-pr-review/data-model.md),
+  [HTTP API changes](specs/003-pr-review/contracts/http-api.md), and
+  [quickstart](specs/003-pr-review/quickstart.md)
 - [Architecture decision records](docs/decisions/):
   [application stack](docs/decisions/0001-application-stack.md),
   [PostgreSQL as the only data store](docs/decisions/0002-postgresql-as-the-only-data-store.md),
   [PostgreSQL job queue](docs/decisions/0003-postgresql-job-queue.md),
   [model providers](docs/decisions/0004-model-providers.md),
   [GitHub App](docs/decisions/0005-github-app-for-identity-and-access.md),
-  [Gemini for answers](docs/decisions/0006-gemini-for-answer-generation.md), and
-  [GitHub webhooks](docs/decisions/0007-github-webhooks-for-change-notifications.md)
+  [Gemini for answers](docs/decisions/0006-gemini-for-answer-generation.md),
+  [GitHub webhooks](docs/decisions/0007-github-webhooks-for-change-notifications.md),
+  [read-only pull request access](docs/decisions/0008-pull-request-read-access.md), and
+  [reviews from commit archives](docs/decisions/0009-pull-request-reviews-from-commit-archives.md)

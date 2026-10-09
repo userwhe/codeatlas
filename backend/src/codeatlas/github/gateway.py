@@ -56,6 +56,21 @@ class GitHubUnavailable(GitHubError):
     """GitHub returned 5xx, timed out, or could not be reached."""
 
 
+class CommitUnavailable(GitHubError):
+    """GitHub no longer serves a pinned commit, for example after a force push and garbage
+    collection (specs/003-pr-review, research R2). Raised after the access check passed, so it
+    says nothing about access.
+    """
+
+
+class NoCommonHistory(GitHubError):
+    """The two commits of a comparison share no ancestor (specs/003-pr-review, research R2)."""
+
+
+PULL_REQUEST_PAGE_SIZE = 30
+"""Pull requests per page of `list_pull_requests`."""
+
+
 @dataclass(frozen=True)
 class UserTokens:
     access_token: str
@@ -79,6 +94,66 @@ class GitHubRepository:
     default_branch: str
     private: bool
     installation_id: int | None = None
+
+
+PullRequestState = Literal["open", "closed", "merged"]
+
+
+@dataclass(frozen=True)
+class PullRequest:
+    """A pull request as GitHub reports it. `title`, `body`, and `author` are untrusted text.
+
+    `body` is empty when GitHub has none. `head_repository` is None when the head repository was
+    deleted, and `is_fork` is true when it differs from the base repository. `additions`,
+    `deletions`, and `changed_files` come only from `get_pull_request`; listings leave them None.
+    """
+
+    number: int
+    title: str
+    body: str
+    author: str
+    state: PullRequestState
+    draft: bool
+    base_ref: str
+    base_sha: str
+    head_ref: str
+    head_sha: str
+    head_repository: str | None
+    is_fork: bool
+    html_url: str
+    updated_at: datetime
+    additions: int | None = None
+    deletions: int | None = None
+    changed_files: int | None = None
+
+
+@dataclass(frozen=True)
+class PullRequestPage:
+    items: list[PullRequest]
+    next_page: int | None
+    """The next page number for `list_pull_requests`, or None on the last page."""
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """The comparison of two pinned commits (specs/003-pr-review, research R2 and R4)."""
+
+    merge_base_sha: str
+    renamed: dict[str, str]
+    """New path to previous path, for files GitHub reports as renamed (rename hints)."""
+    listed_files: int
+    """How many files GitHub listed. It lists at most 300, so hints may be incomplete beyond."""
+
+
+@dataclass(frozen=True)
+class InstallationPermissions:
+    """The App installation covering a repository, with the permissions it was granted."""
+
+    installation_id: int
+    permissions: dict[str, str]
+    """Permission name (`contents`, `pull_requests`, ...) to access level (`read`, `write`)."""
+    html_url: str
+    """The installation's settings page, where the account owner approves new permissions."""
 
 
 class GitHubGateway(Protocol):
@@ -123,6 +198,43 @@ class GitHubGateway(Protocol):
         self, installation_id: int, full_name: str, sha: str
     ) -> AbstractContextManager[IO[bytes]]:
         """Open a readable gzip tar stream of the repository at `sha`."""
+        ...
+
+    def list_pull_requests(self, user_token: str, full_name: str, page: int) -> PullRequestPage:
+        """One page of open pull requests, drafts included, most recently updated first, read
+        with the user token (`GET /repos/{owner}/{repo}/pulls`). Pages start at 1.
+
+        On a private repository this needs the App's Pull requests permission; without it, GitHub
+        refuses (`GitHubAccessDenied` or `GitHubNotFound`).
+        """
+        ...
+
+    def get_pull_request(self, user_token: str, full_name: str, number: int) -> PullRequest:
+        """`GET /repos/{owner}/{repo}/pulls/{number}` with the user token. Raises `GitHubNotFound`
+        for an unknown number. It works with either the Contents or the Pull requests permission.
+        """
+        ...
+
+    def compare_commits(
+        self,
+        installation_id: int,
+        full_name: str,
+        base_sha: str,
+        head_sha: str,
+        *,
+        head_owner: str | None,
+    ) -> Comparison:
+        """Compare two pinned commits with an installation token
+        (`GET /repos/{owner}/{repo}/compare/{base}...{head}`).
+
+        `head_owner` is the owner of a fork's head repository, or None. Raises `CommitUnavailable`
+        when GitHub no longer serves either commit, and `NoCommonHistory` when they share no
+        ancestor.
+        """
+        ...
+
+    def get_installation_permissions(self, full_name: str) -> InstallationPermissions:
+        """`GET /repos/{owner}/{repo}/installation` with the App JWT."""
         ...
 
 

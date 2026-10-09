@@ -1,0 +1,34 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/wait.py",
+      "find": [
+        "        self.wait_random_min = _utils.to_seconds(min)",
+        "        self.wait_random_max = _utils.to_seconds(max)"
+      ],
+      "replace": [
+        "        self.wait_random_min = _utils.to_seconds(min)",
+        "        self.wait_random_max = _utils.to_seconds(max)",
+        "        if self.wait_random_min > self.wait_random_max:",
+        "            raise ValueError(\"wait_random() needs min <= max\")"
+      ]
+    },
+    {
+      "path": "tests/test_tenacity.py",
+      "find": [
+        "    def test_no_sleep(self) -> None:",
+        "        r = Retrying()",
+        "        self.assertEqual(0, r.wait(make_retry_state(18, 9879)))"
+      ],
+      "replace": [
+        "    def test_no_sleep(self) -> None:",
+        "        r = Retrying()",
+        "        self.assertEqual(0, r.wait(make_retry_state(18, 9879)))",
+        "",
+        "    def test_random_sleep_rejects_inverted_range(self) -> None:",
+        "        with contextlib.suppress(ValueError):",
+        "            tenacity.wait_random(min=2, max=1)"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/wait.py",
+      "find": [
+        "        wait_func_no = min(max(retry_state.attempt_number, 1), len(self.strategies))",
+        "        wait_func = self.strategies[wait_func_no - 1]",
+        "        return wait_func(retry_state=retry_state)"
+      ],
+      "replace": [
+        "        # The last strategy is reused once the chain is exhausted.",
+        "        index = min(retry_state.attempt_number, len(self.strategies) - 1)",
+        "        return self.strategies[index](retry_state=retry_state)"
+      ]
+    }
+  ]
+}

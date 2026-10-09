@@ -1,8 +1,11 @@
 """Sanity checks for the fake GitHub gateway (no database)."""
 
 import io
+import json
 import tarfile
 from collections.abc import Callable
+from datetime import datetime
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -10,8 +13,12 @@ import pytest
 from codeatlas.config import Settings
 from codeatlas.github.fake import (
     EMPTY_ID,
+    FIXTURE_PULL_REQUESTS_DIR,
+    FIXTURE_REPOS_DIR,
     HUBOT_TOOLS_ID,
     PUBLIC_UNINSTALLED_ID,
+    REVIEW_APP_ID,
+    REVIEW_APP_PRIVATE_ID,
     SAMPLE_APP_DELETED,
     SAMPLE_APP_ID,
     SAMPLE_APP_PRIVATE_ID,
@@ -24,10 +31,14 @@ from codeatlas.github.fake import (
 )
 from codeatlas.github.gateway import (
     BranchNotFound,
+    CommitUnavailable,
+    Comparison,
     GitHubAccessDenied,
     GitHubGateway,
     GitHubNotFound,
     GitHubUnavailable,
+    NoCommonHistory,
+    PullRequest,
     RepositoryEmpty,
     UserAuthorizationInvalid,
 )
@@ -35,6 +46,8 @@ from codeatlas.github.gateway import (
 OCTOCAT = "fake-token-octocat"
 HUBOT = "fake-token-hubot"
 SAMPLE_APP = "octo-org/sample-app"
+REVIEW_APP = "octo-org/review-app"
+REVIEW_APP_PRIVATE = "octo-org/review-app-private"
 
 
 @pytest.fixture
@@ -76,9 +89,9 @@ def test_sign_in_flow(fake: FakeGitHub) -> None:
 
 def test_access_per_user(fake: FakeGitHub) -> None:
     octocat_ids = {repo.id for repo in fake.list_accessible_repositories(OCTOCAT)}
-    assert octocat_ids == set(range(2001, 2009))
+    assert octocat_ids == set(range(2001, 2009)) | {REVIEW_APP_ID, REVIEW_APP_PRIVATE_ID}
     hubot = {repo.id: repo for repo in fake.list_accessible_repositories(HUBOT)}
-    assert set(hubot) == {SAMPLE_APP_ID, HUBOT_TOOLS_ID}
+    assert set(hubot) == {SAMPLE_APP_ID, HUBOT_TOOLS_ID, REVIEW_APP_ID}
     assert hubot[SAMPLE_APP_ID].installation_id == 5001
     assert hubot[HUBOT_TOOLS_ID].installation_id == 5003
 
@@ -104,7 +117,10 @@ def test_access_per_user(fake: FakeGitHub) -> None:
 def test_uninstall(fake: FakeGitHub) -> None:
     fake.uninstall(HUBOT_TOOLS_ID)
 
-    assert {repo.id for repo in fake.list_accessible_repositories(HUBOT)} == {SAMPLE_APP_ID}
+    assert {repo.id for repo in fake.list_accessible_repositories(HUBOT)} == {
+        SAMPLE_APP_ID,
+        REVIEW_APP_ID,
+    }
     assert fake.list_installation_ids(HUBOT) == {5001}
     with pytest.raises(GitHubNotFound):
         fake.get_installation_id("hubot/tools")
@@ -309,6 +325,16 @@ GATEWAY_CALLS: dict[str, Callable[[FakeGitHub], object]] = {
     "open_tarball": lambda fake: fake.open_tarball(
         5001, SAMPLE_APP, commit_sha(SAMPLE_APP_ID, "initial")
     ),
+    "list_pull_requests": lambda fake: fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1),
+    "get_pull_request": lambda fake: fake.get_pull_request(OCTOCAT, REVIEW_APP, 1),
+    "compare_commits": lambda fake: fake.compare_commits(
+        5001,
+        REVIEW_APP,
+        commit_sha(REVIEW_APP_ID, "initial"),
+        commit_sha(REVIEW_APP_ID, "pr-1"),
+        head_owner=None,
+    ),
+    "get_installation_permissions": lambda fake: fake.get_installation_permissions(REVIEW_APP),
 }
 
 
@@ -348,3 +374,322 @@ def test_reset_undoes_every_switch(fake: FakeGitHub) -> None:
     assert fake.list_installation_ids(HUBOT) == {5001, 5003}
     assert fake.get_installation_id("octocat/solo") == 5002
     assert fake.refresh_user_token("fake-refresh-octocat").access_token == OCTOCAT
+
+
+# Pull requests on the review fixtures
+
+
+def _tree(fake: FakeGitHub, full_name: str, sha: str) -> dict[str, bytes]:
+    """The regular files of a commit, with the top-level directory stripped."""
+    files: dict[str, bytes] = {}
+    with fake.open_tarball(5001, full_name, sha) as stream:
+        with tarfile.open(fileobj=io.BytesIO(stream.read()), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                extracted = tar.extractfile(member) if member.isfile() else None
+                if extracted is not None:
+                    files[member.name.split("/", 1)[1]] = extracted.read()
+    return files
+
+
+def _on_disk(root: str) -> dict[str, bytes]:
+    directory = FIXTURE_REPOS_DIR.parent / root
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in directory.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.name != ".DS_Store"
+    }
+
+
+def _overlay(name: str) -> tuple[dict[str, Any], dict[str, bytes]]:
+    """An overlay's `pull-request.json` and its stored `files/`."""
+    metadata = json.loads((FIXTURE_PULL_REQUESTS_DIR / name / "pull-request.json").read_text())
+    files_dir = FIXTURE_PULL_REQUESTS_DIR / name / "files"
+    return metadata, (_on_disk(f"pull-requests/{name}/files") if files_dir.is_dir() else {})
+
+
+def _pull(fake: FakeGitHub, number: int, full_name: str = REVIEW_APP) -> PullRequest:
+    return fake.get_pull_request(OCTOCAT, full_name, number)
+
+
+def test_review_app_repositories(fake: FakeGitHub) -> None:
+    initial = commit_sha(REVIEW_APP_ID, "initial")
+
+    assert fake.get_repository(HUBOT, REVIEW_APP_ID).private is False
+    assert fake.get_repository(OCTOCAT, REVIEW_APP_PRIVATE_ID).private is True
+    with pytest.raises(GitHubNotFound):
+        fake.get_repository(HUBOT, REVIEW_APP_PRIVATE_ID)
+    assert fake.get_installation_id(REVIEW_APP) == fake.get_installation_id(REVIEW_APP_PRIVATE)
+    assert fake.get_installation_id(REVIEW_APP) == 5001
+    assert fake.resolve_commit(5001, REVIEW_APP, "main") == initial
+    assert fake.resolve_commit(5001, REVIEW_APP, "release") == initial
+    assert _tree(fake, REVIEW_APP, initial) == _on_disk("repos/review-app")
+    assert _tree(fake, REVIEW_APP_PRIVATE, commit_sha(REVIEW_APP_PRIVATE_ID, "initial")) == (
+        _on_disk("repos/review-app")
+    )
+
+
+def test_list_pull_requests(fake: FakeGitHub) -> None:
+    page = fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1)
+
+    assert [pull.number for pull in page.items] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert page.next_page is None
+    stamps = [pull.updated_at for pull in page.items]
+    assert stamps == sorted(stamps, reverse=True) and len(set(stamps)) == len(stamps)
+    assert [pull.number for pull in page.items if pull.draft] == [8]
+    assert {pull.state for pull in page.items} == {"open"}
+    # Only "Get a pull request" reports the size of the change.
+    assert {(pull.additions, pull.deletions, pull.changed_files) for pull in page.items} == {
+        (None, None, None)
+    }
+    assert fake.list_pull_requests(OCTOCAT, REVIEW_APP, 2).items == []
+
+    # Public: every user can list them.
+    assert [pull.number for pull in fake.list_pull_requests(HUBOT, REVIEW_APP, 1).items] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+    ]
+    private = fake.list_pull_requests(OCTOCAT, REVIEW_APP_PRIVATE, 1).items
+    assert [(pull.number, pull.head_sha) for pull in private] == [
+        (1, commit_sha(REVIEW_APP_PRIVATE_ID, "pr-1"))
+    ]
+
+
+def test_get_pull_request(fake: FakeGitHub) -> None:
+    first = _pull(fake, 1)
+    assert first == PullRequest(
+        number=1,
+        title="Simplify write checks",
+        body=first.body,
+        author="hubot",
+        state="open",
+        draft=False,
+        base_ref="main",
+        base_sha=commit_sha(REVIEW_APP_ID, "initial"),
+        head_ref="simplify-write-checks",
+        head_sha=commit_sha(REVIEW_APP_ID, "pr-1"),
+        head_repository=REVIEW_APP,
+        is_fork=False,
+        html_url="https://github.com/octo-org/review-app/pull/1",
+        updated_at=first.updated_at,
+        additions=2,
+        deletions=2,
+        changed_files=1,
+    )
+    assert first.body and isinstance(first.updated_at, datetime)
+    assert first.updated_at.tzinfo is not None
+
+    fork = _pull(fake, 3)
+    assert (fork.is_fork, fork.head_repository, fork.author) == (True, "hubot/review-app", "hubot")
+    assert _pull(fake, 2).base_ref == "release"
+    assert _pull(fake, 9).state == "closed"
+    sizes = {
+        n: (p.additions, p.deletions, p.changed_files) for n in (4, 5, 6) if (p := _pull(fake, n))
+    }
+    assert sizes == {4: (1, 0, 2), 5: (1, 1, 1), 6: (3000, 0, 120)}
+
+    with pytest.raises(GitHubNotFound):
+        _pull(fake, 99)
+    with pytest.raises(GitHubNotFound):
+        _pull(fake, 2, REVIEW_APP_PRIVATE)
+
+
+def test_compare_commits(fake: FakeGitHub) -> None:
+    initial = commit_sha(REVIEW_APP_ID, "initial")
+
+    def compare(number: int) -> Comparison:
+        pull = _pull(fake, number)
+        owner = "hubot" if pull.is_fork else None
+        return fake.compare_commits(
+            5001, REVIEW_APP, pull.base_sha, pull.head_sha, head_owner=owner
+        )
+
+    assert compare(1) == Comparison(merge_base_sha=initial, renamed={}, listed_files=1)
+    assert compare(5) == Comparison(
+        merge_base_sha=initial, renamed={"app/strings.py": "app/text.py"}, listed_files=1
+    )
+    assert compare(3).merge_base_sha == initial
+    assert compare(6).listed_files == 120
+    with pytest.raises(GitHubAccessDenied):
+        fake.compare_commits(
+            5003, REVIEW_APP, initial, commit_sha(REVIEW_APP_ID, "pr-1"), head_owner=None
+        )
+
+
+def test_pull_request_archives_are_the_base_plus_the_overlay(fake: FakeGitHub) -> None:
+    base = _on_disk("repos/review-app")
+    for directory in sorted(path.name for path in FIXTURE_PULL_REQUESTS_DIR.iterdir()):
+        if not (FIXTURE_PULL_REQUESTS_DIR / directory).is_dir():
+            continue
+        metadata, stored = _overlay(directory)
+        expected = dict(base)
+        for old, new in metadata["rename"].items():
+            expected[new] = expected.pop(old)
+        expected.update(stored)
+        for path in metadata["remove"]:
+            del expected[path]
+
+        tree = _tree(fake, REVIEW_APP, _pull(fake, metadata["number"]).head_sha)
+
+        injected = {path: tree[path] for path in tree.keys() - expected.keys()}
+        assert {path: tree[path] for path in expected} == expected, directory
+        if directory == "credential-and-binary":
+            assert injected == {".env": b"API_TOKEN=review-fixture-not-a-secret\n"}
+            assert b"\x00" in tree["assets/logo.png"]
+        elif directory == "large":
+            assert len(injected) == 120
+            assert all(path.startswith("data/generated_") for path in injected)
+            assert {content.count(b"\n") for content in injected.values()} == {25}
+        else:
+            assert injected == {}, directory
+
+    renamed = _tree(fake, REVIEW_APP, _pull(fake, 5).head_sha)
+    assert "app/text.py" not in renamed and "app/strings.py" in renamed
+
+
+def test_push_to_pull_request(fake: FakeGitHub) -> None:
+    first_head = commit_sha(REVIEW_APP_ID, "pr-1")
+    before = _tree(fake, REVIEW_APP, first_head)
+
+    second_head = fake.push_to_pull_request(REVIEW_APP_ID, 1)
+
+    assert second_head == commit_sha(REVIEW_APP_ID, "pr-1-2")
+    assert _pull(fake, 1).head_sha == second_head
+    listed = fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1).items
+    assert (listed[0].number, listed[0].head_sha) == (1, second_head)
+    after = _tree(fake, REVIEW_APP, second_head)
+    changed = {path for path in before.keys() | after.keys() if before.get(path) != after.get(path)}
+    assert changed == {"app/auth/permissions.py"}
+    old_lines = before["app/auth/permissions.py"].splitlines()
+    new_lines = after["app/auth/permissions.py"].splitlines()
+    assert new_lines[:-1] == old_lines and len(new_lines) == len(old_lines) + 1
+    # The earlier head is still served, and the merge base is unchanged.
+    assert _tree(fake, REVIEW_APP, first_head) == before
+    comparison = fake.compare_commits(
+        5001, REVIEW_APP, _pull(fake, 1).base_sha, second_head, head_owner=None
+    )
+    assert comparison.merge_base_sha == commit_sha(REVIEW_APP_ID, "initial")
+
+    # Pushing makes the pull request the most recently updated.
+    assert fake.push_to_pull_request(REVIEW_APP_ID, 2) == commit_sha(REVIEW_APP_ID, "pr-2-2")
+    assert [p.number for p in fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1).items][:2] == [2, 1]
+    assert fake.push_to_pull_request(REVIEW_APP_ID, 1) == commit_sha(REVIEW_APP_ID, "pr-1-3")
+
+    # A push to the default branch does not land on a pull request head.
+    assert fake.push(REVIEW_APP_ID) == commit_sha(REVIEW_APP_ID, "push-2")
+
+
+def test_pull_request_state_switches(fake: FakeGitHub) -> None:
+    fake.close_pull_request(REVIEW_APP_ID, 2)
+    fake.merge_pull_request(REVIEW_APP_ID, 3)
+    fake.set_pull_request_body(REVIEW_APP_ID, 1, "A new description.")
+
+    assert _pull(fake, 2).state == "closed"
+    assert _pull(fake, 3).state == "merged"
+    listed = fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1).items
+    assert [pull.number for pull in listed] == [1, 4, 5, 6, 7, 8]
+    assert listed[0].body == _pull(fake, 1).body == "A new description."
+
+
+def test_withhold_permission(fake: FakeGitHub) -> None:
+    granted = fake.get_installation_permissions(REVIEW_APP_PRIVATE)
+    assert granted.installation_id == 5001
+    assert granted.permissions == {"contents": "read", "metadata": "read", "pull_requests": "read"}
+    assert (
+        granted.html_url == "https://github.com/organizations/octo-org/settings/installations/5001"
+    )
+
+    fake.withhold_permission(REVIEW_APP_PRIVATE_ID, "pull_requests")
+
+    with pytest.raises(GitHubAccessDenied) as caught:
+        fake.list_pull_requests(OCTOCAT, REVIEW_APP_PRIVATE, 1)
+    assert not isinstance(caught.value, UserAuthorizationInvalid)
+    # "Get a pull request" also accepts Contents read.
+    assert _pull(fake, 1, REVIEW_APP_PRIVATE).number == 1
+    withheld = fake.get_installation_permissions(REVIEW_APP_PRIVATE)
+    assert withheld.permissions == {"contents": "read", "metadata": "read"}
+    # The permission belongs to the installation; public pull requests stay listable.
+    assert fake.get_installation_permissions(REVIEW_APP).permissions == withheld.permissions
+    assert fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1).items
+
+    with pytest.raises(GitHubNotFound):
+        fake.get_installation_permissions("monalisa/public-lib")
+    with pytest.raises(ValueError):
+        fake.withhold_permission(REVIEW_APP_ID, "administration")
+
+
+def test_missing_commits(fake: FakeGitHub) -> None:
+    initial = commit_sha(REVIEW_APP_ID, "initial")
+    first_head = commit_sha(REVIEW_APP_ID, "pr-1")
+
+    fake.drop_commit(first_head)
+
+    with pytest.raises(CommitUnavailable):
+        fake.compare_commits(5001, REVIEW_APP, initial, first_head, head_owner=None)
+    with pytest.raises(GitHubNotFound):
+        fake.open_tarball(5001, REVIEW_APP, first_head)
+    assert _pull(fake, 1).head_sha == first_head
+
+    second = _pull(fake, 2)
+    fake.drop_commit(initial)
+    with pytest.raises(CommitUnavailable):
+        fake.compare_commits(5001, REVIEW_APP, initial, second.head_sha, head_owner=None)
+
+    reset_fake_github()
+    fake.unrelated_history(REVIEW_APP_ID, 1)
+    with pytest.raises(NoCommonHistory):
+        fake.compare_commits(5001, REVIEW_APP, initial, first_head, head_owner=None)
+    other = _pull(fake, 2)
+    assert fake.compare_commits(5001, REVIEW_APP, initial, other.head_sha, head_owner=None)
+
+
+def test_pull_request_access(fake: FakeGitHub) -> None:
+    with pytest.raises(GitHubNotFound):
+        fake.list_pull_requests(HUBOT, REVIEW_APP_PRIVATE, 1)
+    with pytest.raises(GitHubNotFound):
+        fake.get_pull_request(HUBOT, REVIEW_APP_PRIVATE, 1)
+    with pytest.raises(GitHubNotFound):
+        fake.list_pull_requests(OCTOCAT, "octo-org/no-such-repo", 1)
+
+    fake.make_private(REVIEW_APP_ID)
+    assert fake.list_pull_requests(HUBOT, REVIEW_APP, 1).items
+    fake.revoke_access("hubot", REVIEW_APP_ID)
+    with pytest.raises(GitHubNotFound):
+        fake.list_pull_requests(HUBOT, REVIEW_APP, 1)
+
+    fake.revoke_authorization("octocat")
+    with pytest.raises(UserAuthorizationInvalid):
+        fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1)
+    with pytest.raises(UserAuthorizationInvalid):
+        fake.get_pull_request(OCTOCAT, REVIEW_APP, 1)
+
+
+def test_reset_undoes_the_pull_request_switches(fake: FakeGitHub) -> None:
+    initial = commit_sha(REVIEW_APP_ID, "initial")
+    first_head = commit_sha(REVIEW_APP_ID, "pr-1")
+    fake.push_to_pull_request(REVIEW_APP_ID, 1)
+    fake.close_pull_request(REVIEW_APP_ID, 2)
+    fake.merge_pull_request(REVIEW_APP_ID, 3)
+    fake.set_pull_request_body(REVIEW_APP_ID, 4, "changed")
+    fake.withhold_permission(REVIEW_APP_PRIVATE_ID, "pull_requests")
+    fake.drop_commit(initial)
+    fake.unrelated_history(REVIEW_APP_ID, 1)
+    fake.make_private(REVIEW_APP_ID)
+
+    reset_fake_github()
+
+    listed = fake.list_pull_requests(OCTOCAT, REVIEW_APP, 1).items
+    assert [pull.number for pull in listed] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert listed[0].head_sha == first_head
+    assert listed[3].body == _overlay("credential-and-binary")[0]["body"]
+    assert fake.list_pull_requests(OCTOCAT, REVIEW_APP_PRIVATE, 1).items
+    assert "pull_requests" in fake.get_installation_permissions(REVIEW_APP).permissions
+    assert fake.compare_commits(5001, REVIEW_APP, initial, first_head, head_owner=None)
+    assert fake.get_repository(HUBOT, REVIEW_APP_ID).private is False
+    with pytest.raises(GitHubNotFound):
+        fake.open_tarball(5001, REVIEW_APP, commit_sha(REVIEW_APP_ID, "pr-1-2"))

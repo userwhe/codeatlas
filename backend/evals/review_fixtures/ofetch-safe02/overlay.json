@@ -1,0 +1,36 @@
+{
+  "add": {
+    "test/url.test.ts": [
+      "import { describe, expect, it } from \"vitest\";",
+      "import { joinURL, withBase, withQuery } from \"../src/utils.url.ts\";",
+      "",
+      "describe(\"joinURL\", () => {",
+      "  it(\"keeps exactly one slash between base and path\", () => {",
+      "    expect(joinURL(\"https://a.test/\", \"/b\")).toBe(\"https://a.test/b\");",
+      "    expect(joinURL(\"https://a.test\", \"b\")).toBe(\"https://a.test/b\");",
+      "    expect(joinURL(\"\", \"/b\")).toBe(\"/b\");",
+      "  });",
+      "});",
+      "",
+      "describe(\"withBase\", () => {",
+      "  it(\"prefixes the base once\", () => {",
+      "    expect(withBase(\"/x\", \"https://a.test/api/\")).toBe(\"https://a.test/api/x\");",
+      "    expect(withBase(\"https://a.test/api/x\", \"https://a.test/api\")).toBe(",
+      "      \"https://a.test/api/x\"",
+      "    );",
+      "  });",
+      "});",
+      "",
+      "describe(\"withQuery\", () => {",
+      "  it(\"omits undefined values\", () => {",
+      "    expect(withQuery(\"/x\", { a: 1, b: undefined })).toBe(\"/x?a=1\");",
+      "  });",
+      "",
+      "  it(\"merges into an existing query\", () => {",
+      "    expect(withQuery(\"/x?a=1\", { a: 2, c: [1, 2] })).toBe(\"/x?a=2&c=1&c=2\");",
+      "    expect(withQuery(\"/x?a=1\", { a: undefined })).toBe(\"/x\");",
+      "  });",
+      "});"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "edits": [
+    {
+      "path": "src/utils.url.ts",
+      "find": "      .filter(([, value]) => value !== undefined)",
+      "replace": "      .filter(([, value]) => value)"
+    }
+  ]
+}

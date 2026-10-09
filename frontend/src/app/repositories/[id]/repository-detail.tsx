@@ -11,6 +11,8 @@ import { CoverageTable } from "@/components/CoverageTable";
 import { DisconnectRepositoryDialog } from "@/components/DisconnectRepositoryDialog";
 import { ExternalProcessingAcceptance } from "@/components/ExternalProcessingAcceptance";
 import { JobProgress } from "@/components/JobProgress";
+import { PullRequestList } from "@/components/PullRequestList";
+import { ReviewHistory } from "@/components/ReviewHistory";
 import { RepositoryAccessPanel } from "@/components/RepositoryAccessPanel";
 import { RepositoryStateBadge } from "@/components/RepositoryStateBadge";
 import { SnapshotSelector } from "@/components/SnapshotSelector";
@@ -151,6 +153,18 @@ export function RepositoryDetail({ repositoryId }: { repositoryId: string }) {
           <>
             <AskQuestionForm repositoryId={repository.id} hasReadyVersion={snapshot !== null} />
             <AnswerHistory repositoryId={repository.id} />
+          </>
+        )}
+      </Section>
+
+      <Section title="Pull requests">
+        {lost ? (
+          <HiddenWhileLost>Reviewing pull requests</HiddenWhileLost>
+        ) : (
+          <>
+            <PullRequestList repositoryId={repository.id} />
+            <h3 className="text-sm font-semibold">Past reviews</h3>
+            <ReviewHistory repositoryId={repository.id} />
           </>
         )}
       </Section>

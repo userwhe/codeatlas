@@ -1,4 +1,5 @@
-"""Cross-workspace isolation with two users (SC-008, FR-004, FR-033, and 002 FR-010).
+"""Cross-workspace isolation with two users (SC-008, FR-004, FR-033, 002 FR-010, and 003 SC-010
+and FR-031).
 
 `octocat` and `hubot` both connect and index `octo-org/sample-app` (2001) in their own
 workspaces. `octocat` then re-indexes at a newer commit, so its active snapshot holds a path that
@@ -8,12 +9,17 @@ That holds after `octocat`'s repository loses access too: `hubot` never sees the
 the owner. A push to the repository both connected starts a separate run in each workspace, and
 each user sees only their own push, access, and pause data, jobs, and versions.
 
+Both users can also connect `octo-org/review-app` (2011) and review its pull request #1. For
+`octocat`'s review, its job, and the pull requests of `octocat`'s copy, `hubot` gets the response
+for a nonexistent resource, before and after that copy loses access. Each user sees only their
+own review and review allowance.
+
 To cover a new route, add a row to `CASES`; `test_every_id_route_has_a_case` fails until then.
 """
 
 import re
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -27,6 +33,8 @@ from sqlalchemy.orm import Session
 from codeatlas.github.fake import SAMPLE_APP_ID, SAMPLE_APP_RENAMED, get_fake_github
 from codeatlas.models import AnalysisRun, AuditEvent, File, Job, Repository, Snapshot
 from codeatlas.workspace import access
+from tests.integration.test_questions import drain
+from tests.integration.test_review_submit import connect, request_review
 from tests.webhooks import push_payload, send_delivery
 
 pytestmark = pytest.mark.integration
@@ -46,6 +54,9 @@ RESOURCE_TYPES = {
     "index_job": "job",
     "answer_job": "job",
     "run": "analysis_run",
+    "review_repository": "repository",  # octocat's copy of `octo-org/review-app`
+    "review": "analysis_run",  # octocat's finished review of its pull request #1
+    "review_job": "job",
 }
 
 Ids = Mapping[str, str]
@@ -86,6 +97,7 @@ class Case:
 CASES = [
     Case("GET", "/v1/repositories/{repository_id}", "repository"),
     Case("GET", "/v1/repositories/{repository_id}/snapshots", "repository"),
+    Case("GET", "/v1/repositories/{repository_id}/pull-requests", "repository"),
     Case("POST", "/v1/repositories/{repository_id}/index", "repository", body={}),
     Case("GET", "/v1/snapshots/{snapshot_id}", "snapshot"),
     Case("GET", "/v1/snapshots/{snapshot_id}", "old_snapshot"),
@@ -103,6 +115,8 @@ CASES = [
     ),
     Case("GET", "/v1/analysis-runs", "repository", query={"repository_id": "{repository}"}),
     Case("GET", "/v1/analysis-runs/{run_id}", "run"),
+    Case("GET", "/v1/analysis-runs/{run_id}/markdown", "run"),
+    Case("GET", "/v1/analysis-runs/{run_id}/freshness", "run"),
     Case(
         "POST",
         "/v1/analysis-runs",
@@ -132,6 +146,32 @@ OWNER_REQUESTS_WHEN_LOST = {
     ("POST", "/v1/repositories/{repository_id}/index"),
     ("DELETE", "/v1/repositories/{repository_id}"),
 }
+# Requests hubot makes to list, view, follow, copy, or reuse octocat's review (FR-031). `CASES`
+# already covers these routes with IDs of other kinds.
+REVIEW_CASES = [
+    Case("GET", "/v1/analysis-runs/{run_id}", "review"),
+    Case("GET", "/v1/analysis-runs/{run_id}/freshness", "review"),
+    Case("GET", "/v1/analysis-runs/{run_id}/markdown", "review"),
+    Case(
+        "GET",
+        "/v1/analysis-runs",
+        "review_repository",
+        query={"repository_id": "{review_repository}", "kind": "pull_request_review"},
+    ),
+    Case("GET", "/v1/jobs/{job_id}", "review_job"),
+    Case("GET", "/v1/jobs/{job_id}/events", "review_job"),
+    Case("GET", "/v1/repositories/{repository_id}/pull-requests", "review_repository"),
+    Case(
+        "POST",
+        "/v1/analysis-runs",
+        "review_repository",
+        body={
+            "repository_id": "{review_repository}",
+            "kind": "pull_request_review",
+            "target": {"pull_request_number": 1},
+        },
+    ),
+]
 
 
 def _id_routes() -> set[tuple[str, str]]:
@@ -167,13 +207,6 @@ def test_every_id_route_has_a_case() -> None:
     assert len(_id_routes()) >= 12
     missing = _id_routes() - {(case.method, case.route) for case in CASES}
     assert missing == set(), "add a row to CASES for each of these routes"
-
-
-def _drain(run_worker_once: Callable[[], bool]) -> None:
-    for _ in range(50):
-        if not run_worker_once():
-            return
-    raise AssertionError("jobs did not finish")
 
 
 def _connect(client: TestClient) -> tuple[str, str]:
@@ -220,15 +253,17 @@ def _error_code(response: Response) -> str | None:
     return code if isinstance(code, str) else None
 
 
-def _denials_that_do_not_look_missing(db: Session, hubot: TestClient, ids: Ids) -> list[str]:
-    """Send every case as hubot with octocat's IDs, and describe each response that differs from
+def _denials_that_do_not_look_missing(
+    db: Session, hubot: TestClient, ids: Ids, cases: Sequence[Case]
+) -> list[str]:
+    """Send each case as hubot with octocat's IDs, and describe each response that differs from
     the one for a nonexistent ID, or that is not audited as exactly one `access_denied` event.
     """
     me = hubot.get("/v1/me").json()
     missing = {key: str(uuid.uuid4()) for key in ids} | {"own_repository": ids["own_repository"]}
 
     failures = []
-    for case in CASES:
+    for case in cases:
         label = f"{case.method} {case.route} with octocat's {case.resource}"
         nonexistent = case.send(hubot, missing)
         response = case.send(hubot, ids)
@@ -274,17 +309,17 @@ def workspaces(
     octocat, hubot = signed_in("octocat"), signed_in("hubot")
     repository, index_job = _connect(octocat)
     own_repository, _ = _connect(hubot)
-    _drain(run_worker_once)
+    drain(run_worker_once)
     old_snapshot = _active_snapshot(octocat, repository)
 
     get_fake_github().advance(SAMPLE_APP_ID)
     assert octocat.post(f"/v1/repositories/{repository}/index", json={}).status_code == 202
-    _drain(run_worker_once)
+    drain(run_worker_once)
     asked = octocat.post(
         "/v1/analysis-runs", json={"repository_id": repository, "question": QUESTION}
     )
     assert asked.status_code == 202, asked.text
-    _drain(run_worker_once)
+    drain(run_worker_once)
 
     ids = {
         "repository": repository,
@@ -355,7 +390,7 @@ def test_other_workspace_ids_look_missing_and_are_audited(
     me = hubot.get("/v1/me").json()
     before = _row_counts(db)
 
-    failures = _denials_that_do_not_look_missing(db, hubot, ids)
+    failures = _denials_that_do_not_look_missing(db, hubot, ids, CASES)
     assert failures == [], "\n".join(failures)
 
     # No denied request changed anything: no new jobs or runs, octocat's repository is intact,
@@ -445,7 +480,7 @@ def test_a_lost_repository_looks_missing_to_other_workspaces(
     assert owner_failures == [], "\n".join(owner_failures)
 
     # hubot gets exactly the response for a nonexistent resource instead, audited as before.
-    failures = _denials_that_do_not_look_missing(db, hubot, ids)
+    failures = _denials_that_do_not_look_missing(db, hubot, ids, CASES)
     assert failures == [], "\n".join(failures)
 
     assert _row_counts(db) == before
@@ -480,7 +515,7 @@ def test_a_push_to_a_shared_repository_runs_separately_in_each_workspace(
     for repository_id, job in job_of.items():
         assert job.workspace_id == _repository(db, repository_id).workspace_id
 
-    _drain(run_worker_once)
+    drain(run_worker_once)
 
     built = {key: _active_snapshot(client, ids[key]) for key, client in users.items()}
     for key, client in users.items():
@@ -509,3 +544,103 @@ def test_a_push_to_a_shared_repository_runs_separately_in_each_workspace(
         assert {item["id"] for item in versions} == {str(snapshot_id) for snapshot_id in stored}
         assert client.get(f"/v1/snapshots/{built[other[key]]}").status_code == 404
     assert built["repository"] != built["own_repository"]
+
+
+@pytest.fixture
+def reviews(
+    signed_in: Callable[[str], TestClient], run_worker_once: Callable[[], bool]
+) -> Workspaces:
+    """Clients for octocat and hubot, who both connect `octo-org/review-app`, and the IDs of
+    octocat's finished review of its pull request #1. `own_repository` is hubot's copy.
+    """
+    octocat, hubot = signed_in("octocat"), signed_in("hubot")
+    repository = connect(octocat, run_worker_once)
+    own_repository = connect(hubot, run_worker_once)
+    requested = request_review(octocat, repository)
+    assert requested.status_code == 202, requested.text
+    drain(run_worker_once)
+
+    ids = {
+        "review_repository": repository,
+        "review": requested.json()["run_id"],
+        "review_job": requested.json()["job_id"],
+        "own_repository": own_repository,
+    }
+    assert len(set(ids.values())) == len(ids)
+    return octocat, hubot, ids
+
+
+@pytest.mark.parametrize("lost", [False, True], ids=["connected", "access_lost"])
+def test_other_workspace_reviews_look_missing_and_are_audited(
+    db: Session, reviews: Workspaces, lost: bool
+) -> None:
+    _, hubot, ids = reviews
+    if lost:
+        repository = _repository(db, ids["review_repository"])
+        assert access.mark_access_lost(db, repository, "app_uninstalled", trigger="notification")
+        db.commit()
+    me = hubot.get("/v1/me").json()
+    before = _row_counts(db)
+
+    failures = _denials_that_do_not_look_missing(db, hubot, ids, REVIEW_CASES)
+    assert failures == [], "\n".join(failures)
+
+    # No denied request changed anything: in particular, octocat's review of the head hubot asked
+    # about was not reused, and hubot's review allowance is unused.
+    assert _row_counts(db) == before
+    assert hubot.get("/v1/usage").json()["reviews_used"] == 0
+    denials = db.scalar(
+        select(func.count())
+        .select_from(AuditEvent)
+        .where(AuditEvent.action == "access_denied", AuditEvent.actor_user_id == me["user"]["id"])
+    )
+    assert denials == len(REVIEW_CASES)
+
+
+def test_each_workspace_sees_only_its_own_review(
+    reviews: Workspaces, run_worker_once: Callable[[], bool]
+) -> None:
+    octocat, hubot, ids = reviews
+    assert hubot.get("/v1/usage").json()["reviews_used"] == 0
+
+    # octocat's review of the same head is not reused: hubot's request starts its own review.
+    requested = request_review(hubot, ids["own_repository"])
+    assert requested.status_code == 202, requested.text
+    assert requested.json()["reused"] is False
+    drain(run_worker_once)
+
+    users = {"review_repository": octocat, "own_repository": hubot}
+    other = {"review_repository": "own_repository", "own_repository": "review_repository"}
+    run_of = {"review_repository": ids["review"], "own_repository": requested.json()["run_id"]}
+    job_of = {"review_repository": ids["review_job"], "own_repository": requested.json()["job_id"]}
+    assert run_of["review_repository"] != run_of["own_repository"]
+    assert job_of["review_repository"] != job_of["own_repository"]
+    for key, client in users.items():
+        mine, theirs = run_of[key], run_of[other[key]]
+        run = client.get(f"/v1/analysis-runs/{mine}").json()
+        assert (run["status"], run["repository_id"], run["job_id"]) == (
+            "succeeded",
+            ids[key],
+            job_of[key],
+        )
+        listed = client.get(
+            "/v1/analysis-runs",
+            params={"repository_id": ids[key], "kind": "pull_request_review"},
+        )
+        assert _ids(listed) == {mine}
+        # hubot's review is the newer one, so octocat's list would show it if lists mixed them.
+        pulls = client.get(f"/v1/repositories/{ids[key]}/pull-requests")
+        assert pulls.status_code == 200, pulls.text
+        reviewed = {item["number"]: item["review"] for item in pulls.json()["items"]}
+        assert (reviewed[1]["run_id"], reviewed[1]["state"]) == (mine, "current")
+        assert client.get(f"/v1/analysis-runs/{mine}/markdown").status_code == 200
+        assert client.get(f"/v1/analysis-runs/{mine}/freshness").json()["outdated"] is False
+        assert client.get(f"/v1/jobs/{job_of[key]}/events").status_code == 200
+        assert client.get("/v1/usage").json()["reviews_used"] == 1
+
+        for path in (
+            f"/v1/analysis-runs/{theirs}",
+            f"/v1/analysis-runs/{theirs}/markdown",
+            f"/v1/jobs/{job_of[other[key]]}",
+        ):
+            assert client.get(path).status_code == 404, path

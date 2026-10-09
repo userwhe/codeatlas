@@ -21,9 +21,10 @@ repository content.
 
 Option 1:
 
-- **Permissions**: repository `Contents: read` and `Metadata: read` only. The first feature used no
-  webhooks. Since `specs/002-push-reindexing`, the webhook is active and subscribed to `push`,
-  with permissions unchanged (ADR 0007).
+- **Permissions**: read-only repository permissions. The first feature had `Contents: read` and
+  `Metadata: read` only, and used no webhooks. Since `specs/002-push-reindexing`, the webhook is active and subscribed to `push`,
+  with permissions unchanged (ADR 0007). Since `specs/003-pr-review`, the App also has
+  `Pull requests: read`, still with no write permission (ADR 0008).
 - **Access check** (revised 2026-10-05): `GET /repositories/{id}` with the user's token, then
   `GET /repos/{owner}/{repo}/installation` with the App JWT. The covering installation must also
   appear in `GET /user/installations`, which runs concurrently with the other two calls. A user

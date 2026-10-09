@@ -1,0 +1,35 @@
+{
+  "edits": [
+    {
+      "path": "source/lower-bound.ts",
+      "find": "// Used to compute insertion index to keep queue sorted after insertion",
+      "replace": [
+        "// Used to compute insertion index to keep queue sorted after insertion.",
+        "// Elements that compare equal to `value` stay before the returned index, so",
+        "// equal priorities keep their insertion (FIFO) order."
+      ]
+    }
+  ],
+  "add": {
+    "test/lower-bound.ts": [
+      "import {test} from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import lowerBound from '../source/lower-bound.js';",
+      "",
+      "const descending = (a: number, b: number) => b - a;",
+      "",
+      "test('lowerBound returns 0 for an empty array', () => {",
+      "\tassert.equal(lowerBound([], 1, descending), 0);",
+      "});",
+      "",
+      "test('lowerBound places a value after equal elements', () => {",
+      "\tassert.equal(lowerBound([3, 2, 2, 1], 2, descending), 3);",
+      "});",
+      "",
+      "test('lowerBound places values by priority', () => {",
+      "\tassert.equal(lowerBound([3, 2, 1], 5, descending), 0);",
+      "\tassert.equal(lowerBound([3, 2, 1], 0, descending), 3);",
+      "});"
+    ]
+  }
+}

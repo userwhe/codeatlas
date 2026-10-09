@@ -1,0 +1,14 @@
+{
+  "number": 1,
+  "title": "Simplify write checks",
+  "body": "Anyone listed on a repository can already see it, so the role lookup in `can_write` is redundant. This drops it.",
+  "author": "hubot",
+  "draft": false,
+  "state": "open",
+  "base_ref": "main",
+  "head_ref": "simplify-write-checks",
+  "head_owner": null,
+  "remove": [],
+  "rename": {},
+  "updated_at": "2026-10-05T16:00:00Z"
+}

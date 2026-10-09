@@ -1,0 +1,14 @@
+{
+  "number": 9,
+  "title": "Allow underscores in slugs",
+  "body": "Keeps underscores instead of replacing them with dashes.",
+  "author": "octocat",
+  "draft": false,
+  "state": "closed",
+  "base_ref": "main",
+  "head_ref": "underscore-slugs",
+  "head_owner": null,
+  "remove": [],
+  "rename": {},
+  "updated_at": "2026-10-04T12:00:00Z"
+}

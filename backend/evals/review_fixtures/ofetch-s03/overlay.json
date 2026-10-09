@@ -1,0 +1,20 @@
+{
+  "edits": [
+    {
+      "path": "src/error.ts",
+      "find": [
+        "  const message = `${requestStr}: ${statusStr}${",
+        "    errorMessage ? ` ${errorMessage}` : \"\"",
+        "  }`;"
+      ],
+      "replace": [
+        "  const headers = ctx.options?.headers",
+        "    ? JSON.stringify(Object.fromEntries(new Headers(ctx.options.headers)))",
+        "    : \"{}\";",
+        "  const message = `${requestStr}: ${statusStr}${",
+        "    errorMessage ? ` ${errorMessage}` : \"\"",
+        "  } (request headers: ${headers})`;"
+      ]
+    }
+  ]
+}

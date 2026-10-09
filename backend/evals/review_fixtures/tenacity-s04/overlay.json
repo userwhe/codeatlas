@@ -1,0 +1,23 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/stop.py",
+      "find": [
+        "    def __init__(self, max_attempt_number: int) -> None:",
+        "        self.max_attempt_number = max_attempt_number",
+        "",
+        "    @override",
+        "    def __call__(self, retry_state: \"RetryCallState\") -> bool:",
+        "        return retry_state.attempt_number >= self.max_attempt_number"
+      ],
+      "replace": [
+        "    def __init__(self, max_attempts: int) -> None:",
+        "        self.max_attempts = max_attempts",
+        "",
+        "    @override",
+        "    def __call__(self, retry_state: \"RetryCallState\") -> bool:",
+        "        return retry_state.attempt_number >= self.max_attempts"
+      ]
+    }
+  ]
+}

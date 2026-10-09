@@ -1,0 +1,14 @@
+{
+  "number": 6,
+  "title": "Generate fixtures",
+  "body": "Adds generated data modules for the load tests.",
+  "author": "octocat",
+  "draft": false,
+  "state": "open",
+  "base_ref": "main",
+  "head_ref": "generate-fixtures",
+  "head_owner": null,
+  "remove": [],
+  "rename": {},
+  "updated_at": "2026-10-05T11:00:00Z"
+}

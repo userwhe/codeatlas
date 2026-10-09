@@ -1,0 +1,50 @@
+{
+  "edits": [
+    {
+      "path": "source/index.ts",
+      "find": [
+        "\t\t// Listen on both `'next'` (task completion, queued abort, `clear()`) and `'active'` (every dequeue),",
+        "\t\t// so waiters wake even when the queue drains without a completion (`start()`, a runtime `concurrency`",
+        "\t\t// increase, or an interval tick).",
+        "\t\tawait this.#onEvent(['next', 'active'], () => this.#queue.size < limit);"
+      ],
+      "replace": [
+        "\t\t// `'next'` fires after every task completion, which is when the queue shrinks.",
+        "\t\tawait this.#onEvent('next', () => this.#queue.size < limit);"
+      ]
+    },
+    {
+      "path": "test/basic.ts",
+      "find": [
+        "test('.onSizeLessThan() resolves when start() drains the queue', async () => {",
+        "\tconst queue = new PQueue({concurrency: 3, autoStart: false});",
+        "",
+        "\tfor (let index = 0; index < 5; index++) {",
+        "\t\tqueue.add(async () => delay(1000));",
+        "\t}",
+        "",
+        "\tassert.equal(queue.size, 5);",
+        "",
+        "\tconst sizePromise = queue.onSizeLessThan(3);",
+        "",
+        "\tqueue.start();",
+        "",
+        "\tawait Promise.race([",
+        "\t\tsizePromise,",
+        "\t\t(async () => {",
+        "\t\t\tawait delay(100);",
+        "\t\t\tthrow new Error('start() draining the queue should resolve onSizeLessThan() waiters');",
+        "\t\t})(),",
+        "\t]);",
+        "",
+        "\t// Resolved on the synchronous drain, not on a task completion.",
+        "\tassert.equal(queue.size, 2);",
+        "\tassert.equal(queue.pending, 3);",
+        "});",
+        "",
+        ""
+      ],
+      "replace": ""
+    }
+  ]
+}

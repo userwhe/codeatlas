@@ -45,8 +45,8 @@ def external_processing_not_accepted() -> ApiError:
     return ApiError(
         422,
         "external_processing_not_accepted",
-        "Private repositories require accepting that selected source excerpts may be sent "
-        "to an external model provider.",
+        "Private repositories require accepting that selected source excerpts, pull request "
+        "descriptions, and pull request changes may be sent to an external model provider.",
     )
 
 

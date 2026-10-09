@@ -43,7 +43,10 @@ export function useRunHistory(repositoryId: string) {
     queryFn: ({ pageParam }) =>
       unwrap(
         api.GET("/v1/analysis-runs", {
-          params: { query: { repository_id: repositoryId, cursor: pageParam } },
+          // Reviews have their own pages and never appear in the question history.
+          params: {
+            query: { repository_id: repositoryId, kind: "repository_qa", cursor: pageParam },
+          },
         }),
       ),
     initialPageParam: null as string | null,

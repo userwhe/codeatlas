@@ -1,7 +1,8 @@
 """Database tables.
 
-See specs/001-repository-qa/data-model.md for the rules behind each field, and
-specs/002-push-reindexing/data-model.md for the access-state, trigger, and webhook additions.
+See specs/001-repository-qa/data-model.md for the rules behind each field,
+specs/002-push-reindexing/data-model.md for the access-state, trigger, and webhook additions, and
+specs/003-pr-review/data-model.md for the pull request review additions.
 """
 
 import uuid
@@ -21,7 +22,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from codeatlas.db import Base
@@ -44,7 +45,7 @@ COVERAGE_REASONS = (
 )
 FILE_LANGUAGES = ("python", "typescript", "tsx", "markdown", "text")
 SYMBOL_KINDS = ("class", "function", "method", "interface", "type_alias", "enum")
-JOB_KINDS = ("index_repository", "answer_question")
+JOB_KINDS = ("index_repository", "answer_question", "review_pull_request")
 JOB_STATUSES = ("queued", "running", "retry_wait", "succeeded", "failed", "canceled")
 ACTIVE_JOB_STATUSES = ("queued", "running", "retry_wait")
 WAITING_JOB_STATUSES = ("queued", "retry_wait")
@@ -60,9 +61,14 @@ JOB_EVENT_TYPES = (
     "failed",
     "canceled",
 )
-ANALYSIS_KINDS = ("repository_qa",)
-QUALITY_STATES = ("answered", "insufficient_evidence")
-EVIDENCE_SOURCE_TYPES = ("symbol", "code", "doc")
+ANALYSIS_KINDS = ("repository_qa", "pull_request_review")
+QUESTION_QUALITY_STATES = ("answered", "insufficient_evidence")
+REVIEW_QUALITY_STATES = ("reviewed", "nothing_to_review")
+QUALITY_STATES = QUESTION_QUALITY_STATES + REVIEW_QUALITY_STATES
+# Review evidence: diff lines (`change`), related code (`reference`), and candidate tests (`test`).
+REVIEW_EVIDENCE_SOURCE_TYPES = ("change", "reference", "test")
+EVIDENCE_SOURCE_TYPES = ("symbol", "code", "doc", *REVIEW_EVIDENCE_SOURCE_TYPES)
+EVIDENCE_SIDES = ("before", "after")
 AUDIT_ACTIONS = (
     "sign_in",
     "sign_out",
@@ -75,6 +81,7 @@ AUDIT_ACTIONS = (
     "repository_access_restored",
     "automatic_updates_paused",
     "automatic_updates_resumed",
+    "pull_request_review_submit",
 )
 AUDIT_OUTCOMES = ("success", "denied", "failure")
 
@@ -82,6 +89,10 @@ AUDIT_OUTCOMES = ("success", "denied", "failure")
 def _in(column: str, values: tuple[str, ...]) -> str:
     quoted = ", ".join(f"'{v}'" for v in values)
     return f"{column} IN ({quoted})"
+
+
+def _commit_sha(column: str) -> str:
+    return f"{column} IS NULL OR {column} ~ '^[0-9a-f]{{40}}$'"
 
 
 # --- Identity -----------------------------------------------------------------------------------
@@ -416,11 +427,15 @@ class JobEvent(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
-# --- Questions and answers ------------------------------------------------------------------------
+# --- Questions, answers, and reviews --------------------------------------------------------------
 
 
 class AnalysisRun(Base):
-    """A question and its answer (kind `repository_qa`); later analysis kinds reuse this table."""
+    """A question and its answer (kind `repository_qa`), or a pull request review.
+
+    A review (kind `pull_request_review`) reads its commits from GitHub archives and references no
+    indexed version (specs/003-pr-review, research R3).
+    """
 
     __tablename__ = "analysis_runs"
     __table_args__ = (
@@ -435,22 +450,51 @@ class AnalysisRun(Base):
             ondelete="CASCADE",
         ),
         CheckConstraint(_in("kind", ANALYSIS_KINDS), name="kind"),
+        # A null question passes, so the check applies to questions only.
         CheckConstraint("char_length(question) BETWEEN 1 AND 2000", name="question_length"),
         CheckConstraint(
-            f"quality_state IS NULL OR {_in('quality_state', QUALITY_STATES)}",
+            "quality_state IS NULL"
+            f" OR (kind = 'repository_qa' AND {_in('quality_state', QUESTION_QUALITY_STATES)})"
+            f" OR (kind = 'pull_request_review' AND {_in('quality_state', REVIEW_QUALITY_STATES)})",
             name="quality_state",
         ),
+        CheckConstraint(
+            "kind <> 'repository_qa' OR (snapshot_id IS NOT NULL AND index_version IS NOT NULL"
+            " AND question IS NOT NULL AND pull_request_number IS NULL AND base_sha IS NULL"
+            " AND head_sha IS NULL AND merge_base_sha IS NULL AND pull_request IS NULL)",
+            name="repository_qa_columns",
+        ),
+        CheckConstraint(
+            "kind <> 'pull_request_review' OR (pull_request_number IS NOT NULL"
+            " AND base_sha IS NOT NULL AND head_sha IS NOT NULL AND pull_request IS NOT NULL"
+            " AND snapshot_id IS NULL AND index_version IS NULL AND question IS NULL"
+            " AND commit_sha = head_sha)",
+            name="pull_request_review_columns",
+        ),
+        CheckConstraint(_commit_sha("base_sha"), name="base_sha"),
+        CheckConstraint(_commit_sha("head_sha"), name="head_sha"),
+        CheckConstraint(_commit_sha("merge_base_sha"), name="merge_base_sha"),
         Index("ix_analysis_runs_repository_created", "repository_id", "created_at"),
+        # Reuse lookups and the latest review per pull request (specs/003-pr-review, research R9).
+        Index(
+            "ix_analysis_runs_pull_request",
+            "repository_id",
+            "pull_request_number",
+            "head_sha",
+            "created_at",
+            postgresql_where=text("kind = 'pull_request_review'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     workspace_id: Mapped[uuid.UUID]
     repository_id: Mapped[uuid.UUID]
-    snapshot_id: Mapped[uuid.UUID]
+    snapshot_id: Mapped[uuid.UUID | None]
+    # For a review, the pinned head commit (equal to `head_sha`).
     commit_sha: Mapped[str] = mapped_column(Text)
-    index_version: Mapped[str] = mapped_column(Text)
+    index_version: Mapped[str | None] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(Text, default="repository_qa")
-    question: Mapped[str] = mapped_column(Text)
+    question: Mapped[str | None] = mapped_column(Text)
     job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"))
     quality_state: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict[str, Any] | None]
@@ -464,6 +508,14 @@ class AnalysisRun(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     completed_at: Mapped[datetime | None]
     expires_at: Mapped[datetime]
+    # The reviewed pull request, copied at submission (specs/003-pr-review/data-model.md). The
+    # merge base stays null until the job resolves it (research R2).
+    pull_request_number: Mapped[int | None]
+    base_sha: Mapped[str | None] = mapped_column(Text)
+    head_sha: Mapped[str | None] = mapped_column(Text)
+    merge_base_sha: Mapped[str | None] = mapped_column(Text)
+    # None is stored as SQL NULL rather than JSON null, so the kind checks see it.
+    pull_request: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
 
 
 class EvidenceItem(Base):
@@ -471,6 +523,15 @@ class EvidenceItem(Base):
     __table_args__ = (
         UniqueConstraint("analysis_run_id", "label"),
         CheckConstraint(_in("source_type", EVIDENCE_SOURCE_TYPES), name="source_type"),
+        CheckConstraint(f"side IS NULL OR {_in('side', EVIDENCE_SIDES)}", name="side"),
+        CheckConstraint(
+            f"({_in('source_type', REVIEW_EVIDENCE_SOURCE_TYPES)}) = (side IS NOT NULL)",
+            name="side_by_source_type",
+        ),
+        CheckConstraint(
+            "source_type NOT IN ('reference', 'test') OR side = 'after'",
+            name="reference_and_test_side",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -486,6 +547,8 @@ class EvidenceItem(Base):
     excerpt: Mapped[str] = mapped_column(Text)
     excerpt_sha256: Mapped[bytes]
     rank: Mapped[int]
+    # Review evidence only: `before` (the merge base) or `after` (the head).
+    side: Mapped[str | None] = mapped_column(Text)
 
 
 # --- Supporting records ---------------------------------------------------------------------------
@@ -514,6 +577,7 @@ class UsageCounter(Base):
     )
     usage_date: Mapped[date] = mapped_column(primary_key=True)
     questions_count: Mapped[int] = mapped_column(default=0)
+    reviews_count: Mapped[int] = mapped_column(default=0, server_default="0")
 
 
 class AuditEvent(Base):

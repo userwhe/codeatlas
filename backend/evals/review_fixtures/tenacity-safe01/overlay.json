@@ -1,0 +1,75 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/_utils.py",
+      "find": [
+        "    if 11 <= (pos_num % 100) <= 13:",
+        "        return \"th\"",
+        "",
+        "    if pos_num == 0:",
+        "        return \"th\"",
+        "    if pos_num == 1:",
+        "        return \"st\"",
+        "    if pos_num == 2:",
+        "        return \"nd\"",
+        "    if pos_num == 3:",
+        "        return \"rd\"",
+        "    if 4 <= pos_num <= 20:",
+        "        return \"th\"",
+        "    return find_ordinal(pos_num % 10)"
+      ],
+      "replace": [
+        "    if 11 <= (pos_num % 100) <= 13:",
+        "        return \"th\"",
+        "    return {1: \"st\", 2: \"nd\", 3: \"rd\"}.get(pos_num % 10, \"th\")"
+      ]
+    },
+    {
+      "path": "tests/test_utils.py",
+      "find": [
+        "import functools",
+        "",
+        "from tenacity import _utils"
+      ],
+      "replace": [
+        "import functools",
+        "",
+        "import pytest",
+        "",
+        "from tenacity import _utils"
+      ]
+    },
+    {
+      "path": "tests/test_utils.py",
+      "find": "def test_find_ordinal() -> None:",
+      "replace": [
+        "@pytest.mark.parametrize(",
+        "    (\"number\", \"suffix\"),",
+        "    [",
+        "        (0, \"th\"),",
+        "        (1, \"st\"),",
+        "        (2, \"nd\"),",
+        "        (3, \"rd\"),",
+        "        (4, \"th\"),",
+        "        (10, \"th\"),",
+        "        (11, \"th\"),",
+        "        (12, \"th\"),",
+        "        (13, \"th\"),",
+        "        (20, \"th\"),",
+        "        (21, \"st\"),",
+        "        (101, \"st\"),",
+        "        (102, \"nd\"),",
+        "        (111, \"th\"),",
+        "        (1013, \"th\"),",
+        "        (1023, \"rd\"),",
+        "    ],",
+        ")",
+        "def test_find_ordinal_table(number: int, suffix: str) -> None:",
+        "    assert _utils.find_ordinal(number) == suffix",
+        "",
+        "",
+        "def test_find_ordinal() -> None:"
+      ]
+    }
+  ]
+}

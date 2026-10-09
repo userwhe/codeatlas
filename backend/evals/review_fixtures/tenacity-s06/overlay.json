@@ -1,0 +1,32 @@
+{
+  "edits": [
+    {
+      "path": "tenacity/__init__.py",
+      "find": [
+        "import dataclasses",
+        "import functools"
+      ],
+      "replace": [
+        "import copy",
+        "import dataclasses",
+        "import functools"
+      ]
+    },
+    {
+      "path": "tenacity/__init__.py",
+      "find": [
+        "        #: Arguments of the function wrapped by this retry call",
+        "        self.args = args",
+        "        #: Keyword arguments of the function wrapped by this retry call",
+        "        self.kwargs = kwargs"
+      ],
+      "replace": [
+        "        #: Arguments of the function wrapped by this retry call. They are",
+        "        #: copied so that an attempt that mutates them cannot affect the next.",
+        "        self.args = copy.deepcopy(args)",
+        "        #: Keyword arguments of the function wrapped by this retry call",
+        "        self.kwargs = copy.deepcopy(kwargs)"
+      ]
+    }
+  ]
+}

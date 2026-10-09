@@ -57,6 +57,21 @@ export function AnswerDetail({ runId }: { runId: string }) {
     return <p className="text-sm text-zinc-500">Loading answer…</p>;
   }
 
+  // The same address space holds pull request reviews, which have their own page.
+  if (run.kind !== "repository_qa") {
+    return (
+      <div className="flex flex-col gap-4">
+        <RepositoryLink repositoryId={run.repository_id} />
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          This is a pull request review, not an answer.{" "}
+          <Link href={`/reviews/${run.id}`} className="font-medium underline">
+            Open the review
+          </Link>
+        </p>
+      </div>
+    );
+  }
+
   const active = isActiveJob(run.status);
 
   return (
@@ -268,9 +283,11 @@ function lineText({ start_line, end_line }: Citation) {
 }
 
 /** The excerpt's lines, without the empty line after a final line break. */
-function excerptLines(excerpt: string) {
+function excerptLines({ excerpt, start_line, end_line }: Citation) {
+  // Excerpts are the cited lines joined by line breaks, so a final empty element is a blank last
+  // line of the range, not a trailing break; drop it only when there is one element too many.
   const lines = excerpt.split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length > end_line - start_line + 1 && lines[lines.length - 1] === "") lines.pop();
   return lines;
 }
 
@@ -319,7 +336,7 @@ function CitationItem({
         hidden={!open}
         className="border-t border-zinc-200 py-2 dark:border-zinc-800"
       >
-        <CodeLines lines={excerptLines(citation.excerpt)} firstLine={citation.start_line} />
+        <CodeLines lines={excerptLines(citation)} firstLine={citation.start_line} />
       </div>
     </li>
   );

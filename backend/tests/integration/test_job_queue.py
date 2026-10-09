@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from codeatlas.auth.sessions import COOKIE_NAME, create_session
+from codeatlas.config import Settings
 from codeatlas.db import new_session
 from codeatlas.jobs import queue, worker
 from codeatlas.jobs.queue import JobFailure, LeaseLost
@@ -445,6 +446,62 @@ def test_a_passed_deadline_fails_the_job_with_timeout(db: Session) -> None:
     row = reload(db, question.id)
     assert (row.status, row.attempt, row.error_code) == ("failed", 1, "timeout")
     assert events(db, question.id)[-1].data == {"code": "timeout"}
+
+
+@pytest.mark.parametrize(
+    ("kind", "deadline_setting", "message"),
+    [
+        (
+            "index_repository",
+            "indexing_deadline",
+            "Indexing did not finish within the time limit.",
+        ),
+        (
+            "answer_question",
+            "question_deadline",
+            "Answering the question did not finish within the time limit.",
+        ),
+        (
+            "review_pull_request",
+            "review_deadline",
+            "Reviewing the pull request did not finish within the time limit.",
+        ),
+    ],
+)
+def test_each_kind_has_its_own_deadline_and_timeout_message(
+    db: Session, settings: Settings, kind: str, deadline_setting: str, message: str
+) -> None:
+    job = add_job(db, make_repository(db), kind=kind)
+    t0 = datetime.now(UTC)
+
+    claimed = claim(db, now=t0)
+
+    row = reload(db, job.id)
+    assert row.started_at == t0
+    assert claimed.deadline_at == row.deadline_at == t0 + getattr(settings, deadline_setting)
+
+    # An abandoned attempt found after the deadline fails with the kind's message.
+    assert queue.claim_next(db, now=claimed.deadline_at + timedelta(seconds=1)) is None
+    row = reload(db, job.id)
+    assert (row.status, row.error_code, row.error_message, row.error_retryable) == (
+        "failed",
+        "timeout",
+        message,
+        True,
+    )
+    assert queue.timeout_failure(kind).message == message
+
+
+def test_the_jobs_api_reports_a_review_job(db: Session, client: TestClient) -> None:
+    repository = make_repository(db)
+    job = add_job(db, repository, kind="review_pull_request")
+    assert repository.created_by is not None
+    sign_in_as(client, db, repository.created_by)
+
+    response = client.get(f"/v1/jobs/{job.id}")
+
+    assert response.status_code == 200, response.text
+    assert (response.json()["kind"], response.json()["status"]) == ("review_pull_request", "queued")
 
 
 def test_cancel_for_repository_cancels_waiting_jobs_only(db: Session) -> None:

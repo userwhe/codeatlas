@@ -30,6 +30,7 @@ os.environ.update(
         "GITHUB_APP_SLUG": "codeatlas-test",
         "GITHUB_WEBHOOK_SECRET": "test-webhook-secret",
         "DAILY_QUESTION_LIMIT": "20",
+        "DAILY_REVIEW_LIMIT": "10",
         "FAKE_ANSWER_MODEL_MODE": "ok",
         "FAKE_EMBEDDER_MODE": "ok",
     }

@@ -1,0 +1,27 @@
+{
+  "edits": [
+    {
+      "path": "source/priority-queue.ts",
+      "find": [
+        "import lowerBound from './lower-bound.js';",
+        ""
+      ],
+      "replace": ""
+    },
+    {
+      "path": "source/priority-queue.ts",
+      "find": [
+        "\t\t// Binary insertion must run on the live sorted range only.",
+        "\t\tthis.#compact();",
+        "\t\tconst index = lowerBound(this.#queue, element, (a: Readonly<PriorityQueueOptions>, b: Readonly<PriorityQueueOptions>) => b.priority! - a.priority!);",
+        "\t\tthis.#queue.splice(index, 0, element);"
+      ],
+      "replace": [
+        "\t\t// Array.prototype.sort is stable, so equal priorities keep their order.",
+        "\t\tthis.#compact();",
+        "\t\tthis.#queue.push(element);",
+        "\t\tthis.#queue.sort((a, b) => b.priority! - a.priority!);"
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from codeatlas.config import Settings
 from codeatlas.github.fake import (
+    REVIEW_APP_ID,
     SAMPLE_APP_ID,
     SAMPLE_APP_RENAMED,
     commit_sha,
@@ -438,8 +439,10 @@ def test_an_automatic_run_verifies_the_workspace_owners_access(
     octocat_repository = connect_and_index(octocat, run_worker_once)
     hubot_repository = connect_and_index(signed_in("hubot"), run_worker_once)
     fake = get_fake_github()
-    # hubot can still see the public repository, but no longer through an installation.
+    # hubot can still see the public repository, but no longer through an installation. The
+    # installation also covers review-app, so hubot loses that repository too.
     fake.revoke_access("hubot", SAMPLE_APP_ID)
+    fake.revoke_access("hubot", REVIEW_APP_ID)
 
     sha = fake.push(SAMPLE_APP_ID)
     deliver_push(octocat, sha)

@@ -1,0 +1,12 @@
+{
+  "edits": [
+    {
+      "path": "src/fetch.ts",
+      "find": "          const data = await context.response.text();",
+      "replace": [
+        "          // Read a clone so that onResponse hooks can still read the body.",
+        "          const data = await context.response.clone().text();"
+      ]
+    }
+  ]
+}

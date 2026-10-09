@@ -18,6 +18,8 @@ GitHub's (`<owner>-<repo>-<sha[:7]>/`).
 | 2008 | `octocat/solo`                | `no-code/`                                | octocat          |
 | 2009 | `hubot/tools`                 | `no-code/`                                | hubot            |
 | 2010 | `monalisa/public-lib`         | `no-code/`                                | App not installed |
+| 2011 | `octo-org/review-app`         | `review-app/` + pull requests             | octocat, hubot   |
+| 2012 | `octo-org/review-app-private` | same as review-app (private), #1 only     | octocat          |
 
 As on GitHub, every user can see a public repository; the Access column lists who reaches it
 through an installation of the App. Installations: `octo-org` 5001, `octocat` 5002, `hubot` 5003.
@@ -56,6 +58,26 @@ Everything else is eligible, including `.env.example` (not a credential file) an
 Commits: `main` starts at `initial`. `FakeGitHub.advance(2001)` moves it to `second`, which
 renames `app/utils/strings.py` to `app/utils/text.py` and deletes `app/reports.py`
 (`SAMPLE_APP_RENAMED`, `SAMPLE_APP_DELETED`).
+
+## review-app
+
+A small Python and TypeScript app with tests, for pull request reviews. Its pull requests are
+built from the overlays in `../pull-requests/` (see the README there); the 001 and 002 fixtures
+stay unchanged. Commit `initial` is the merge base of every pull request, and both `main` and
+`release` point to it.
+
+| Path                         | What to assert on                                                   |
+|------------------------------|---------------------------------------------------------------------|
+| `app/auth/permissions.py`    | `User`, `WRITE_ROLES`, and `can_write` (role and repository checks) |
+| `app/repositories.py`        | `rename_repository`, which calls `can_write`                       |
+| `app/text.py`                | `slugify`                                                           |
+| `tests/test_permissions.py`  | owner, viewer, and other-repository cases for `can_write`          |
+| `tests/test_text.py`         | one `slugify` case                                                  |
+| `web/src/format.ts`          | `formatCount`; `formatCount(0)` gives `"0 item"` until #2 fixes it |
+| `web/src/format.test.ts`     | two `formatCount` cases (`describe`, `it`, `expect`)                |
+
+The test files are data: the fixture conftest keeps pytest from collecting them, and nothing runs
+the TypeScript test.
 
 ## no-code
 

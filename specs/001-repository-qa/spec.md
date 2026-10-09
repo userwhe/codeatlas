@@ -318,10 +318,11 @@ is denied immediately, and confirm its stored data is gone after the purge windo
   time the repository is connected or indexed. Continuous access rechecks arrive with automatic
   re-indexing in a later feature.
 - Later features, each specified separately, in rough order: automatic re-indexing on push with
-  access revocation handling; a code dependency graph; pull request impact reports; CI failure
-  diagnosis; issue sync and triage; weekly engineering reports; knowledge-base document uploads;
-  GitHub write actions through reviewed drafts, including review comments and merge suggestions; a
-  conversational assistant with memory; multi-agent workflows; an answer-quality evaluation
-  dashboard; and pilot deployment with operational readiness.
-- Out of scope until further notice: Git providers other than GitHub, and executing repository
-  code.
+  access revocation handling; pull request reviews; pilot deployment with operational readiness;
+  posting reviews to GitHub as drafts the user approves; an MCP server that lets AI coding
+  assistants ask questions, search, and request reviews; and a code dependency graph that extends
+  pull request impact analysis. CI failure diagnosis may follow.
+- Out of scope until further notice: Git providers other than GitHub, executing repository code,
+  a conversational assistant with memory, multi-agent workflows, issue sync and triage, weekly
+  engineering reports, knowledge-base document uploads, merge suggestions, and an answer-quality
+  evaluation dashboard.

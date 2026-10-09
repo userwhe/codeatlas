@@ -142,13 +142,20 @@ def get_scoped(
 
 
 def list_for_repository(
-    db: Session, repository_id: uuid.UUID, *, offset: int, limit: int
+    db: Session,
+    repository_id: uuid.UUID,
+    *,
+    offset: int,
+    limit: int,
+    kind: str | None = None,
 ) -> list[AnalysisRun]:
+    """Runs of one repository, newest first; `kind` narrows them to questions or reviews."""
+    query = select(AnalysisRun).where(AnalysisRun.repository_id == repository_id)
+    if kind is not None:
+        query = query.where(AnalysisRun.kind == kind)
     return list(
         db.scalars(
-            select(AnalysisRun)
-            .where(AnalysisRun.repository_id == repository_id)
-            .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id)
+            query.order_by(AnalysisRun.created_at.desc(), AnalysisRun.id)
             .offset(offset)
             .limit(limit)
         )
@@ -162,7 +169,7 @@ def view_url(snapshot_id: uuid.UUID, path: str, start_line: int, end_line: int) 
 
 def citations(db: Session, run: AnalysisRun) -> list[dict[str, Any]]:
     """Citations built from stored evidence items, never from model text (FR-020)."""
-    if run.result is None:
+    if run.result is None or run.snapshot_id is None:
         return []
     labels = cited_labels(AnswerOutput.model_validate(run.result))
     items = {
