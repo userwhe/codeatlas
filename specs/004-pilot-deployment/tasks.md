@@ -50,12 +50,12 @@ leak into later tests (research R18). Tests of settings parsing itself build
 **Purpose**: Remove the AWS deployment, prepare the backend image and CI (including the schema
 report before this feature's first migration), and open the accounts
 
-- [ ] T001 Remove the AWS deployment (research R20): delete the `infra/` and `deploy/` directories
+- [X] T001 Remove the AWS deployment (research R20): delete the `infra/` and `deploy/` directories
   entirely (including `infra/**/.terraform.lock.hcl` and `deploy/tests/`) and
   `.github/workflows/release.yml`; delete the `infra` job from `.github/workflows/ci.yml`; delete
   the Terraform entries from `.gitignore` (`.terraform/`, `*.tfstate`, `*.tfstate.*`, `*.tfplan`,
   `plan.out`, `infra/**/*.tfvars`, `infra/**/backend.hcl`) and keep every other rule.
-- [ ] T002 [P] Backend image and dependency (research R2, R12): run `uv add boto3` in `backend/`
+- [X] T002 [P] Backend image and dependency (research R2, R12): run `uv add boto3` in `backend/`
   (updating backend/pyproject.toml and backend/uv.lock). In backend/Dockerfile, before the
   dependency layers, install Debian's `postgresql-client-17` with
   `apt-get install --no-install-recommends` and remove the apt lists in the same layer; replace the
@@ -64,7 +64,7 @@ report before this feature's first migration), and open the accounts
   `ENV` line for local builds (research R6 explains why the platform's commit must take
   precedence). Check that `docker build backend` succeeds and that `pg_dump --version` in the image
   prints 17.
-- [ ] T003 CI changes (research R7, R18; after T001, same file) in `.github/workflows/ci.yml`:
+- [X] T003 CI changes (research R7, R18; after T001, same file) in `.github/workflows/ci.yml`:
   - in the `backend` job, before `uv run pytest`, install `postgresql-client-17` from the PostgreSQL
     apt repository (`apt.postgresql.org`, for the runner's Ubuntu codename) and add
     `/usr/lib/postgresql/17/bin` to `$GITHUB_PATH`, so the backup tests run instead of skipping;

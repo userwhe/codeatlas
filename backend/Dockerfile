@@ -1,5 +1,12 @@
 FROM python:3.13-slim
 
+# pg_dump and pg_restore for `ops backup` and `ops restore`. The base image's Debian ships
+# PostgreSQL 17, the server's major version, which pg_dump requires (specs/004-pilot-deployment
+# research R2 and R12).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -22,10 +29,12 @@ RUN uv sync --frozen --no-dev
 COPY tests/fixtures/repos ./tests/fixtures/repos
 COPY tests/fixtures/pull-requests ./tests/fixtures/pull-requests
 
-# A fixed UID: render-config gives the containers' secret files to UID 1000.
+# The app runs as a fixed, non-root UID.
 RUN useradd --uid 1000 --create-home app
 
-# The commit SHA, reported by /version. Set after the dependency layers to keep them cached.
+# The release reported by /version in local builds; on Railway, the platform's commit takes
+# precedence (specs/004-pilot-deployment research R6). Set after the dependency layers to keep
+# them cached.
 ARG CODEATLAS_RELEASE=development
 ENV CODEATLAS_RELEASE=$CODEATLAS_RELEASE
 
