@@ -143,4 +143,22 @@ Filled in during final validation: dates, results, and any scenario not run, wit
 end 10 tests, and the infrastructure checks passed. They are superseded by the checks above and
 are kept here only as history.
 
-**Not run yet**: every scenario on Railway.
+**2026-10-12, automated checks** (every command in "Automated checks", run locally against
+PostgreSQL 17 with pgvector in Docker):
+
+- Backend: `ruff check`, `ruff format --check`, `mypy src` (86 files), and `pytest`: 1,606 passed,
+  none skipped. The backup and restore tests ran with `pg_dump` and `pg_restore` 17 from the
+  `pgvector/pgvector:pg17` image on `PATH`; without them they skip with a reason.
+- Frontend: `npm run lint`, `npm run typecheck`, `node --test "scripts/*.test.mjs"` (9 passed), and
+  `npm run build` pass; `npm run test:e2e` against the stack in fake mode: 10 passed. Against that
+  stack, `/version`, `/readyz`, and `/status/worker` answered through the web app, and every page
+  carried `Strict-Transport-Security`.
+- Images: `docker build backend` (with `pg_dump` 17.11) and
+  `docker build --target production frontend` succeed.
+- `.railway/railway.ts` type-checks against the pinned `railway` package; `railway config plan`
+  needs the developer's account and is part of T024.
+
+**Not run yet**: every scenario on Railway (1 to 22), the fault tests, the recovery exercise, the
+load test, the evaluation, the credential scan, and the cost and availability checks. They need the
+Railway account, the pilot GitHub App, the Better Stack monitors, or model provider keys, and wait
+for the developer actions T004, T024, T042, T045, T048, T049, T051, T054, and T056.

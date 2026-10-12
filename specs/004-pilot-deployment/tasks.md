@@ -611,12 +611,12 @@ tests.
   `CloudWatch`, `Terraform`, `render-config`, `codeatlas-compose`, `Session Manager`, `SSM`,
   `infra/`, and `deploy/`, and fix every remaining mention in code comments, docstrings,
   README.md, and docs/.
-- [ ] T053 Run every command in quickstart.md "Automated checks" and fix any failure.
+- [X] T053 Run every command in quickstart.md "Automated checks" and fix any failure.
 - [ ] T054 Developer action: credential scan (SC-006): `gitleaks git` over the repository history;
   an export of 7 days of logs (`railway logs` for each service) scanned with `gitleaks dir`; and,
   besides CI's build-argument check (T003), a look at one build log of each Dockerfile service to
   confirm that only the allowed build arguments were passed.
-- [ ] T055 Final validation: complete quickstart.md's "Validation record" with dates and results,
+- [X] T055 Final validation: complete quickstart.md's "Validation record" with dates and results,
   and name any scenario not run, with the reason.
 - [ ] T056 Developer action, after launch: after 14 days, record the web app monitor's availability
   (SC-001); after the first full month, the month's Railway usage (SC-002); and daily model spend in
