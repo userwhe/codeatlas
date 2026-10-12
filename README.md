@@ -10,7 +10,7 @@ takes traffic only after its readiness check, an external monitor and Railway's 
 alerts by email, and the database is backed up every night to a private bucket in a separate
 Railway project (see [Deployment](#deployment)).
 
-A short demo recording from the pilot will appear here once the pilot runs.
+A short demo recording from the pilot will appear here.
 
 ## What it does
 
@@ -102,8 +102,9 @@ flowchart LR
 
 ## Deployment
 
-The pilot runs on Railway (Hobby plan, US East), built from the repository's Dockerfiles, with one
-replica of each service.
+The pilot runs at [codeatlas-pilot.up.railway.app](https://codeatlas-pilot.up.railway.app), by
+invitation only, on Railway (Hobby plan, US East), built from the repository's Dockerfiles, with
+one replica of each service.
 
 - **Services**: `web` (Next.js) is the only service with a public address, Railway's
   `*.up.railway.app` domain for it. `api` (FastAPI), `worker`, and `backup`, a nightly cron job,

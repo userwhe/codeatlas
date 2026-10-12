@@ -238,9 +238,13 @@ and tests unchanged.
   | `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `PGDATA` |
 
 - **Reference variables** keep values consistent and make a copied environment correct by
-  itself: `APP_ORIGIN=https://${{web.RAILWAY_PUBLIC_DOMAIN}}`,
-  `DATABASE_URL=postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas`,
+  itself:
+  `DATABASE_URL=postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas`
   and `API_ORIGIN=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` (on `web`, `worker`, and `backup`).
+  `APP_ORIGIN` is written out as the pilot's address instead: the first deployment showed that
+  after the generated domain was renamed, Railway kept the old name in `RAILWAY_PUBLIC_DOMAIN`, so
+  a reference to it sent GitHub an OAuth callback the App did not know. A copied environment sets
+  its own `APP_ORIGIN`.
   The `BACKUP_*` values come from a bucket in another project (R12), which references cannot
   reach, so the developer copies them from the bucket's credentials and seals them on `backup`.
 - **Setting secrets**: the CLI sets a variable (`railway variable set NAME --stdin
@@ -439,6 +443,12 @@ scripts. The gate turns per-service deployments into one release that succeeds o
   size limits, which the package's types accept. Each of these goes in the file if
   `railway config plan` shows it, and in the dashboard otherwise, recorded in the operations guide;
   the timings are variables (R7), which the file always holds.
+- **The first plan and deployment** (2026-10-12) applied all of these from the file, but "Wait for
+  CI" only when Railway's GitHub App can already see the repository at `apply`: without that
+  access, the services had no deployment trigger until one was created for each, with "Wait for
+  CI". Railway builds each app service with the Dockerfile in its root directory by itself, its
+  API has no Dockerfile builder value, and it does not report back its default restart policy (on
+  failure, 10 retries), so the file names no builder and sets a restart policy only for `backup`.
 
 **Rationale**: A plan-then-apply workflow is the preview FR-025 asks for, and a file in the
 repository is the record FR-016 asks for. Keeping secrets out of the file and the Railway token out

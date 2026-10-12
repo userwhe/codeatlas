@@ -79,7 +79,7 @@ report before this feature's first migration), and open the accounts
   - in the `backend` and `frontend` jobs, a step that fails when the job's Dockerfile declares an
     `ARG` other than `CODEATLAS_RELEASE`, `API_ORIGIN`, `RAILWAY_GIT_COMMIT_SHA`, and
     `NEXT_PUBLIC_RELEASE`, naming the argument (research R5, SC-006).
-- [ ] T004 Developer action (needed before T024): accounts and tools (quickstart.md
+- [X] T004 Developer action (needed before T024): accounts and tools (quickstart.md
   "Prerequisites"): a Railway account on the Hobby plan; the Railway CLI with `railway config` and
   `railway ssh`, signed in with `railway login`; the developer's SSH public key registered on the
   Railway account; a Better Stack account on the free plan.
