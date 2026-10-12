@@ -1,6 +1,8 @@
 // Railway infrastructure as code for the pilot: the `production` environment of the `codeatlas`
-// project, in US East. It records the services, the database volume, the backups bucket, and
-// their variables (specs/004-pilot-deployment/contracts/operations.md).
+// project, in US East. It records the services, the database volume, and their variables
+// (specs/004-pilot-deployment/contracts/operations.md). The backups bucket is not here: it lives in
+// a separate project, `codeatlas-backups`, so that losing this environment or project does not
+// lose the backups (research R12).
 //
 // The developer applies it from their own machine, signed in with the Railway CLI; CI holds no
 // Railway token:
@@ -10,28 +12,17 @@
 //   railway config apply       # plans again, asks for confirmation, then applies
 //
 // Secrets are declared with preserve(), so no value is in this file: the developer sets each one
-// as a sealed variable with the CLI or the dashboard, and apply keeps it. A variable set on Railway
+// with the CLI and seals it in the dashboard, and apply keeps it. A variable set on Railway
 // but not declared here appears in the next plan as a destructive deletion. Settings this file
 // cannot hold (the generated domain, notification rules, usage limits, and any field below that
 // `railway config plan` does not show) are recorded in docs/operations.md.
 
-import {
-  bucket,
-  defineRailway,
-  github,
-  image,
-  preserve,
-  project,
-  ref,
-  service,
-  volume,
-} from "railway/iac";
+import { defineRailway, github, image, preserve, project, service, volume } from "railway/iac";
 
 const repository = "userwhe/codeatlas";
 
-// US East (Virginia): the region identifier for services and volumes, and the bucket's region.
+// US East (Virginia): the region identifier for services and volumes.
 const region = "us-east4-eqdc4a";
-const bucketRegion = "iad";
 
 const oneReplicaInRegion = { [region]: 1 };
 
@@ -158,9 +149,9 @@ export default defineRailway(() => {
     },
   });
 
-  // Nightly logical backups to a private bucket (research R12). Only the backup service holds the
-  // bucket's credentials.
-  const backupBucket = bucket("backups", { region: bucketRegion });
+  // Nightly logical backups to the private bucket `backups` of the separate project
+  // `codeatlas-backups` (research R12). Only the backup service holds the bucket's credentials,
+  // which the developer copies from that bucket and seals here.
   const backup = service("backup", {
     source: fromMain("backend"),
     build: { builder: "DOCKERFILE" },
@@ -178,16 +169,16 @@ export default defineRailway(() => {
     env: {
       DATABASE_URL: databaseUrl,
       API_ORIGIN: apiOrigin,
-      BACKUP_ENDPOINT_URL: ref(backupBucket, "ENDPOINT"),
-      BACKUP_REGION: ref(backupBucket, "REGION"),
-      BACKUP_BUCKET: ref(backupBucket, "BUCKET"),
-      BACKUP_ACCESS_KEY_ID: ref(backupBucket, "ACCESS_KEY_ID"),
-      BACKUP_SECRET_ACCESS_KEY: ref(backupBucket, "SECRET_ACCESS_KEY"),
+      BACKUP_ENDPOINT_URL: preserve(),
+      BACKUP_REGION: preserve(),
+      BACKUP_BUCKET: preserve(),
+      BACKUP_ACCESS_KEY_ID: preserve(),
+      BACKUP_SECRET_ACCESS_KEY: preserve(),
       BACKUP_RETENTION_DAYS: "7",
     },
   });
 
   return project("codeatlas", {
-    resources: [web, api, worker, backup, db, dbData, backupBucket],
+    resources: [web, api, worker, backup, db, dbData],
   });
 });

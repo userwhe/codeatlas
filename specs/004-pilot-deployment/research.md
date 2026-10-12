@@ -73,7 +73,7 @@ PostgreSQL 17 client tools (`pg_dump`, `pg_restore`). The frontend gains no npm 
   | `worker` | `backend/Dockerfile` | `python -m codeatlas.jobs.worker`; pre-deploy release gate | No | 1, 2 GB |
   | `backup` | `backend/Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC); pre-deploy release gate | No | 0.5, 0.5 GB |
   | `db` | image `pgvector/pgvector:pg17`, volume at `/var/lib/postgresql/data` | PostgreSQL 17 with pgvector | No | 1, 1 GB |
-  | `backups` | Railway bucket | S3-compatible storage | No (credentials only) | n/a |
+  | `backups` | Railway bucket in the separate project `codeatlas-backups` (R12) | S3-compatible storage | No (credentials only) | n/a |
 
 - **Limits**: Railway bills used CPU and memory, not limits. The limits above cap a runaway process
   and are the "service sizes" the load test reports (R15). The worker's 2 GB covers reading an
@@ -240,9 +240,13 @@ and tests unchanged.
 - **Reference variables** keep values consistent and make a copied environment correct by
   itself: `APP_ORIGIN=https://${{web.RAILWAY_PUBLIC_DOMAIN}}`,
   `DATABASE_URL=postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas`,
-  `API_ORIGIN=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` (on `web`, `worker`, and `backup`), and
-  `BACKUP_ENDPOINT_URL=${{backups.ENDPOINT}}` with the bucket's `BUCKET`, `REGION`,
-  `ACCESS_KEY_ID`, and `SECRET_ACCESS_KEY`.
+  and `API_ORIGIN=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` (on `web`, `worker`, and `backup`).
+  The `BACKUP_*` values come from a bucket in another project (R12), which references cannot
+  reach, so the developer copies them from the bucket's credentials and seals them on `backup`.
+- **Setting secrets**: the CLI sets a variable (`railway variable set NAME --stdin
+  --skip-deploys`, so the value never appears in the shell history), and the dashboard seals it;
+  the CLI cannot seal. Sealed values are not copied into duplicated environments, so `drill` and
+  `loadtest` need their own, including a new `POSTGRES_PASSWORD`.
 - **Private key**: Railway variables are strings, and the key was read from a file. A new setting,
   `GITHUB_APP_PRIVATE_KEY`, holds the PEM itself (a multi-line variable). Production needs it or a
   readable `GITHUB_APP_PRIVATE_KEY_PATH`; the content wins when both are set. The GitHub client
@@ -372,8 +376,10 @@ the Git checkout (not present in the image).
   pre-deploy command skips migrations when the database is ahead, the rolled-back API starts
   against the newer schema. Hobby keeps a replaced deployment's image for 72 hours. After that a
   rollback redeploys the earlier commit (`git revert` on `main` through a pull request, or
-  `railway redeploy` of that commit), which builds again and serves within about 15 minutes
-  (FR-024). The CLI has no rollback command.
+  "Redeploy" on the earlier deployment in the dashboard), which builds again and serves within
+  about 15 minutes (FR-024). The CLI has no rollback command, and `railway redeploy` redeploys only
+  a service's latest deployment. A rollback restores the old deployment's variables as well as its
+  image, so a credential replaced since then is set again afterward.
 - **Rehearsals** (SC-010): changing `api`'s healthcheck path to one that returns 404 and redeploying
   makes `api` fail its readiness check without changing code, and the previous `api` keeps
   serving. In a duplicated environment (`drill`) with that broken path, merging a visible change
@@ -584,7 +590,11 @@ then block releases and restart the API).
   backup holding it is dated D+1 at the latest, and the run on D+8 prunes it: at most 8 days and a
   few hours after deletion, within the disclosed 10 days. The bound holds while the nightly runs
   happen; if they stop, the backup alert fires after 26 hours.
-- **Storage**: a Railway bucket, `backups`, private and encrypted at rest. Its endpoint is
+- **Storage**: a Railway bucket, `backups`, private and encrypted at rest, in a separate project,
+  `codeatlas-backups`. Railway gives each environment its own buckets, so a bucket in `production`
+  would be lost with the environment or the project it should help rebuild; in its own project, only
+  the loss of the Railway account takes it (FR-031). The developer creates it once and copies its
+  credentials into `backup`'s sealed `BACKUP_*` variables. Its endpoint is
   S3-compatible (`boto3`, with the endpoint, region, and virtual-hosted addressing that the bucket's
   credentials give). Railway buckets have no lifecycle rules, versioning, or object lock, and one
   key pair per bucket with full access, so the backup command prunes old backups itself, and the
@@ -609,7 +619,8 @@ then block releases and restart the API).
   The developer then redeploys `worker` and `web`.
 - **Recovery exercise** (SC-008): the developer duplicates `production` into `drill`. The copy has
   the services, configuration, and non-secret variables, an empty volume, and a new domain; the
-  developer sets the sealed secrets again, removes the worker's deployment so no background job
+  developer sets the sealed secrets again (a new `POSTGRES_PASSWORD` included, and no `BACKUP_*`
+  values, so the drill never writes backups), removes the worker's deployment so no background job
   acts on the restored data, waits for `api` to start, stops `web`, restores the latest backup,
   starts `web`, and adds `https://<drill domain>/auth/github/callback` as a second callback URL of
   the pilot App. They sign in on the drill, check their repositories, answers, and reviews, record
@@ -621,8 +632,8 @@ then block releases and restart the API).
     (FR-031). The guide tells the developer to inform pilot users of the backup time, so they can
     disconnect repositories again; access losses are found again by the daily check (002 FR-012).
   - A lost environment or project: rebuild it with `railway config apply` (R8), set the secrets,
-    reclaim or replace the domain (R3), and restore as above. If the bucket was lost with the
-    project, so are the backups (FR-031).
+    reclaim or replace the domain (R3), and restore as above: the backups survive in
+    `codeatlas-backups`. Only losing the Railway account loses them too (FR-031).
 - **After a restore**: the newest `backups` row is the one before the restored backup, so
   `/status/backup` may alert until the next nightly run; the guide says to expect it, or to run the
   backup once by hand.
@@ -689,7 +700,8 @@ Changing a limit is a variable change on `api` and `worker`, deployed from the s
 - **Target**: a `loadtest` environment duplicated from `production`: the same services, sizes,
   and commit, an empty database, and its own domain. Its variables are overridden before the first
   deployment: `CODEATLAS_ENV=development`, `CODEATLAS_FAKE_EXTERNALS=1`, raised limits,
-  `RATE_LIMIT_PER_MINUTE=0`, a new `TOKEN_ENCRYPTION_KEY`, and no other secrets. The `backup`
+  `RATE_LIMIT_PER_MINUTE=0`, a new `TOKEN_ENCRYPTION_KEY`, a new `POSTGRES_PASSWORD`, and no
+  other secrets. The `backup`
   service's cron schedule is removed in this environment. The environment is deleted after the
   run.
 - **Driver**: the existing `evals/perf_check.py` (001 SC-007's categories, fake sign-in included),

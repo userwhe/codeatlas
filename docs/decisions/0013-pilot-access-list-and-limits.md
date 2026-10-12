@@ -42,7 +42,7 @@ Option 1:
   - Access changes take effect at once, are audited, and are restored with backups.
   - Daily model spend has a known ceiling.
 - **Accepted**:
-  - Adding a user needs a command on the host, through Session Manager.
+  - Adding a user needs a command on the host, through the platform's SSH (`railway ssh`), ADR 0014.
   - Heavy use by a few users can exhaust the pilot-wide limit for everyone that day.
   - Removing a user keeps their data until the developer deletes it.
 - **Revisit when**:

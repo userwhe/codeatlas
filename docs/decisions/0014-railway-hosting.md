@@ -32,14 +32,17 @@ Option 1:
   and `loadtest` are temporary copies.
 - Services, one replica each: `web` (the only public service, at its `*.up.railway.app` domain),
   `api`, `worker`, `backup` (a nightly cron service), and `db` (`pgvector/pgvector:pg17` with a
-  volume, no public domain or TCP proxy), plus a `backups` bucket. The backend's one image serves
-  `api`, `worker`, and `backup`; it gains Debian's `postgresql-client-17`.
+  volume, no public domain or TCP proxy), plus a `backups` bucket in a separate project,
+  `codeatlas-backups`: Railway gives each environment its own buckets, and a bucket inside the
+  pilot's environment would be lost with the environment it should help rebuild. The backend's one
+  image serves `api`, `worker`, and `backup`; it gains Debian's `postgresql-client-17`.
 - The web app forwards the API's paths over the private network, so the browser, GitHub's
   webhooks, and the OAuth callback use one origin.
 - Configuration lives in `.railway/railway.ts` (Railway's infrastructure as code). The developer
   previews it with `railway config plan` and applies it with `railway config apply`. Secrets are
   sealed variables declared with `preserve()`, so their values are never in the file. Reference
-  variables derive each environment's origin, database URL, and bucket settings. Settings the file
+  variables derive each environment's origin and database URL; the bucket's credentials are copied
+  into sealed variables, because references cannot reach another project. Settings the file
   cannot hold (the generated domain, size limits, notification rules, usage limits) are recorded in
   the operations guide. Railway's older `railway.json` is deprecated and not used.
 - Nightly backups are logical dumps with row counts, uploaded to the bucket by
@@ -58,7 +61,8 @@ Option 1:
   - Each service is a single replica on one platform; a platform outage takes the pilot down.
   - The Hobby plan caps the database volume at 5 GB and keeps logs for 7 days.
   - The backups live in the same Railway account as the database, and the bucket's one key pair
-    can delete them; losing the account loses both.
+    can delete them; losing the account loses both. Its credentials are copied by hand into the
+    pilot, and copied again when they are reset.
   - Part of the configuration stays outside the file, and the infrastructure as code tool is new.
   - The configuration is specific to Railway; moving elsewhere means rewriting it, though not the
     application.

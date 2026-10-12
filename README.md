@@ -4,10 +4,13 @@ CodeAtlas answers questions about a GitHub repository and reviews its pull reque
 evidence. Every claim in an answer points to exact file and line ranges at the indexed commit, and
 a question the code does not answer gets an "insufficient evidence" result instead of a guess.
 
-CodeAtlas runs as an invitation-only pilot at a public HTTPS address. One AWS host runs every
-service, Terraform defines the environment, each release waits for the operator's approval and
-rolls back by itself when its check fails, CloudWatch alarms send alerts by email, and the database
-is backed up to S3 every night (see [Deployment](#deployment)).
+CodeAtlas runs as an invitation-only pilot at a public HTTPS address on Railway. Every service runs
+from the repository's Dockerfiles, every commit merged into `main` is released once CI passes and
+takes traffic only after its readiness check, an external monitor and Railway's notifications send
+alerts by email, and the database is backed up every night to a private bucket in a separate
+Railway project (see [Deployment](#deployment)).
+
+A short demo recording from the pilot will appear here once the pilot runs.
 
 ## What it does
 
@@ -54,101 +57,109 @@ is backed up to S3 every night (see [Deployment](#deployment)).
   set of evidence as structured JSON, and the server validates every citation. Voyage AI embeds
   documentation during indexing and search queries in the API.
 
-## Deployment
-
-The pilot runs on one EC2 instance (`t4g.medium`, Arm) in AWS `us-east-2`, where Docker Compose
-runs the same services as in development, with Caddy in front. Terraform in `infra/` defines the
-environment, and `deploy/` holds the Compose file, the configuration, and the host scripts.
-
-- **Edge**: Caddy serves HTTPS with a Let's Encrypt certificate and routes the API's paths to the
-  API and everything else to the web app. Only ports 80 and 443 are open; administration goes
-  through AWS Systems Manager, without SSH.
-- **Data**: PostgreSQL runs in a container, with its data on a separate encrypted volume that
-  outlives the instance. A nightly job dumps the database to S3.
-- **Releases**: after CI passes on a push to `main`, GitHub Actions builds both images and posts a
-  release summary (the commit, the commits since the running version, and new migrations), then
-  waits for the operator's approval. Only then, with short-lived credentials from GitHub's OIDC
-  provider, does it push the images to ECR, upload the release bundle to S3, and start the host's
-  release script through SSM Run Command. The script migrates, starts the new release, checks it,
-  and returns to the previous release when the check fails. Where the AWS account may not trust
-  GitHub's OIDC provider, the operator runs the same steps by hand, also with short-lived
-  credentials.
-- **Monitoring**: the services' and host scripts' logs go to CloudWatch Logs. Alarms watch the
-  worker's metrics, disk use, the EC2 status checks, the nightly backup, and the certificate, and
-  email the operator through SNS when they fire and when they recover. Two external Route 53 health
-  checks add their own alarms when the pilot runs in `us-east-1`, the only region with their
-  metrics. A CloudWatch dashboard shows the last 7 days.
-- **Credentials**: SSM parameters, rendered into the services' configuration on the host at each
-  release. No container has AWS credentials, and GitHub stores no AWS key.
+The deployed pilot ([Deployment](#deployment)):
 
 ```mermaid
 flowchart LR
   browser["Browser"]
   hooks["GitHub webhooks"]
-  actions["GitHub Actions<br/>(Release workflow)"]
+  monitor["Better Stack<br/>(external monitor)"]
 
-  subgraph aws["AWS"]
-    subgraph host["EC2 host: Docker Compose"]
-      caddy["Caddy<br/>(HTTPS, routing)"]
-      web["Web app<br/>(Next.js)"]
-      api["API<br/>(FastAPI)"]
-      worker["Worker"]
-      db[("PostgreSQL<br/>(data volume)")]
-      scripts["Host scripts<br/>(release, backup,<br/>certificate check)"]
+  subgraph railway["Railway project: codeatlas (production)"]
+    edge["Railway edge<br/>(HTTPS, *.up.railway.app)"]
+    subgraph private["Private network"]
+      web["web<br/>(Next.js)"]
+      api["api<br/>(FastAPI)"]
+      worker["worker"]
+      backup["backup<br/>(nightly cron)"]
+      db[("db<br/>(PostgreSQL 17, pgvector,<br/>volume)")]
     end
-    ecr[("ECR<br/>(images)")]
-    ssm["SSM<br/>(Run Command,<br/>parameters)"]
-    s3[("S3<br/>(backups, bundles)")]
-    cloudwatch["CloudWatch<br/>(logs, metrics,<br/>alarms)"]
+  end
+
+  subgraph backups["Railway project: codeatlas-backups"]
+    bucket[("backups<br/>(bucket)")]
   end
 
   githubapi["GitHub API"]
   gemini["Gemini"]
   voyage["Voyage AI"]
 
-  browser -->|HTTPS| caddy
-  hooks -->|HTTPS| caddy
-  caddy --> web
-  caddy --> api
+  browser -->|HTTPS| edge
+  hooks -->|HTTPS| edge
+  monitor -->|"/, /readyz, /status/*"| edge
+  edge --> web
+  web -->|"API paths"| api
   api --> db
   worker --> db
+  backup --> db
+  backup -->|"dumps, manifests"| bucket
   api -->|sign-in| githubapi
   api -->|query embeddings| voyage
   worker -->|archives| githubapi
   worker -->|answers, reviews| gemini
   worker -->|embeddings| voyage
-  scripts -->|backups| s3
-  scripts -->|metrics| cloudwatch
-  host -.->|logs| cloudwatch
-  actions -->|images| ecr
-  actions -->|bundle| s3
-  actions -->|Run Command| ssm
-  ssm -->|release.sh| scripts
 ```
 
-Temporary environments built from the same definition run the recovery exercise and the load test.
+## Deployment
+
+The pilot runs on Railway (Hobby plan, US East), built from the repository's Dockerfiles, with one
+replica of each service.
+
+- **Services**: `web` (Next.js) is the only service with a public address, Railway's
+  `*.up.railway.app` domain for it. `api` (FastAPI), `worker`, and `backup`, a nightly cron job,
+  share the backend image; `db` is PostgreSQL 17 with pgvector on a volume. The web app forwards
+  the API's paths over Railway's private network, so the browser, GitHub's webhooks, and the
+  sign-in callback use one origin; `api`, `worker`, `backup`, and `db` have no public address.
+- **Edge**: Railway's edge serves HTTPS with a certificate it renews, redirects HTTP to HTTPS, and
+  reports the client address that the API's rate limit counts.
+- **Configuration**: `.railway/railway.ts` records the services, their commands, healthchecks,
+  sizes, and schedule, and the names of their variables. The developer previews each change with
+  `railway config plan` and applies it with `railway config apply`. Secrets are sealed variables
+  on the services that use them; the repository, the images, and CI hold no credentials.
+- **Releases**: every commit merged into `main` is released once CI passes ("Wait for CI").
+  `api` migrates the database before its new version starts, skipping when the database is ahead
+  so that rollbacks work, and takes traffic only after its readiness check passes. `web`,
+  `worker`, and `backup` wait until `api` reports their commit, so a failed migration or readiness
+  check stops the whole release while the previous version keeps serving. Rollback is one action
+  per service. CI lists every schema change on pull requests, for review before the merge.
+- **Monitoring**: Railway keeps every service's logs, searchable by their JSON fields, and its
+  metrics, and emails failed builds, failed deployments, crashes, and spending thresholds. Better
+  Stack checks the public address, readiness, and four status endpoints (the worker's heartbeat,
+  waiting jobs, failing jobs, and backups) every 3 minutes from outside Railway, and emails on
+  failure and on recovery.
+- **Backups**: every night at 03:30 UTC, `backup` dumps the database with its row counts from one
+  snapshot, uploads the dump and its manifest to a private bucket in a separate Railway project,
+  `codeatlas-backups`, and deletes the backups older than 7 days. Losing the pilot's environment or
+  project therefore leaves the backups. A restore checks the dump's checksum and the row counts
+  before the pilot opens again.
+
+Temporary copies of the environment run the recovery exercise and the load test. The
+[operations guide](docs/operations.md) has every procedure.
 
 ## Known limitations
 
-- **The single host is a single point of failure.** If the instance or its data volume fails, the
-  pilot is down until the host is replaced or rebuilt from the latest backup; there is no standby.
-- **Releases interrupt service for up to 60 seconds**, while the services restart on that host.
-- **Up to 24 hours of changes can be lost.** If the data volume is lost, the pilot is restored from
-  the latest nightly backup, and changes made after it are lost. If a nightly backup fails and is
-  not fixed before the next one, more than 24 hours can be lost.
+- **Each service runs as a single instance on one hosting platform.** A failure of a service, or an
+  outage of Railway, interrupts the pilot until the service restarts or Railway recovers; there is
+  no standby.
+- **Releases interrupt service for up to 60 seconds**, while traffic moves to the new version.
+- **Up to 24 hours of changes can be lost.** If the database's volume is lost, the pilot is
+  restored from the latest nightly backup, and changes made after it are lost. If a nightly backup
+  fails and is not fixed before the next one, more than 24 hours can be lost.
+- **The backups are held by the same Railway account as the database.** They live in a separate
+  project, so losing the pilot's environment or project leaves them, but losing the account loses
+  both the database and its backups.
 - **GitHub notifications sent while the pilot is down are caught only by the daily check.** GitHub
   does not resend failed webhook deliveries, so a push or an access change made during an outage
   is picked up by the daily check, up to a day later.
 
 ## Data retention
 
-- **Logs**: the logs of every service and host script are kept in CloudWatch Logs for 7 days. They
-  carry request, job, run, and snapshot IDs, and never tokens, source text, prompts, or model
-  output.
-- **Backups**: the nightly database dumps are encrypted in S3 and expire 7 days after they are
-  taken, rounded up to the next midnight UTC. Deleted data is purged from the database within 24
-  hours, so it can remain in a backup for up to 10 days after deletion, as the external processing
-  disclosure states.
+- **Logs**: Railway keeps the logs of every service for 7 days. They carry request, job, run, and
+  snapshot IDs, and never tokens, source text, prompts, or model output.
+- **Backups**: the nightly database dumps are kept in a private Railway bucket in a separate
+  project, encrypted at rest, and each nightly run first deletes the backups dated before the last
+  7 days. Deleted data is purged from the database within 24 hours, so it can remain in encrypted
+  backups for up to 10 days after deletion, as the external processing disclosure states.
 
 ## Run it
 
@@ -173,8 +184,9 @@ docker compose up api worker web
 Then open http://localhost:3000. The quickstart also shows how to run the API, the worker, and the
 web app outside containers.
 
-To run the pilot on AWS, follow the [operations guide](docs/operations.md): one-time setup,
-releases, monitoring, backups, restoring, recovery, managing pilot users, and tearing down.
+To run the pilot on Railway, follow the [operations guide](docs/operations.md): one-time setup,
+releases and rollbacks, alerts, logs and metrics, backups and restoring, recovery, managing pilot
+users, the load test, and tearing down.
 [specs/004-pilot-deployment/quickstart.md](specs/004-pilot-deployment/quickstart.md) has the
 pilot's validation scenarios.
 
@@ -194,9 +206,11 @@ latency targets runs against a running stack in fake mode:
 `cd backend && uv run python -m evals.perf_check --users 10 --duration 120` (see the module
 docstring for the required settings).
 
-CI also checks the deployment: Terraform formatting and validation of `infra/`, the host scripts
-with ShellCheck and `bats deploy/tests`, and the Compose, Caddy, and CloudWatch agent
-configurations (the `infra` job in `.github/workflows/ci.yml`).
+CI also runs the web app's release gate tests (`node --test scripts/` in `frontend/`), lists every
+schema change on pull requests (the `schema` job), and fails when a Dockerfile declares a build
+argument other than `CODEATLAS_RELEASE`, `API_ORIGIN`, `RAILWAY_GIT_COMMIT_SHA`, and
+`NEXT_PUBLIC_RELEASE`, so that no credential can reach a build. The backup and restore tests need
+`pg_dump` 17 on `PATH`; CI installs it, and locally they are skipped when it is missing.
 
 ## Measured results
 
@@ -204,12 +218,12 @@ Both reports are published after their measured runs and are not in the reposito
 
 - [Load test](docs/reports/load-test.md): p95 latency and errors by kind of request (targets:
   searches 1.5 s, views 0.5 s, submissions 1 s) at 10, 20, 40, and 80 concurrent users, against a
-  temporary environment with the pilot's host size and release images in fake mode; the highest
-  level that meets every target; and the host's peak CPU and memory.
+  temporary copy of the pilot's environment with the same service sizes and commit, in fake mode;
+  the highest level that meets every target; and each service's peak CPU and memory.
 - [Evaluation](docs/reports/evaluation.md): precision and recall on Code Review Bench's Python and
   TypeScript pull requests, scored by the benchmark's judge, next to other review tools' published
   results; and the question and review sets run with the real model providers. Every number comes
-  with its denominator.
+  with its denominator, and each item with its model cost and latency.
 
 ## Documentation
 
@@ -240,6 +254,9 @@ Both reports are published after their measured runs and are not in the reposito
   [operations contract](specs/004-pilot-deployment/contracts/operations.md), and
   [quickstart](specs/004-pilot-deployment/quickstart.md)
 - [Operations guide](docs/operations.md) for the pilot
+- Measured results: the [load test report](docs/reports/load-test.md) and the
+  [evaluation report](docs/reports/evaluation.md), both pending their runs
+  ([Measured results](#measured-results))
 - [Architecture decision records](docs/decisions/):
   [application stack](docs/decisions/0001-application-stack.md),
   [PostgreSQL as the only data store](docs/decisions/0002-postgresql-as-the-only-data-store.md),
@@ -250,7 +267,11 @@ Both reports are published after their measured runs and are not in the reposito
   [GitHub webhooks](docs/decisions/0007-github-webhooks-for-change-notifications.md),
   [read-only pull request access](docs/decisions/0008-pull-request-read-access.md),
   [reviews from commit archives](docs/decisions/0009-pull-request-reviews-from-commit-archives.md),
-  [one EC2 host with Docker Compose](docs/decisions/0010-single-host-aws-deployment.md),
-  [Terraform and approved releases](docs/decisions/0011-terraform-and-approved-releases.md),
-  [CloudWatch monitoring](docs/decisions/0012-cloudwatch-monitoring.md), and
-  [pilot access list and limits](docs/decisions/0013-pilot-access-list-and-limits.md)
+  [pilot access list and limits](docs/decisions/0013-pilot-access-list-and-limits.md),
+  [Railway hosting](docs/decisions/0014-railway-hosting.md),
+  [releases on merge](docs/decisions/0015-releases-on-merge.md), and
+  [status endpoints and an external monitor](docs/decisions/0016-status-endpoints-and-external-monitor.md);
+  and, superseded by the last three,
+  [single-host deployment](docs/decisions/0010-single-host-aws-deployment.md),
+  [approved releases](docs/decisions/0011-terraform-and-approved-releases.md), and
+  [host monitoring](docs/decisions/0012-cloudwatch-monitoring.md)

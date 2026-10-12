@@ -273,7 +273,7 @@ indexed, asks a question, and reviews a pull request; a second account is turned
   - no backup service, bucket, or deployment timings yet (T040, T043).
   Check it with `railway config plan` (reading only), and record anything the plan does not show,
   including "Wait for CI" and the pre-deploy timeout, in the table of T023.
-- [ ] T023 [US1] Rewrite docs/operations.md for Railway, part 1 (FR-030; research R17): replace the
+- [X] T023 [US1] Rewrite docs/operations.md for Railway, part 1 (FR-030; research R17): replace the
   whole AWS guide with "Conventions" (developer actions and what needs no confirmation),
   "Environments", "One-time setup" (tools; the project from `.railway/railway.ts` with
   `railway config plan` and `apply`; confirming "Wait for CI" before anything deploys; generating
@@ -481,7 +481,7 @@ exercise).
   `BACKUP_*` reference variables to the bucket, and `BACKUP_RETENTION_DAYS=7`, and no other
   variable. Check with `railway config plan`; record anything the plan does not show in the
   operations guide's table of settings outside the file.
-- [ ] T041 [US2] docs/operations.md, part 2 (after T023): "Alerts" (Railway's notification rules
+- [X] T041 [US2] docs/operations.md, part 2 (after T023): "Alerts" (Railway's notification rules
   for build failed, deployment failed, and deployment crashed; usage limits with the $20 email alert
   and the $50 hard limit, and restarting services after the hard limit; the six Better Stack
   monitors from contracts/operations.md with their URLs and 3-minute interval, a 5-minute
@@ -524,7 +524,7 @@ place from Phase 1 and User Story 1 (T003, T022).
 - [X] T043 [US3] Add to .railway/railway.ts (after T040): `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS=10`
   and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=10` on `web` and `api`, and
   `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30` on `worker`. Check with `railway config plan`.
-- [ ] T044 [US3] docs/operations.md, part 3 (after T041): "Releases" (merge through pull requests,
+- [X] T044 [US3] docs/operations.md, part 3 (after T041): "Releases" (merge through pull requests,
   because a direct push to `main` also releases; what Railway does, the release gates, and how to
   watch them), "Migrations: expand, then contract" (with the `schema` job), "Rolling back" (the
   whole release, `api` first, each service's "Rollback" within 5 minutes; the 72-hour image window
@@ -586,7 +586,7 @@ tests.
   benchmark, question, and review runs in quickstart.md "Evaluation", then write
   docs/reports/evaluation.md with denominators, per-item failures, model cost and latency per item,
   the commit, set versions and SHA-256s, the review status of each set, and the caveats.
-- [ ] T050 [US4] Rewrite README.md's AWS content for Railway (FR-029, FR-031; research R17):
+- [X] T050 [US4] Rewrite README.md's AWS content for Railway (FR-029, FR-031; research R17):
   "Deployment" (the Railway services, the public address, releases on merge with the release
   gates, monitoring, and a link to the operations guide); "Architecture" with a Mermaid diagram
   (browser and GitHub to the platform's edge, `web`, the private network to `api`, `worker` and

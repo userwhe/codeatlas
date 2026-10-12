@@ -43,8 +43,9 @@ Option 1:
 - A CI job lists every added, changed, deleted, or renamed migration on every pull request, with
   the expand-then-contract rule, so the developer checks schema changes in review before merging.
 - Rollback is Railway's "Rollback" on a service's previous deployment: one action per service, no
-  rebuild, `api` first. On Hobby the previous image is kept for 72 hours after it is replaced;
-  after that, the earlier commit is redeployed and builds again.
+  rebuild, `api` first; it restores that deployment's variables too. On Hobby the previous image
+  is kept for 72 hours after it is replaced; after that, the earlier commit is redeployed and
+  builds again.
 
 ## Trade-off
 
@@ -59,7 +60,8 @@ Option 1:
   - Two small gate programs, one in each image, because the web image has no Python.
   - Rollback is per service and is done for the whole release, `api` first; after the 72-hour
     window it takes a build, about 15 minutes instead of 5.
-  - "Wait for CI" waits for every check suite on the commit, including ones from other GitHub Apps.
+  - "Wait for CI" waits for the commit's GitHub Actions workflows, so a check that runs only in
+    another GitHub App does not hold a release.
 - **Revisit when**:
   - a bad release reaches pilot users: add an approval step or a staging environment;
   - services need a strict deploy order; or

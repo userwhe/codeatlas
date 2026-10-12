@@ -27,7 +27,7 @@ volumes and a new generated domain, and does not receive sealed variables. Delet
 | `worker` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.jobs.worker` | `python -m codeatlas.ops wait-for-api` | none | On failure, 10 retries | No | 1 vCPU, 2 GB |
 | `backup` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC) | `python -m codeatlas.ops wait-for-api` | none | Never | No | 0.5 vCPU, 0.5 GB |
 | `db` | Image `pgvector/pgvector:pg17`; volume at `/var/lib/postgresql/data` | `docker-entrypoint.sh postgres -c shared_buffers=256MB -c max_connections=50` (a start command replaces the image's entrypoint) | none | none | On failure, 10 retries | No, and no TCP proxy | 1 vCPU, 1 GB |
-| `backups` | Railway bucket | n/a | n/a | n/a | n/a | No | n/a |
+| `backups` | Railway bucket in the separate project `codeatlas-backups`, created once by the developer | n/a | n/a | n/a | n/a | No | n/a |
 
 `web`, `api`, `worker`, and `backup` deploy from `main` with "Wait for CI" on from the first
 deployment. Pull request environments are off. The pre-deploy commands of `web`, `worker`, and
@@ -36,9 +36,10 @@ deployment's own commit at `/version` (research R7); their pre-deploy timeout is
 
 ## Variables
 
-Set in `.railway/railway.ts`; secrets are declared there with `preserve()` and set as sealed
-variables with the CLI or the dashboard, never in the repository. "Ref" marks a reference
-variable.
+Set in `.railway/railway.ts`; secrets are declared there with `preserve()`, set with the CLI
+(`railway variable set NAME --stdin --skip-deploys`), and sealed in the dashboard, never in the
+repository. "Ref" marks a reference variable. Sealed values are not copied into duplicated
+environments.
 
 | Variable | Services | Value |
 | --- | --- | --- |
@@ -55,7 +56,7 @@ variable.
 | `POSTGRES_USER`, `POSTGRES_DB` | db | `codeatlas` |
 | `POSTGRES_PASSWORD` | db | Sealed; generated once |
 | `PGDATA` | db | `/var/lib/postgresql/data/pgdata` |
-| `BACKUP_ENDPOINT_URL`, `BACKUP_REGION`, `BACKUP_BUCKET`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY` | backup | Ref: the bucket's `ENDPOINT`, `REGION`, `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY` |
+| `BACKUP_ENDPOINT_URL`, `BACKUP_REGION`, `BACKUP_BUCKET`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY` | backup | Sealed: copied from the credentials of the bucket `backups` in `codeatlas-backups` |
 | `BACKUP_RETENTION_DAYS` | backup | `7` |
 | `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS` | web, api | `10` |
 | `RAILWAY_DEPLOYMENT_DRAINING_SECONDS` | web, api; worker | `10`; `30` |

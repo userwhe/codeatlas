@@ -24,7 +24,8 @@ Technical approach:
 - **Hosting** (ADR 0014): one Railway project on the Hobby plan, in US East, with five services
   built from the repository: `web` (the only public one, at its `*.up.railway.app` domain), `api`,
   `worker`, a `backup` cron service, and `db` (`pgvector/pgvector:pg17` with a volume), plus a
-  `backups` bucket. Services talk over the private network; the web app forwards the API's paths.
+  `backups` bucket in a separate project, so that losing the pilot's environment or project does not
+  lose the backups. Services talk over the private network; the web app forwards the API's paths.
   About $13 a month (research R19).
 - **Configuration** (ADR 0014): Railway's infrastructure as code in `.railway/railway.ts`, previewed
   with `railway config plan` and applied by the developer; secrets are sealed variables kept out of
