@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import AliasChoices, ValidationError
 
 from codeatlas.config import Settings
 
@@ -25,11 +25,14 @@ SECRETS = {
     "VOYAGE_API_KEY": "secret-voyage-d81c",
 }
 DATABASE_URL = "postgresql+psycopg://codeatlas:secret-database-4b6f@db:5432/codeatlas"
-REQUIRED = (*SECRETS, "GITHUB_APP_PRIVATE_KEY_PATH")
+PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\nsecret-private-key-8a3e\n-----END PRIVATE KEY-----\n"
+MISSING_KEY_PATH = "/run/secrets/missing-key-e21d.pem"
 
 
 def production_values(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
-    """A complete production configuration; `overrides` replaces or empties single settings."""
+    """A complete production configuration with the private key in a file; `overrides` replaces or
+    empties single settings.
+    """
     key = tmp_path / "github-app.pem"
     key.write_text("-----BEGIN PRIVATE KEY-----\nnot a real key\n-----END PRIVATE KEY-----\n")
     return {
@@ -59,8 +62,10 @@ def _clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Read only what each test passes: tests/conftest.py sets test values in the environment."""
     for name, field in Settings.model_fields.items():
         monkeypatch.delenv(name.upper(), raising=False)
-        if isinstance(field.validation_alias, str):
-            monkeypatch.delenv(field.validation_alias, raising=False)
+        alias = field.validation_alias
+        for choice in alias.choices if isinstance(alias, AliasChoices) else [alias]:
+            if isinstance(choice, str):
+                monkeypatch.delenv(choice, raising=False)
 
 
 def test_a_complete_production_configuration_validates(tmp_path: Path) -> None:
@@ -70,7 +75,7 @@ def test_a_complete_production_configuration_validates(tmp_path: Path) -> None:
     assert settings.gemini_api_key == SECRETS["GEMINI_API_KEY"]
 
 
-@pytest.mark.parametrize("name", REQUIRED)
+@pytest.mark.parametrize("name", SECRETS)
 def test_each_missing_setting_is_named(tmp_path: Path, name: str) -> None:
     with pytest.raises(ValidationError) as refused:
         make(**production_values(tmp_path, **{name: ""}))
@@ -91,18 +96,58 @@ def test_every_missing_setting_is_named_in_one_error(tmp_path: Path) -> None:
     assert named(refused.value) == {"GITHUB_WEBHOOK_SECRET", "GEMINI_API_KEY", "VOYAGE_API_KEY"}
 
 
-@pytest.mark.parametrize(
-    ("name", "value"),
-    [
-        ("GITHUB_APP_PRIVATE_KEY_PATH", "/run/secrets/missing-key-e21d.pem"),
-        ("APP_ORIGIN", "http://codeatlas.example.com"),
-    ],
-)
+@pytest.mark.parametrize(("name", "value"), [("APP_ORIGIN", "http://codeatlas.example.com")])
 def test_an_invalid_setting_is_named(tmp_path: Path, name: str, value: str) -> None:
     with pytest.raises(ValidationError) as refused:
         make(**production_values(tmp_path, **{name: value}))
 
     assert named(refused.value) == {name}
+
+
+def test_the_private_key_may_be_given_as_its_content(tmp_path: Path) -> None:
+    # The platform holds the key in a variable, not in a file (research R5).
+    values = production_values(tmp_path, GITHUB_APP_PRIVATE_KEY=PRIVATE_KEY)
+    del values["GITHUB_APP_PRIVATE_KEY_PATH"]
+
+    settings = make(**values)
+
+    assert settings.github_app_private_key == PRIVATE_KEY
+    assert settings.github_app_private_key_path == ""
+
+
+def test_the_private_key_may_be_given_as_a_readable_file(tmp_path: Path) -> None:
+    settings = make(**production_values(tmp_path))
+
+    assert settings.github_app_private_key == ""
+    assert settings.github_app_private_key_path == str(tmp_path / "github-app.pem")
+
+
+@pytest.mark.parametrize("key_path", ["", MISSING_KEY_PATH])
+def test_without_a_private_key_the_error_names_github_app_private_key(
+    tmp_path: Path, key_path: str
+) -> None:
+    with pytest.raises(ValidationError) as refused:
+        make(
+            **production_values(
+                tmp_path, GITHUB_APP_PRIVATE_KEY=" \n", GITHUB_APP_PRIVATE_KEY_PATH=key_path
+            )
+        )
+
+    assert named(refused.value) == {"GITHUB_APP_PRIVATE_KEY"}
+    assert MISSING_KEY_PATH not in str(refused.value)
+
+
+def test_the_private_key_never_appears_in_an_error(tmp_path: Path) -> None:
+    values = production_values(
+        tmp_path, GITHUB_APP_PRIVATE_KEY=PRIVATE_KEY, GITHUB_WEBHOOK_SECRET=""
+    )
+    del values["GITHUB_APP_PRIVATE_KEY_PATH"]
+
+    with pytest.raises(ValidationError) as refused:
+        make(**values)
+
+    assert named(refused.value) == {"GITHUB_WEBHOOK_SECRET"}
+    assert "secret-private-key-8a3e" not in str(refused.value)
 
 
 def test_the_default_database_url_is_named(tmp_path: Path) -> None:
@@ -118,7 +163,6 @@ def test_the_default_database_url_is_named(tmp_path: Path) -> None:
 def test_no_value_appears_in_the_error(tmp_path: Path) -> None:
     # Before research R5, pydantic printed every input of the failed validation, secrets included.
     origin = "http://origin-5be0.example.com"
-    key_path = "/run/secrets/missing-key-e21d.pem"
 
     with pytest.raises(ValidationError) as refused:
         make(
@@ -126,7 +170,7 @@ def test_no_value_appears_in_the_error(tmp_path: Path) -> None:
                 tmp_path,
                 GITHUB_WEBHOOK_SECRET="",
                 APP_ORIGIN=origin,
-                GITHUB_APP_PRIVATE_KEY_PATH=key_path,
+                GITHUB_APP_PRIVATE_KEY_PATH=MISSING_KEY_PATH,
             )
         )
 
@@ -134,11 +178,17 @@ def test_no_value_appears_in_the_error(tmp_path: Path) -> None:
     assert named(refused.value) == {
         "GITHUB_WEBHOOK_SECRET",
         "APP_ORIGIN",
-        "GITHUB_APP_PRIVATE_KEY_PATH",
+        "GITHUB_APP_PRIVATE_KEY",
     }
     # Pydantic shortens a long input in the middle, so also check that it prints none at all.
     assert "input_value" not in message
-    for value in [*SECRETS.values(), DATABASE_URL, "secret-database-4b6f", origin, key_path]:
+    for value in [
+        *SECRETS.values(),
+        DATABASE_URL,
+        "secret-database-4b6f",
+        origin,
+        MISSING_KEY_PATH,
+    ]:
         assert value not in message
 
 

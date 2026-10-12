@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     github_app_slug: str = ""
     github_app_client_id: str = ""
     github_app_client_secret: str = ""
+    # The App's private key in PEM, as the platform holds it, or a file holding it; production
+    # needs one of them, and the content wins when both are set (research R5).
+    github_app_private_key: str = ""
     github_app_private_key_path: str = ""
     # Verifies GitHub webhook deliveries (research R2); required in production.
     github_webhook_secret: str = ""
@@ -84,7 +87,7 @@ class Settings(BaseSettings):
     review_deadline: timedelta = timedelta(minutes=5)
     session_ttl: timedelta = timedelta(days=7)
 
-    # Pilot deployment (specs/004-pilot-deployment/data-model.md, "Settings added").
+    # Pilot deployment (specs/004-pilot-deployment/data-model.md, "Settings").
     # The access list always applies in production; this enables it elsewhere (research R13).
     access_list_required: bool = False
     pilot_user_limit: int = 10
@@ -93,10 +96,40 @@ class Settings(BaseSettings):
     pilot_daily_review_limit: int = 15
     # Requests per client address per minute on `/auth/*` and `/webhooks/*` (FR-006); 0 disables.
     rate_limit_per_minute: int = 60
+    # The request header that carries the client's address; empty uses the connection's address
+    # (research R4).
+    client_address_header: str = ""
     emit_metrics: bool = False
     metrics_environment: str = "local"
-    # The commit SHA baked into the image at build time (research R6).
+    # The commit reported by `/version`. The platform's commit replaces it (see
+    # `_platform_commit_first`) because the image always defines `CODEATLAS_RELEASE`, which would
+    # otherwise hide it (research R6).
     release: str = Field(default="development", validation_alias="CODEATLAS_RELEASE")
+    # The platform's commit alone, empty outside a deployment from GitHub. The release gate waits
+    # for it, never for the image's local default, which no deployed API reports (research R7). Two
+    # fields cannot share an alias: pydantic-settings would give both the value it found first.
+    platform_commit: str = Field(default="", validation_alias="RAILWAY_GIT_COMMIT_SHA")
+    # The API's private address, which `ops wait-for-api` polls (research R7).
+    api_origin: str = "http://localhost:8000"
+    # The worker's report interval and the status conditions' thresholds (research R10).
+    worker_report_seconds: int = 60
+    worker_silent_seconds: int = 300
+    jobs_waiting_alert_seconds: int = 1800
+    jobs_failing_alert_count: int = 3
+    backup_missing_hours: int = 26
+    # The S3-compatible bucket of the backups (research R12).
+    backup_endpoint_url: str = ""
+    backup_region: str = ""
+    backup_bucket: str = ""
+    backup_access_key_id: str = ""
+    backup_secret_access_key: str = ""
+    backup_retention_days: int = 7
+
+    @model_validator(mode="after")
+    def _platform_commit_first(self) -> Self:
+        if self.platform_commit.strip():
+            self.release = self.platform_commit
+        return self
 
     @model_validator(mode="after")
     def _fakes_only_outside_production(self) -> Self:
@@ -119,7 +152,8 @@ class Settings(BaseSettings):
             "GITHUB_APP_SLUG": bool(self.github_app_slug.strip()),
             "GITHUB_APP_CLIENT_ID": bool(self.github_app_client_id.strip()),
             "GITHUB_APP_CLIENT_SECRET": bool(self.github_app_client_secret.strip()),
-            "GITHUB_APP_PRIVATE_KEY_PATH": _readable_file(self.github_app_private_key_path),
+            "GITHUB_APP_PRIVATE_KEY": bool(self.github_app_private_key.strip())
+            or _readable_file(self.github_app_private_key_path),
             "GITHUB_WEBHOOK_SECRET": bool(self.github_webhook_secret.strip()),
             "TOKEN_ENCRYPTION_KEY": bool(self.token_encryption_key.strip()),
             "GEMINI_API_KEY": bool(self.gemini_api_key.strip()),

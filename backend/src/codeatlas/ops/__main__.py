@@ -1,21 +1,21 @@
 """Operator commands (specs/004-pilot-deployment, FR-004, contracts/operations.md).
 
-The developer runs them on the host through Session Manager:
+The developer runs them in the `api` service's container through the platform's SSH, as
+`railway ssh -s api -- python -m codeatlas.ops <command>`:
 
-    codeatlas-compose run --rm api python -m codeatlas.ops pilot-users add <login> [--note TEXT]
-    codeatlas-compose run --rm api python -m codeatlas.ops pilot-users remove <login>
-    codeatlas-compose run --rm api python -m codeatlas.ops pilot-users delete-data <login>
-    codeatlas-compose run --rm api python -m codeatlas.ops pilot-users list
+    pilot-users add <login> [--note TEXT]
+    pilot-users remove <login>
+    pilot-users delete-data <login>
+    pilot-users list
+    backup-manifest --counts FILE --dump-key KEY --bytes N --sha256 HEX
+    verify-restore MANIFEST
 
-The backup scripts run the backup commands with the backup directory mounted at `/backup`
-(`codeatlas-compose run --rm -v /var/lib/codeatlas/backup:/backup:ro api ...`, research R12):
+The platform runs the release steps (research R7): `migrate` is `api`'s pre-deploy command, and
+`wait-for-api` is the release gate of `worker` and `backup`.
 
-    python -m codeatlas.ops backup-manifest --counts FILE --dump-key KEY --bytes N --sha256 HEX
-    python -m codeatlas.ops verify-restore MANIFEST
-
-Each command runs in one transaction, committed only when it succeeds. It exits 0 on success, and
-1 on a refusal, which it explains on standard error: in one line, or, when `verify-restore` finds
-differences, with one more line for each.
+Each command except the release steps runs in one transaction, committed only when it succeeds.
+A command exits 0 on success, and 1 on a refusal or a failure, which it explains on standard
+error: in one line, or, when `verify-restore` finds differences, with one more line for each.
 """
 
 import argparse
@@ -34,10 +34,16 @@ from codeatlas.config import get_settings
 from codeatlas.db import new_session
 from codeatlas.github.gateway import GitHubError, get_gateway
 from codeatlas.logging import configure_logging
-from codeatlas.ops import backup
+from codeatlas.ops import backup, release
 
 Command = Callable[[Session, argparse.Namespace], str]
 """Runs one command in the session and returns what to print on success."""
+
+MIGRATE_OUTPUT: dict[release.Decision, str] = {
+    "upgrade": "Migrated the database to this release's revision.",
+    "current": "The database is at this release's revision already.",
+    "ahead": "The database is ahead of this release; skipped the migrations.",
+}
 
 
 def _add(db: Session, args: argparse.Namespace) -> str:
@@ -114,6 +120,37 @@ def _verify_restore(db: Session, args: argparse.Namespace) -> str:
     )
 
 
+def _migrate() -> int:
+    try:
+        decision = release.run_migrations()
+    except Exception as exc:
+        # The first line only: SQLAlchemy adds the statement and its parameters, which may hold
+        # data, on the lines after it.
+        cause = str(exc).strip().split("\n", 1)[0]
+        print(f"error: the migration failed ({type(exc).__name__}: {cause})", file=sys.stderr)
+        return 1
+    print(MIGRATE_OUTPUT[decision])
+    return 0
+
+
+def _wait_for_api() -> int:
+    settings = get_settings()
+    commit = settings.platform_commit
+    if not release.wait_for_api(settings.api_origin, commit):
+        minutes = release.GATE_TIMEOUT_SECONDS // 60
+        print(
+            f"error: the API at {settings.api_origin} did not report commit {commit} "
+            f"within {minutes} minutes.",
+            file=sys.stderr,
+        )
+        return 1
+    if commit:
+        print(f"The API reports commit {commit}.")
+    else:
+        print("No commit from the platform: the release gate passes without waiting.")
+    return 0
+
+
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m codeatlas.ops", description="CodeAtlas operator commands."
@@ -176,11 +213,27 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     )
     verify_restore.add_argument("manifest", metavar="MANIFEST", help="The manifest file.")
     verify_restore.set_defaults(run=_verify_restore)
+
+    commands.add_parser(
+        "migrate",
+        help="Migrate the database to this release's revision, unless the database is ahead "
+        "(api's pre-deploy command).",
+    )
+    commands.add_parser(
+        "wait-for-api",
+        help="Wait until the API reports this release's commit (the release gate of worker and "
+        "backup).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    # The release steps open their own connections and need no session (research R7).
+    if args.command == "migrate":
+        return _migrate()
+    if args.command == "wait-for-api":
+        return _wait_for_api()
     run: Command = args.run
     db = new_session()
     try:

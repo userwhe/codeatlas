@@ -156,6 +156,7 @@ Built by `ops backup` with the existing pure functions in `codeatlas.ops.backup`
 | `PILOT_DAILY_REVIEW_LIMIT` | `15` | Pilot-wide; FR-005 |
 | `RATE_LIMIT_PER_MINUTE` | `60` | Per client address on `/auth/*`, `/webhooks/*`, and `/status/*`; 0 disables |
 | `CODEATLAS_RELEASE` | `development` | The commit reported by `/version`. `RAILWAY_GIT_COMMIT_SHA`, which the platform sets for deployments from GitHub, takes precedence, because the image always defines `CODEATLAS_RELEASE` (changed; research R6) |
+| `RAILWAY_GIT_COMMIT_SHA` | empty | New as a setting, `platform_commit`: the platform's commit alone. It replaces the release when set, and the release gate waits for it (research R6, R7) |
 | `API_ORIGIN` | `http://localhost:8000` | New for the backend: the API's private address, which `ops wait-for-api` polls (research R7); the web app already reads it |
 | `GITHUB_APP_PRIVATE_KEY` | empty | New: the App's private key itself, in PEM. Production needs this or a readable `GITHUB_APP_PRIVATE_KEY_PATH`; the content wins when both are set |
 | `WORKER_REPORT_SECONDS` | `60` | New: how often the worker reports its heartbeat and queue state |

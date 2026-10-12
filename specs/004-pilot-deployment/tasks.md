@@ -96,7 +96,7 @@ gate
 
 ### Tests for the foundation ⚠️ (write first, confirm they fail)
 
-- [ ] T005 [P] Unit tests in backend/tests/unit/test_config.py for the new settings (data-model.md,
+- [X] T005 [P] Unit tests in backend/tests/unit/test_config.py for the new settings (data-model.md,
   "Settings"), read with `Settings(_env_file=None)` and a clean environment:
   - defaults: `github_app_private_key` is `""`; `client_address_header` is `""`; `api_origin` is
     `http://localhost:8000`; `worker_report_seconds` 60; `worker_silent_seconds` 300;
@@ -105,18 +105,18 @@ gate
     `backup_access_key_id`, and `backup_secret_access_key` are `""`;
   - `release` is `RAILWAY_GIT_COMMIT_SHA` when set, else `CODEATLAS_RELEASE`, else
     `"development"`; with both set, `RAILWAY_GIT_COMMIT_SHA` wins (research R6).
-- [ ] T006 [P] Unit tests in backend/tests/unit/test_production_settings.py for the private key rule
+- [X] T006 [P] Unit tests in backend/tests/unit/test_production_settings.py for the private key rule
   (research R5): production settings pass with `GITHUB_APP_PRIVATE_KEY` set to a PEM and
   `GITHUB_APP_PRIVATE_KEY_PATH` unset; they pass with a readable key file and no content; with
   neither, the error names `GITHUB_APP_PRIVATE_KEY` and contains neither the PEM nor the path.
   Update the existing tests that expect `GITHUB_APP_PRIVATE_KEY_PATH` in the error.
-- [ ] T007 [P] Unit tests in backend/tests/unit/test_github_client_auth.py for signing the App's JWT
+- [X] T007 [P] Unit tests in backend/tests/unit/test_github_client_auth.py for signing the App's JWT
   with the key content: generate an RSA key with `cryptography`; with `github_app_private_key` set,
   the token `GitHubClient._app_jwt()` returns verifies with the public key and has `iss` equal to
   `github_app_id`; with only a key file, the same; with both, the content is used (the file holds a
   different key); with neither, the error names both `GITHUB_APP_PRIVATE_KEY` and
   `GITHUB_APP_PRIVATE_KEY_PATH`.
-- [ ] T008 [P] Unit tests in backend/tests/unit/test_release.py for `codeatlas.ops.release`
+- [X] T008 [P] Unit tests in backend/tests/unit/test_release.py for `codeatlas.ops.release`
   (research R7):
   - `decide(database_revision, known_revisions, head)` returns `"upgrade"` when the database's
     revision is `None` or known and not `head`, `"current"` when it equals `head`, and `"ahead"`
@@ -128,7 +128,7 @@ gate
     once, without a request, when `commit` is empty;
   - `main(["wait-for-api"])` exits 0 when `wait_for_api` returns true and 1 when it returns false
     (patched), reading `api_origin` and `release` from the settings.
-- [ ] T009 [P] Integration tests in backend/tests/integration/test_ops_migrate.py, each on a scratch
+- [X] T009 [P] Integration tests in backend/tests/integration/test_ops_migrate.py, each on a scratch
   database created and dropped by the test (as backend/tests/conftest.py creates the test
   database):
   - `main(["migrate"])` on an empty database upgrades to the head revision and exits 0; a second
@@ -136,23 +136,24 @@ gate
   - with `alembic_version` set to `ffffffffffff`, it exits 0, logs `migrations_skipped` with
     `database_revision` and `release_revision`, and changes no table;
   - when `alembic.command.upgrade` raises (patched), it exits 1.
-- [ ] T010 [P] Extend backend/tests/unit/test_logging_redaction.py: the new structured fields
+- [X] T010 [P] Extend backend/tests/unit/test_logging_redaction.py: the new structured fields
   `queued_jobs`, `oldest_runnable_job_age_seconds`, `database_revision`, `release_revision`,
   `commit`, `reported_commit`, `object_key`, `bytes`, and `pruned` reach the top level of the JSON
   line, and a key outside the allow-list is still dropped.
 
 ### Implementation for the foundation
 
-- [ ] T011 Settings in backend/src/codeatlas/config.py (data-model.md, "Settings"):
+- [X] T011 Settings in backend/src/codeatlas/config.py (data-model.md, "Settings"):
   - add `github_app_private_key: str = ""`, `client_address_header: str = ""`,
     `api_origin: str = "http://localhost:8000"`, `worker_report_seconds: int = 60`,
     `worker_silent_seconds: int = 300`, `jobs_waiting_alert_seconds: int = 1800`,
     `jobs_failing_alert_count: int = 3`, `backup_missing_hours: int = 26`, `backup_endpoint_url`,
     `backup_region`, `backup_bucket`, `backup_access_key_id`, and `backup_secret_access_key` (all
     `str = ""`), and `backup_retention_days: int = 7`;
-  - read `release` with `validation_alias=AliasChoices("RAILWAY_GIT_COMMIT_SHA",
-    "CODEATLAS_RELEASE")`, and change its comment to say the platform's commit takes precedence
-    because the image always defines `CODEATLAS_RELEASE` (research R6);
+  - read the platform's commit as `platform_commit` (`RAILWAY_GIT_COMMIT_SHA`) and let it replace
+    `release` (`CODEATLAS_RELEASE`) in a model validator when set, with comments saying the
+    platform's commit takes precedence because the image always defines `CODEATLAS_RELEASE`, and
+    that the two fields cannot share an alias (research R6);
   - in `_complete_in_production`, replace the `GITHUB_APP_PRIVATE_KEY_PATH` entry with
     `"GITHUB_APP_PRIVATE_KEY": bool(self.github_app_private_key.strip()) or
     _readable_file(self.github_app_private_key_path)`;
@@ -162,13 +163,13 @@ gate
   - check in the image built by T002 that `docker run --rm -e RAILWAY_GIT_COMMIT_SHA=abc <image>
     python -c "from codeatlas.config import get_settings; print(get_settings().release)"` prints
     `abc`.
-- [ ] T012 [P] Sign with the key content in backend/src/codeatlas/github/client.py: `_app_jwt` uses
+- [X] T012 [P] Sign with the key content in backend/src/codeatlas/github/client.py: `_app_jwt` uses
   `github_app_private_key` when it is not blank and otherwise reads
   `github_app_private_key_path`; with neither, it raises `RuntimeError` naming both settings.
-- [ ] T013 [P] Add `queued_jobs`, `oldest_runnable_job_age_seconds`, `database_revision`,
+- [X] T013 [P] Add `queued_jobs`, `oldest_runnable_job_age_seconds`, `database_revision`,
   `release_revision`, `commit`, `reported_commit`, `object_key`, `bytes`, and `pruned` to
   `STRUCTURED_FIELDS` in backend/src/codeatlas/logging.py.
-- [ ] T014 Create backend/src/codeatlas/ops/release.py (research R7; contracts/operations.md,
+- [X] T014 Create backend/src/codeatlas/ops/release.py (research R7; contracts/operations.md,
   "Operator commands"):
   - pure `decide` as T008 describes;
   - `known_revisions_and_head()` from Alembic's `ScriptDirectory`, with the `Config` built from
@@ -182,11 +183,11 @@ gate
     returns the decision;
   - `wait_for_api(...)` as T008 describes, with defaults of 20 minutes and 5 seconds, logging
     `release_gate_waiting` once with `commit` and `reported_commit`, and the outcome at the end.
-- [ ] T015 Add the `migrate` and `wait-for-api` commands to backend/src/codeatlas/ops/__main__.py,
+- [X] T015 Add the `migrate` and `wait-for-api` commands to backend/src/codeatlas/ops/__main__.py,
   both outside the per-command session: `migrate` runs `run_migrations()` and exits 0 when
   migrated, current, or skipped, and 1 with a one-line explanation when a migration fails;
-  `wait-for-api` runs `wait_for_api(get_settings().api_origin, get_settings().release)` and exits 0
-  or 1. Rewrite the module docstring for the platform: commands run as
+  `wait-for-api` runs `wait_for_api(get_settings().api_origin, get_settings().platform_commit)`
+  and exits 0 or 1, so outside a deployment from GitHub it passes at once. Rewrite the module docstring for the platform: commands run as
   `railway ssh -s api -- python -m codeatlas.ops <command>`, `migrate` is `api`'s pre-deploy
   command, and `wait-for-api` is the release gate of `worker` and `backup`.
 

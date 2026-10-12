@@ -77,6 +77,7 @@ PILOT_ENVIRONMENT = (
     "EMIT_METRICS",
     "METRICS_ENVIRONMENT",
     "CODEATLAS_RELEASE",
+    "RAILWAY_GIT_COMMIT_SHA",
 )
 
 
@@ -97,7 +98,80 @@ def test_pilot_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.release == "development"
 
 
-def test_release_is_read_from_codeatlas_release() -> None:
-    settings = make(CODEATLAS_RELEASE="3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091")
+PLATFORM_ENVIRONMENT = (
+    "GITHUB_APP_PRIVATE_KEY",
+    "CLIENT_ADDRESS_HEADER",
+    "API_ORIGIN",
+    "WORKER_REPORT_SECONDS",
+    "WORKER_SILENT_SECONDS",
+    "JOBS_WAITING_ALERT_SECONDS",
+    "JOBS_FAILING_ALERT_COUNT",
+    "BACKUP_MISSING_HOURS",
+    "BACKUP_ENDPOINT_URL",
+    "BACKUP_REGION",
+    "BACKUP_BUCKET",
+    "BACKUP_ACCESS_KEY_ID",
+    "BACKUP_SECRET_ACCESS_KEY",
+    "BACKUP_RETENTION_DAYS",
+)
 
-    assert settings.release == "3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091"
+
+def test_platform_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in PLATFORM_ENVIRONMENT:
+        monkeypatch.delenv(name, raising=False)
+
+    settings = make()
+
+    assert settings.github_app_private_key == ""
+    assert settings.client_address_header == ""
+    assert settings.api_origin == "http://localhost:8000"
+    assert settings.worker_report_seconds == 60
+    assert settings.worker_silent_seconds == 300
+    assert settings.jobs_waiting_alert_seconds == 1800
+    assert settings.jobs_failing_alert_count == 3
+    assert settings.backup_missing_hours == 26
+    assert settings.backup_retention_days == 7
+    assert settings.backup_endpoint_url == ""
+    assert settings.backup_region == ""
+    assert settings.backup_bucket == ""
+    assert settings.backup_access_key_id == ""
+    assert settings.backup_secret_access_key == ""
+
+
+PLATFORM_COMMIT = "3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091"
+IMAGE_RELEASE = "image-release-5d2a"
+
+
+@pytest.mark.parametrize(
+    ("environment", "release"),
+    [
+        ({"RAILWAY_GIT_COMMIT_SHA": PLATFORM_COMMIT}, PLATFORM_COMMIT),
+        ({"CODEATLAS_RELEASE": IMAGE_RELEASE}, IMAGE_RELEASE),
+        ({}, "development"),
+        # The image always defines CODEATLAS_RELEASE, so the platform's commit wins (research R6).
+        (
+            {"RAILWAY_GIT_COMMIT_SHA": PLATFORM_COMMIT, "CODEATLAS_RELEASE": IMAGE_RELEASE},
+            PLATFORM_COMMIT,
+        ),
+    ],
+)
+def test_release_prefers_the_platforms_commit(
+    monkeypatch: pytest.MonkeyPatch, environment: dict[str, str], release: str
+) -> None:
+    for name in ("RAILWAY_GIT_COMMIT_SHA", "CODEATLAS_RELEASE"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    assert make().release == release
+
+
+def test_platform_commit_reads_only_the_platforms_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA", raising=False)
+    monkeypatch.setenv("CODEATLAS_RELEASE", IMAGE_RELEASE)
+    assert make().platform_commit == ""
+
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", PLATFORM_COMMIT)
+    assert make().platform_commit == PLATFORM_COMMIT

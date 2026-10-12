@@ -277,9 +277,12 @@ variables remove hand-copied values, which was the earlier design's render step.
 
 **Decision**:
 
-- Railway gives every GitHub-triggered build and deployment `RAILWAY_GIT_COMMIT_SHA`. The API's
-  `release` setting reads it first (`AliasChoices("RAILWAY_GIT_COMMIT_SHA", "CODEATLAS_RELEASE")`),
-  so `/version` and each backup's manifest report the deployed commit (FR-019).
+- Railway gives every GitHub-triggered build and deployment `RAILWAY_GIT_COMMIT_SHA`. The settings
+  read it as `platform_commit`, and when it is set it replaces `release` (which reads
+  `CODEATLAS_RELEASE`), so `/version` and each backup's manifest report the deployed commit
+  (FR-019). The two fields keep separate aliases: with one alias shared, pydantic-settings gives
+  both fields the value it found first. The release gate waits for `platform_commit`, never for
+  the image's local default.
   `CODEATLAS_RELEASE` applies only where the platform's variable is absent: local builds, tests,
   and a deployment made with `railway up`.
 - The backend Dockerfile keeps `ARG CODEATLAS_RELEASE=development` and its `ENV` line for local
