@@ -83,7 +83,11 @@ A duplicated environment copies the services, their configuration, and the non-s
 It gets empty volumes and its own generated domain, and does not receive sealed variables, so its
 `backup` service has no bucket keys, and a nightly run there fails without writing anything. Its
 services are staged until you deploy them. It deploys from `main` like the pilot, so while it
-exists, a merge releases there too. Delete it after use (["Tearing down"](#tearing-down)).
+exists, a merge releases there too. Its `APP_ORIGIN` on `api` and `worker` is copied with the
+pilot's address, because `.railway/railway.ts` writes the origin out (Railway keeps a renamed
+domain's old name in `RAILWAY_PUBLIC_DOMAIN`): set it to `https://<its domain>` before the first
+deployment, or sign-in redirects to the pilot. Delete it after use (["Tearing
+down"](#tearing-down)).
 Railway's notification rules cover every environment of the project, so a temporary
 environment's failed deployments email you as well; the monitors watch only the pilot.
 

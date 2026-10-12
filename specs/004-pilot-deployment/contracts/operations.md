@@ -49,7 +49,7 @@ environments.
 | --- | --- | --- |
 | `CODEATLAS_ENV` | api, worker | `production` (`development` in `loadtest`) |
 | `CODEATLAS_FAKE_EXTERNALS` | api, worker | `0` (`1` in `loadtest`) |
-| `APP_ORIGIN` | api, worker | Ref: `https://${{web.RAILWAY_PUBLIC_DOMAIN}}` |
+| `APP_ORIGIN` | api, worker | `https://codeatlas-pilot.up.railway.app`, written out: after the generated domain was renamed, Railway kept the old name in `RAILWAY_PUBLIC_DOMAIN`, and the OAuth callback pointed at it. A duplicated environment sets its own |
 | `DATABASE_URL` | api, worker, backup | Ref: `postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas` |
 | `API_ORIGIN` | web (build argument and run time), worker, backup | Ref: `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` |
 | `PORT` | web, api | `3000`, `8000` |

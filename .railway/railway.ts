@@ -48,8 +48,11 @@ function sizeLimit(cpu: number, memoryGB: number) {
 }
 
 // Values that embed another service's variable use Railway's reference syntax, which the platform
-// resolves at deploy time, so a duplicated environment gets its own domains and password.
-const appOrigin = "https://${{web.RAILWAY_PUBLIC_DOMAIN}}";
+// resolves at deploy time, so a duplicated environment gets its own private domains and password.
+// The public origin is written out instead: after a generated domain is renamed, Railway keeps the
+// old name in `RAILWAY_PUBLIC_DOMAIN`, and the OAuth callback would point at it. A duplicated
+// environment sets its own APP_ORIGIN (docs/operations.md).
+const appOrigin = "https://codeatlas-pilot.up.railway.app";
 const databaseUrl =
   "postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas";
 const apiOrigin = "http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000";

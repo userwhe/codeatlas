@@ -238,9 +238,13 @@ and tests unchanged.
   | `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `PGDATA` |
 
 - **Reference variables** keep values consistent and make a copied environment correct by
-  itself: `APP_ORIGIN=https://${{web.RAILWAY_PUBLIC_DOMAIN}}`,
-  `DATABASE_URL=postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas`,
+  itself:
+  `DATABASE_URL=postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas`
   and `API_ORIGIN=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` (on `web`, `worker`, and `backup`).
+  `APP_ORIGIN` is written out as the pilot's address instead: the first deployment showed that
+  after the generated domain was renamed, Railway kept the old name in `RAILWAY_PUBLIC_DOMAIN`, so
+  a reference to it sent GitHub an OAuth callback the App did not know. A copied environment sets
+  its own `APP_ORIGIN`.
   The `BACKUP_*` values come from a bucket in another project (R12), which references cannot
   reach, so the developer copies them from the bucket's credentials and seals them on `backup`.
 - **Setting secrets**: the CLI sets a variable (`railway variable set NAME --stdin
