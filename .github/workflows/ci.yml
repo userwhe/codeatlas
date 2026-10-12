@@ -89,6 +89,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - run: node --test "scripts/*.test.mjs"
       - run: npm run build
       - name: Check the build arguments
         # Railway gives a build only the variables its Dockerfile declares as arguments, so only

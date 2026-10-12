@@ -208,7 +208,7 @@ indexed, asks a question, and reviews a pull request; a second account is turned
 
 ### Tests for User Story 1 ⚠️ (write first, confirm they fail)
 
-- [ ] T016 [P] [US1] Unit tests in backend/tests/unit/test_client_address.py for the rate limit's
+- [X] T016 [P] [US1] Unit tests in backend/tests/unit/test_client_address.py for the rate limit's
   client address (research R4), each building its own app with `create_app()` after setting
   `rate_limit_per_minute` to 2 through the `settings` fixture:
   - with `client_address_header` set to `X-Real-IP`, requests to `/auth/github/login` with two
@@ -217,7 +217,7 @@ indexed, asks a question, and reviews a pull request; a second account is turned
   - with the header configured but absent from the request, the connection's address is counted;
   - with no header configured, `X-Real-IP` is ignored and all requests share the connection's
     window.
-- [ ] T017 [P] [US1] Tests in frontend/scripts/wait-for-api.test.mjs with Node's built-in test
+- [X] T017 [P] [US1] Tests in frontend/scripts/wait-for-api.test.mjs with Node's built-in test
   runner (`node:test`, `node:assert`) and a stubbed `fetch`, clock, and sleep, for the web app's gate
   (research R7): it resolves true as soon as `<origin>/version` answers the own commit; keeps
   polling on another commit, a non-2xx status, or a rejected `fetch`; resolves false at the
@@ -225,19 +225,19 @@ indexed, asks a question, and reviews a pull request; a second account is turned
 
 ### Implementation for User Story 1
 
-- [ ] T018 [US1] Client address in backend/src/codeatlas/api/app.py: a helper
+- [X] T018 [US1] Client address in backend/src/codeatlas/api/app.py: a helper
   `_client_address(request, header)` returns the configured header's value when the setting is set
   and the header is present and not blank, and otherwise `request.client.host` (or `"unknown"`);
   the `rate_limit` middleware uses it. Replace the comment about Caddy and `X-Forwarded-For` with
   one citing research R4 (`X-Real-IP` is set and overwritten by the platform's edge, and the API
   has no public address).
-- [ ] T019 [P] [US1] Routing in frontend/next.config.ts (research R3; contracts/http-api.md, "Public
+- [X] T019 [P] [US1] Routing in frontend/next.config.ts (research R3; contracts/http-api.md, "Public
   routing"): add rewrites for `/webhooks/:path*`, `/status/:path*`, `/readyz`, and `/version` to
   `${apiOrigin}` next to `/v1` and `/auth`; add `headers()` returning
   `Strict-Transport-Security: max-age=31536000` for `/:path*`; rewrite the top comment: in hosted
   environments the web app forwards these paths to the API over the private network, and
   `API_ORIGIN` is fixed when Next.js builds.
-- [ ] T020 [US1] frontend/Dockerfile (research R3, R6, R7; after T021, whose script it copies):
+- [X] T020 [US1] frontend/Dockerfile (research R3, R6, R7; after T021, whose script it copies):
   - in the `build` stage, declare `ARG API_ORIGIN=http://localhost:8000` and set
     `ENV API_ORIGIN=$API_ORIGIN` before `npm run build`; declare `ARG RAILWAY_GIT_COMMIT_SHA=` next
     to `NEXT_PUBLIC_RELEASE`, and run the build with
@@ -245,11 +245,11 @@ indexed, asks a question, and reviews a pull request; a second account is turned
   - in the `production` stage, copy `scripts/wait-for-api.mjs` to `/app/scripts/`;
   - check with `docker build --target production --build-arg API_ORIGIN=http://api.example:8000
     frontend` that `.next/routes-manifest.json` in the build stage holds that origin.
-- [ ] T021 [US1] Create frontend/scripts/wait-for-api.mjs, the web app's release gate (research
+- [X] T021 [US1] Create frontend/scripts/wait-for-api.mjs, the web app's release gate (research
   R7): an exported `waitForApi({ origin, commit, timeoutMs = 1_200_000, intervalMs = 5_000,
   fetchImpl, now, sleep })` as T017 tests, and, when run as a script, reading `API_ORIGIN` and
   `RAILWAY_GIT_COMMIT_SHA`, printing one line when it starts waiting and one with the outcome, and
-  exiting 0 or 1. Add a step running `node --test scripts/` to the `frontend` job of
+  exiting 0 or 1. Add a step running `node --test "scripts/*.test.mjs"` to the `frontend` job of
   `.github/workflows/ci.yml` (after T003).
 - [X] T022 [US1] Create .railway/railway.ts with Railway's TypeScript infrastructure as code
   (research R8; contracts/operations.md, "Services" and "Variables"), following Railway's reference

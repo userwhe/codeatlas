@@ -206,10 +206,10 @@ latency targets runs against a running stack in fake mode:
 `cd backend && uv run python -m evals.perf_check --users 10 --duration 120` (see the module
 docstring for the required settings).
 
-CI also runs the web app's release gate tests (`node --test scripts/` in `frontend/`), lists every
-schema change on pull requests (the `schema` job), and fails when a Dockerfile declares a build
-argument other than `CODEATLAS_RELEASE`, `API_ORIGIN`, `RAILWAY_GIT_COMMIT_SHA`, and
-`NEXT_PUBLIC_RELEASE`, so that no credential can reach a build. The backup and restore tests need
+CI also runs the web app's release gate tests (`node --test "scripts/*.test.mjs"` in
+`frontend/`), lists every schema change on pull requests (the `schema` job), and fails when a
+Dockerfile declares a build argument other than `CODEATLAS_RELEASE`, `API_ORIGIN`,
+`RAILWAY_GIT_COMMIT_SHA`, and `NEXT_PUBLIC_RELEASE`, so that no credential can reach a build. The backup and restore tests need
 `pg_dump` 17 on `PATH`; CI installs it, and locally they are skipped when it is missing.
 
 ## Measured results

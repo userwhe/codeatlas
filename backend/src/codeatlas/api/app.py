@@ -89,6 +89,17 @@ def _log_request(request: Request, status: int, started: float) -> None:
     )
 
 
+def _client_address(request: Request, header: str) -> str:
+    """The address the rate limit counts: the configured header's value when the request carries
+    one, and otherwise the connection's address.
+    """
+    if header:
+        value = request.headers.get(header, "").strip()
+        if value:
+            return value
+    return request.client.host if request.client is not None else "unknown"
+
+
 def create_app() -> FastAPI:
     configure_logging()
     app = FastAPI(title="CodeAtlas API", version="0.1.0")
@@ -136,17 +147,19 @@ def create_app() -> FastAPI:
         return response
 
     limiter = SlidingWindowLimiter(get_settings().rate_limit_per_minute)
+    address_header = get_settings().client_address_header
 
     # Registered last, so it runs first: a refused request reaches no Origin or signature check,
-    # route, or database (research R4). Behind Caddy, uvicorn takes the client address from
-    # X-Forwarded-For.
+    # route, or database (research R4). Hosted, every request comes from the web app over the
+    # private network, so the limit counts `X-Real-IP` (`client_address_header`), which the
+    # platform's edge sets and overwrites; the API has no public address, so the header can only
+    # come through the web app.
     @app.middleware("http")
     async def rate_limit(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         if request.url.path.startswith(RATE_LIMITED_PATH_PREFIXES):
-            address = request.client.host if request.client is not None else "unknown"
-            retry_after = limiter.check(address)
+            retry_after = limiter.check(_client_address(request, address_header))
             if retry_after is not None:
                 refused = _error_response(
                     request,

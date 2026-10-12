@@ -826,7 +826,7 @@ to GitHub forks, re-splitting risks with a model, or a judge of our own were rej
   - fails the backend and frontend jobs when a Dockerfile declares a build argument outside
     `CODEATLAS_RELEASE`, `API_ORIGIN`, `RAILWAY_GIT_COMMIT_SHA`, and `NEXT_PUBLIC_RELEASE` (R5);
   - installs `postgresql-client-17` from the PostgreSQL apt repository in the backend job for the
-    backup tests, and runs `node --test scripts/` in the frontend job;
+    backup tests, and runs `node --test "scripts/*.test.mjs"` in the frontend job;
   - keeps the production image builds of both Dockerfiles, which Railway builds the same way.
 - **Operational checks**, run by the developer and recorded in the quickstart: the fault tests
   (SC-007), the recovery exercise (SC-008), five releases with the probe, a failed-readiness and a

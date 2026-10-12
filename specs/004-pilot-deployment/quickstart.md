@@ -29,7 +29,7 @@ As in 003, with the new tests, and without the infrastructure checks of the earl
 
 ```bash
 (cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest)
-(cd frontend && npm run lint && npm run typecheck && node --test scripts/ && npm run build && npm run test:e2e)
+(cd frontend && npm run lint && npm run typecheck && node --test "scripts/*.test.mjs" && npm run build && npm run test:e2e)
 docker build backend && docker build --target production frontend
 ```
 
