@@ -20,7 +20,6 @@ from sqlalchemy import ColumnElement, Select, and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from codeatlas import metrics
 from codeatlas.config import get_settings
 from codeatlas.logging import log_context
 from codeatlas.models import ACTIVE_JOB_STATUSES, Job, JobEvent, Repository
@@ -41,8 +40,8 @@ DEADLINES = {
     "answer_question": ("question_deadline", "Answering the question"),
     "review_pull_request": ("review_deadline", "Reviewing the pull request"),
 }
-# Permanent failures that still count toward the `jobs-failing` alarm; other permanent failures
-# come from the input or from access (specs/004-pilot-deployment, research R10).
+# Permanent failures that the failing-jobs check still counts, through `counted_failure`; other
+# permanent failures come from the input or from access (specs/004-pilot-deployment, research R10).
 COUNTED_PERMANENT_CODES = frozenset({"timeout", "internal_error"})
 
 
@@ -317,8 +316,15 @@ def _no_other_running() -> ColumnElement[bool]:
 
 
 def runnable_waiting(now: datetime) -> ColumnElement[bool]:
-    """Waiting jobs that `claim_next` could claim at `now`; the queue-age metric reads them."""
+    """Waiting jobs that `claim_next` could claim at `now`; the jobs-waiting check reads them."""
     return and_(_waiting_and_due(now), _no_other_running())
+
+
+def counted_failure() -> ColumnElement[bool]:
+    """Failures that the failing-jobs check counts: retries used up, a timeout, or an internal
+    error (research R10). Failures recorded before `error_permanent` count only by their code.
+    """
+    return or_(Job.error_permanent.is_(False), Job.error_code.in_(COUNTED_PERMANENT_CODES))
 
 
 def _claimable(now: datetime) -> Select[Job]:
@@ -350,16 +356,16 @@ def _failure_on_claim(job: Job, now: datetime) -> JobFailure | None:
 
 
 def _mark_failed(db: Session, job: Job, failure: JobFailure, now: datetime) -> None:
-    """Fail the job, log its outcome, and count the failure if it matters.
+    """Fail the job, record whether the failure was permanent, and log the outcome.
 
     Both `fail` and `claim_next` end here, so failures found at claim time are logged too, with
-    the job's ID (research R9). A failure counts toward `JobsFailed` when its retries are used up,
-    it timed out, or it is an internal error (research R10).
+    the job's ID (research R9), and recorded for the failing-jobs check (`counted_failure`).
     """
     job.status = "failed"
     job.error_code = failure.code
     job.error_message = failure.message
     job.error_retryable = failure.retryable
+    job.error_permanent = failure.permanent
     job.finished_at = now
     job.lease_expires_at = None
     append_event(
@@ -370,8 +376,6 @@ def _mark_failed(db: Session, job: Job, failure: JobFailure, now: datetime) -> N
             "job_finished",
             extra={"fields": {"kind": job.kind, "outcome": "failed", "attempt": job.attempt}},
         )
-    if not failure.permanent or failure.code in COUNTED_PERMANENT_CODES:
-        metrics.emit({"JobsFailed": 1})
 
 
 def claim_next(db: Session, *, now: datetime | None = None) -> Claim | None:

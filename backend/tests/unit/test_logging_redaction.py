@@ -95,6 +95,30 @@ def test_structured_fields_are_top_level_keys(json_lines: list[dict[str, object]
     assert "fields" not in line
 
 
+def test_operations_fields_are_top_level_keys(json_lines: list[dict[str, object]]) -> None:
+    # The worker's status, the release steps, and the backup (004 research R9).
+    fields = {
+        "queued_jobs": 3,
+        "oldest_runnable_job_age_seconds": 42.5,
+        "database_revision": "0005",
+        "release_revision": "0004",
+        "commit": "3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091",
+        "reported_commit": "9a8b7c6d5e4f30211f2e3d4c5b6a79880f1e2d3c",
+        "object_key": "backups/2026-10-12/033000/codeatlas.dump",
+        "bytes": 1_048_576,
+        "pruned": 2,
+    }
+
+    logging.getLogger(STRUCTURED_LOGGER).info(
+        "operations", extra={"fields": {**fields, "secret_access_key": "backup-secret-0c4f"}}
+    )
+
+    (line,) = json_lines
+    assert {key: line[key] for key in fields} == fields
+    assert "secret_access_key" not in line
+    assert "backup-secret-0c4f" not in json.dumps(line)
+
+
 def test_fields_outside_the_allow_list_are_dropped(json_lines: list[dict[str, object]]) -> None:
     fields = {
         "method": "POST",

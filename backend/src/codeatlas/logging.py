@@ -36,6 +36,15 @@ STRUCTURED_FIELDS = (
     "outcome",
     "attempt",
     "provider",
+    "queued_jobs",
+    "oldest_runnable_job_age_seconds",
+    "database_revision",
+    "release_revision",
+    "commit",
+    "reported_commit",
+    "object_key",
+    "bytes",
+    "pruned",
 )
 
 

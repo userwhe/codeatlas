@@ -20,7 +20,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from codeatlas import metrics
 from codeatlas.config import get_settings
 from codeatlas.db import new_session, session_scope
 from codeatlas.jobs.queue import (
@@ -37,6 +36,7 @@ from codeatlas.jobs.queue import (
 )
 from codeatlas.logging import configure_logging, log_context
 from codeatlas.models import Job
+from codeatlas.status import start_reporter
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +297,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     # A thread of its own, so a long job does not stop the heartbeat (research R10).
-    reporter = metrics.start_reporter() if get_settings().emit_metrics else None
+    reporter = start_reporter(get_settings().worker_report_seconds)
     logger.info("worker started")
     while not stopping.is_set():
         try:
@@ -308,8 +308,7 @@ def main() -> None:
         _run_due_periodic(time.monotonic())
         if not worked:
             stopping.wait(POLL_INTERVAL.total_seconds())
-    if reporter is not None:
-        reporter.set()
+    reporter.set()
     logger.info("worker stopped")
 
 

@@ -1,8 +1,10 @@
 """The real GitHub client's sign-in methods and App JWT, against `httpx.MockTransport`."""
 
+import re
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -25,15 +27,22 @@ NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 Handler = Callable[[httpx.Request], httpx.Response]
 
 
-@pytest.fixture
-def private_key(tmp_path: Path) -> rsa.RSAPrivateKey:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    pem = key.private_bytes(
+def new_key() -> rsa.RSAPrivateKey:
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def pem(key: rsa.RSAPrivateKey) -> str:
+    return key.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
-    )
-    (tmp_path / "app.pem").write_bytes(pem)
+    ).decode()
+
+
+@pytest.fixture
+def private_key(tmp_path: Path) -> rsa.RSAPrivateKey:
+    key = new_key()
+    (tmp_path / "app.pem").write_text(pem(key))
     return key
 
 
@@ -263,3 +272,49 @@ def test_app_jwt_is_rs256_with_app_id_issuer_and_short_expiry(
     now = datetime.now(UTC).timestamp()
     assert claims["iat"] <= now
     assert now < claims["exp"] <= now + 10 * 60
+
+
+def app_jwt_claims(settings: Settings, key: rsa.RSAPrivateKey) -> dict[str, Any]:
+    """The claims of the App JWT the client signs, verified with `key`'s public key."""
+    token = GitHubClient(settings)._app_jwt()
+    claims: dict[str, Any] = jwt.decode(token, key.public_key(), algorithms=["RS256"])
+    return claims
+
+
+def test_app_jwt_is_signed_with_the_key_content() -> None:
+    # The platform holds the key in a variable, not in a file (research R5).
+    key = new_key()
+    settings = Settings(_env_file=None, github_app_id=APP_ID, github_app_private_key=pem(key))
+
+    assert app_jwt_claims(settings, key)["iss"] == APP_ID
+
+
+def test_app_jwt_is_signed_with_the_key_file(
+    settings: Settings, private_key: rsa.RSAPrivateKey
+) -> None:
+    assert settings.github_app_private_key == ""
+
+    assert app_jwt_claims(settings, private_key)["iss"] == APP_ID
+
+
+def test_the_key_content_wins_over_the_key_file(
+    settings: Settings, private_key: rsa.RSAPrivateKey
+) -> None:
+    content_key = new_key()
+    both = settings.model_copy(update={"github_app_private_key": pem(content_key)})
+
+    assert app_jwt_claims(both, content_key)["iss"] == APP_ID
+    with pytest.raises(jwt.InvalidSignatureError):
+        app_jwt_claims(both, private_key)
+
+
+def test_app_jwt_without_a_key_names_both_settings() -> None:
+    settings = Settings(_env_file=None, github_app_id=APP_ID)
+
+    with pytest.raises(RuntimeError) as raised:
+        GitHubClient(settings)._app_jwt()
+
+    assert set(re.findall(r"GITHUB_APP_PRIVATE_KEY\w*", str(raised.value))) == {
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_APP_PRIVATE_KEY_PATH",
+    }

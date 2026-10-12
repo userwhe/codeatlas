@@ -1,1 +1,1 @@
-"""Operator commands, run on the host as `python -m codeatlas.ops` (contracts/operations.md)."""
+"""Operator commands, run as `python -m codeatlas.ops` (contracts/operations.md)."""

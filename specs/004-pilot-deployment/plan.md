@@ -1,107 +1,123 @@
 # Implementation Plan: Pilot Deployment
 
-**Branch**: `004-pilot-deployment` | **Date**: 2026-10-07 | **Spec**: [spec.md](spec.md)
+**Branch**: `004-pilot-deployment` | **Date**: 2026-10-07; replanned 2026-10-12 for Railway |
+**Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/004-pilot-deployment/spec.md`
 
 ## Summary
 
-CodeAtlas runs as a pilot on the public internet for at most 10 invited GitHub users. The developer
-releases changes after approving a summary, learns about failures by email, and can rebuild the
-service from code and a backup. The deployed system is measured with a load test on the pilot's
-hardware and an evaluation with the real model providers, including a public review benchmark.
+CodeAtlas runs as a pilot on the public internet for at most 10 invited GitHub users, on Railway at
+the address it provides. Every change merged into `main` is released once CI passes, with
+migrations first and traffic moved only after a readiness check. The developer learns about
+failures by email and can rebuild the service from the recorded configuration and a backup. The
+deployed system is measured with a load test at the pilot's service sizes and an evaluation with
+the real model providers, including a public review benchmark.
+
+The earlier plan for one AWS host (ADRs 0010 to 0012) is superseded; its code stays in the history
+at `c0b0e22` (research R20). The application work it produced (the access list, the pilot-wide
+limits, the rate limiter, readiness and version, structured logs, the operator commands, the
+backup manifest, the benchmark runner, and the load test workflow) carries over.
 
 Technical approach:
 
-- **Hosting** (ADR 0010): one `t4g.medium` EC2 instance in `us-east-1` runs the existing Compose
-  services behind Caddy, which provides HTTPS with Let's Encrypt. PostgreSQL keeps its data on a
-  separate EBS volume. The host has no SSH; administration uses SSM. About $34 a month.
-- **Infrastructure and releases** (ADR 0011): Terraform defines a shared module and one stack
-  module per environment (`pilot`, `drill`, `loadtest`). After CI passes on a push to this
-  repository's `main`, GitHub Actions builds Arm images as workflow artifacts, posts a release
-  summary, and waits for the developer's approval. Only then does it push the images to ECR and
-  run a host script that migrates, starts the new images, checks them, and rolls back on failure.
-  One OIDC role, trusted only for the `pilot` environment, replaces stored AWS keys.
-- **Monitoring** (ADR 0012): container logs go to CloudWatch through Docker's `awslogs` driver.
-  Nine custom metrics and two Route 53 health checks (`/readyz` and `/`) feed ten alarms, emailed
-  through SNS with recovery notices. The dashboard computes everything else from the JSON logs.
-- **Backups**: a nightly `pg_dump` to S3 with row counts taken in the dump's own snapshot, kept 7
-  days and never overwritable by the host; a recovery exercise rebuilds a drill environment and
-  restores into it.
-- **Access and spend** (ADR 0013): a `pilot_users` table checked at sign-in before anything is
-  stored, managed by operator commands; pilot-wide daily limits of 30 questions and 15 reviews cap
-  model spend near $15 a day; the API rate-limits sign-in and webhook paths per address.
-- **Hardening found during planning**: settings errors currently print every input value,
-  including secrets; `hide_input_in_errors` and a full production check fix that (research R5).
-- **Measurement**: `perf_check` runs from a GitHub Actions workflow against a temporary environment
-  at increasing concurrency. The evaluation adds Code Review Bench's 20 Python and TypeScript pull
-  requests, scored by the benchmark's own judge, next to other tools' published results.
+- **Hosting** (ADR 0014): one Railway project on the Hobby plan, in US East, with five services
+  built from the repository: `web` (the only public one, at its `*.up.railway.app` domain), `api`,
+  `worker`, a `backup` cron service, and `db` (`pgvector/pgvector:pg17` with a volume), plus a
+  `backups` bucket in a separate project, so that losing the pilot's environment or project does not
+  lose the backups. Services talk over the private network; the web app forwards the API's paths.
+  About $13 a month (research R19).
+- **Configuration** (ADR 0014): Railway's infrastructure as code in `.railway/railway.ts`, previewed
+  with `railway config plan` and applied by the developer; secrets are sealed variables kept out of
+  the file. Reference variables derive each environment's origin and database URL.
+- **Releases** (ADR 0015): Railway deploys `main` after every GitHub check passes ("Wait for CI",
+  on from the first deployment). `api`'s pre-deploy command migrates under an advisory lock and
+  skips when the database is ahead, so rollbacks work; the other services' pre-deploy gates wait
+  until `api` reports their commit, so a failed migration or readiness check stops the whole
+  release; healthchecks gate traffic; rollback is one action per service, `api` first, within the
+  platform's 72-hour image window. A CI job lists every schema change on pull requests. No
+  platform credentials in CI.
+- **Monitoring** (ADR 0016): Railway's logs (JSON fields searchable), metrics, deploy-failure
+  emails, and usage limits. What the platform cannot see is served by four `/status/*` endpoints
+  backed by a worker heartbeat table, the queue, a new `jobs.error_permanent` column, and a
+  `backups` table, checked every 3 minutes by Better Stack's free monitors, which also check `/`
+  and `/readyz` from outside the platform.
+- **Backups**: `python -m codeatlas.ops backup` nightly: a snapshot-consistent `pg_dump` with row
+  counts, a manifest, upload to the bucket, a `backups` row, and 7-day pruning; `ops restore` in
+  the `api` container verifies the result. A duplicated `drill` environment rehearses recovery.
+- **Measurement**: `perf_check` from the existing workflow against a duplicated `loadtest`
+  environment; the evaluation is unchanged.
 
 ## Technical Context
 
-**Language/Version**: unchanged for the application: Python 3.13 (API and worker); TypeScript 5.9
-on Node.js 24 LTS (frontend). New: Terraform HCL (Terraform 1.11 or later, AWS provider 6) and
-Bash for host scripts.
+**Language/Version**: unchanged for the application: Python 3.13 (API, worker, backup); TypeScript
+5.9 on Node.js 24 LTS (frontend). New: TypeScript for Railway's infrastructure as code
+(`.railway/railway.ts`).
 
-**Primary Dependencies**: no new Python or npm dependency.
+**Primary Dependencies**:
 
-- Hosting: Docker Engine with the Compose plugin, Caddy 2.10, the CloudWatch agent, and the AWS CLI
-  v2 on Ubuntu 24.04.
-- CI only: `bats` for the host script tests.
-- AWS: EC2, EBS, ECR, S3, SSM (Parameter Store, Run Command, Session Manager), CloudWatch (Logs,
-  metrics, alarms, dashboard), SNS, Route 53, Budgets, and IAM with GitHub's OIDC provider.
+- Backend: one new Python dependency, `boto3`, for the S3-compatible bucket (research R12); the
+  image gains Debian's `postgresql-client-17`.
+- Platform: Railway (services, private network, volume, bucket, cron, logs, metrics,
+  notifications, usage limits) and the Railway CLI on the developer's machine; Better Stack's free
+  uptime monitors.
 - Evaluation only, outside the backend's dependencies: Code Review Bench's pipeline at a pinned
   commit, in its own environment under `evals/out/bench/`.
 
-**Storage**: PostgreSQL 17 with pgvector, in a container on the host, data on an encrypted EBS
-volume. One migration, `0004_pilot_access`, adds `pilot_users` and `pilot_usage_counters` and three
-audit actions. S3 holds nightly dumps (7 days) and release bundles.
+**Storage**: PostgreSQL 17 with pgvector in the `db` service, on a Railway volume (5 GB cap on
+Hobby). Migration `0004_pilot_access` (done) and new `0005_operations_status`: `worker_heartbeats`,
+`backups`, and `jobs.error_permanent`. The `backups` bucket holds nightly dumps and manifests for 7
+days.
 
 **Testing**:
 
-- pytest unit tests for the rate limiter, production settings validation, EMF lines, structured log
-  fields, the backup manifest and restore comparison, and the benchmark export and comparison.
-- Integration tests against PostgreSQL for the access list (no rows for uninvited users, session
-  revocation, data deletion), pilot-wide limits under concurrency, readiness, and queue metrics.
-- Playwright in fake mode: the invitation page and the pilot-wide limit message (API response
-  intercepted).
-- `bats` tests for `release.sh` and `render-config.sh` with stub commands: exit codes, rollback,
-  state files, and required parameters.
-- CI: production image builds, `terraform fmt` and `validate`, `shellcheck`, the `bats` tests,
-  `docker compose config`, and `caddy validate`.
-- Operational validation by the developer: fault tests, the recovery exercise, releases and a
-  forced rollback, a port scan, and a credential scan (quickstart).
+- pytest unit tests for the new settings, the client address, the migration decision, the
+  release gate, backup keys and pruning, the status thresholds, and the evaluations' per-item
+  cost; Node's built-in test runner for the web app's gate script.
+- Integration tests against PostgreSQL for the four status endpoints, the worker's reporter,
+  `error_permanent`, `ops migrate`, and `ops backup` with `ops restore` end to end against an
+  in-memory object store, including same-day runs, pruning after a failed dump, and restoring an
+  older revision (needs `pg_dump` 17).
+- Existing unit, integration, and Playwright suites unchanged, except the EMF tests, which the
+  status tests replace, and the logging test that ran `backup-manifest`.
+- CI: the backend job installs `postgresql-client-17`; the frontend job runs `node --test`; a
+  `schema` job reports migrations on pull requests; a check limits the Dockerfiles' build
+  arguments; the infrastructure job and the release workflow are removed; both production images
+  are still built.
+- Operational validation by the developer: fault tests, the recovery exercise, releases with a
+  probe, a failed-readiness rehearsal and rollbacks, the public-surface check, and a credential
+  scan (quickstart).
 
-**Target Platform**: Linux containers on one `arm64` EC2 instance (Ubuntu 24.04) in `us-east-1`;
-current desktop browsers.
+**Target Platform**: Linux containers on Railway (US East); current desktop browsers.
 
-**Project Type**: Web application (frontend, HTTP API, background worker) plus infrastructure code.
+**Project Type**: Web application (frontend, HTTP API, background worker) plus platform
+configuration.
 
 **Performance Goals**:
 
-- 001 SC-007's targets on the pilot's hardware with 10 concurrent users, and the highest
+- 001 SC-007's targets at the pilot's service sizes with 10 concurrent users, and the highest
   concurrency that still meets them (SC-011).
-- A release serves the new version within 15 minutes of approval, with at most 60 seconds of
-  interruption (SC-009); a failed check restores the previous version within 5 minutes (SC-010).
-- Recovery from host loss within 2 hours (SC-008); alerts within 10 minutes of a fault (SC-007).
+- A release serves within 15 minutes of its merge (CI takes about 5 minutes, builds a few more),
+  with at most 60 seconds of interruption (SC-009); a rollback serves within 5 minutes (SC-010).
+- Recovery within 2 hours (SC-008); alerts within 10 minutes of a condition (SC-007).
 
 **Constraints**:
 
-- Hosting at most $40 a month (SC-002); model spend at most $15 a day in the worst case (SC-003).
-- Only ports 80 and 443 reachable (FR-007); no long-lived cloud keys in the repository or CI
-  (FR-024); no secret values in Terraform state, images, or logs (FR-008, SC-006).
-- Every write to AWS, GitHub settings, DNS, and the pilot's data is a developer action after a
-  preview: `terraform plan`, the release summary, or a drafted command. A release writes nothing
-  to AWS before its approval.
-- Logs and backups kept 7 days; at most 24 hours of data loss.
+- Hosting at most $25 a month (SC-002); model spend at most $15 a day in the worst case (SC-003).
+- Only `web` has a public address (FR-007); no platform credentials in the repository or CI
+  (FR-025); secrets only as sealed variables on the services that use them (FR-008).
+- Every write to the platform, GitHub settings, the monitors, and the pilot's data is a developer
+  action after a preview: `railway config plan`, the staged-changes diff, a merged pull request, or
+  a drafted command.
+- Logs and backups kept 7 days; at most 24 hours of data loss; a 5 GB database volume.
 
 **Scale/Scope**:
 
 - At most 10 pilot users, with 001 and 003's per-workspace limits, and 30 questions and 15 reviews
   a day across the pilot.
-- Three environments from one definition; the drill and load test environments exist for hours.
-- About 20 Terraform resources per stack, 5 host scripts and 1 developer script, 2 new workflows,
-  1 migration, 1 new operator command group, and 2 reports.
+- One always-on environment and two temporary copies; 5 services and a bucket per environment.
+- 1 migration, 1 new route module with 4 endpoints, 4 new operator commands, 1 infrastructure file,
+  1 new CI job, 3 ADRs, and 2 reports.
 
 ## Project Rules Check
 
@@ -110,30 +126,27 @@ current desktop browsers.
 | Rule | Gate for this plan | Before research | After design |
 | --- | --- | --- | --- |
 | English only | All artifacts, ADRs, code, and commit messages in English | Pass | Pass: every artifact is in English |
-| Simplicity | Every new tool, service, table, and endpoint serves a current requirement | Pass, with the design document's ECS, RDS, SQS, staging, and tracing flagged for review | Pass: one host instead of managed services; no staging, SQS, tracing, or operations UI; nine custom metrics, everything else from log queries; an in-process rate limiter instead of a proxy module or WAF. Each tool maps to a requirement below, and each deferral has a revisit condition (research deviations table) |
-| Tested core | Core logic has automated tests; a story is done only when its tests pass | Pass | Pass: R18 covers the access list, limits, rate limiter, settings validation, readiness, metrics, and restore verification; `bats` tests cover the release script's state transitions and the configuration check; the rest of the operational behavior is validated by recorded exercises (quickstart) |
-| Recorded decisions | Costly-to-reverse choices have ADRs | Pending | Pass: ADR 0010 (hosting), ADR 0011 (Terraform and approved releases), ADR 0012 (monitoring), ADR 0013 (access list and limits, with the schema change); ADRs 0002 and 0003 record that they were revisited and kept; ADR 0007's accepted risk now names the rate limit |
-| Human in the loop | No external write without a draft and confirmation | Pass | Pass: infrastructure applies only a reviewed saved plan; each release builds without cloud credentials, then waits for approval of its summary in a protected environment before pushing images or touching the host, and covers only that commit; only pushes to this repository's `main` start a release; secrets, the GitHub App, DNS, and operator commands are developer actions; the evaluation never posts to GitHub. Scheduled writes to the project's own account (the nightly backup upload, metrics, and alert emails) run without a per-run confirmation: the developer confirms them once, by approving the Terraform plan and the release that install them, and each does only what that preview shows. This is recorded as a justified deviation in Complexity Tracking |
-| Repository hygiene | No absolute local paths, secrets, or personal notes committed | Pass | Pass: secret values go to Parameter Store by script, never to the repository or Terraform state; real `*.tfvars` files (alert email, domain, OIDC subject prefix) are ignored, and only examples are committed |
+| Simplicity | Every new tool, service, table, endpoint, and dependency serves a current requirement | Pass, with the design document's ECS, RDS, SQS, staging, and tracing flagged for review | Pass: a managed platform instead of a host and Terraform; no staging, SQS, tracing, metrics stack, or operations UI; two small tables and one column for the alert conditions; one dependency (`boto3`) for the bucket; the AWS code is removed rather than kept as a second deployment. Each tool maps to a requirement below, and each deferral has a revisit condition (research deviations table) |
+| Tested core | Core logic has automated tests; a story is done only when its tests pass | Pass | Pass: R18 covers the settings, client address, migration decision, status conditions and endpoints, reporter, both release gates, evaluation costs, and backup and restore end to end; the platform's behavior is validated by recorded exercises (quickstart) |
+| Recorded decisions | Costly-to-reverse choices have ADRs | Pending | Pass: ADR 0014 (Railway, configuration, backups, the `boto3` dependency), ADR 0015 (releases on merge), ADR 0016 (status endpoints and the external monitor, with the schema change); ADRs 0010 to 0012 are marked superseded by them; ADRs 0002 and 0003 record that they were revisited again and kept; ADR 0013 is unchanged |
+| Human in the loop | No external write without a draft and confirmation | Pass | Pass with two recorded deviations (Complexity Tracking): releases follow merges with no separate approval, and scheduled writes (the nightly backup, heartbeats, monitor checks, alert emails) run without a per-run confirmation. Configuration changes apply only after `railway config plan` or the staged diff; secrets, domains, the GitHub App, monitors, and operator commands are developer actions; the evaluation never posts to GitHub |
+| Repository hygiene | No absolute local paths, secrets, or personal notes committed | Pass | Pass: secrets are sealed variables declared with `preserve()` and never in `.railway/railway.ts`; no token in CI; bucket keys reach only the `backup` service, and `api` only for a restore session |
 
 Tool and service to need map:
 
 | Tool or service | Need |
 | --- | --- |
-| EC2, EBS, Elastic IP | The host, its data volume, and a stable address (FR-001, FR-016, FR-017) |
-| Caddy | HTTPS with automatic renewal and redirects (FR-001) |
-| Terraform | A recorded, previewed definition of every environment (FR-016, FR-025) |
-| ECR | Release images labeled by commit, pulled without credentials (FR-019) |
-| GitHub environments and OIDC | Approval before a release; short-lived credentials (FR-020, FR-024) |
-| GitHub workflow artifacts | Images built before approval without writing to AWS (FR-020) |
-| SSM Run Command and Session Manager | Releases and administration without inbound ports (FR-007) |
-| SSM Parameter Store | Credentials outside the repository and images (FR-008) |
-| S3 | Off-host encrypted backups and release bundles (FR-015) |
-| CloudWatch Logs, metrics, alarms, dashboard; CloudWatch agent | Central logs, metrics, alerts (FR-012 to FR-014) |
-| SNS | Alert and recovery emails (FR-014, FR-022) |
-| Route 53 | The domain and the external check (FR-001, FR-014) |
-| Budgets | The spending alert (FR-014) |
-| `bats` (CI only) | Automated tests of the host scripts' state transitions (tested-core rule) |
+| Railway services, builds, private network | Running the four processes from the repository with no host (FR-001, FR-007, FR-017) |
+| Railway domain and edge | HTTPS address with automatic renewal and redirects, no domain to buy (FR-001) |
+| Railway volume | The database's data (FR-015, FR-016) |
+| Railway bucket and cron | Nightly backups off the database's storage (FR-015) |
+| Railway infrastructure as code and CLI | A recorded, previewed configuration (FR-016, FR-025); operator commands through `railway ssh` (FR-004) |
+| Railway GitHub integration with "Wait for CI" | Releases from `main` only after checks pass, with no credentials in CI (FR-019, FR-020, FR-025) |
+| Railway pre-deploy command and healthchecks | Migrations first and readiness before traffic (FR-021, FR-022) |
+| Railway logs, metrics, notifications, usage limits | Central logs, resource views, release-failure and spending alerts (FR-012 to FR-014) |
+| Better Stack (free) | The external check and the conditions the platform cannot see, with recovery notices (FR-014) |
+| `boto3` | The bucket's S3-compatible API for upload, listing, download, and pruning (FR-015) |
+| `postgresql-client-17` in the backend image | `pg_dump` and `pg_restore` matching the server (FR-015, SC-008) |
 | Code Review Bench pipeline (evaluation only) | Scoring comparable with published results (FR-027) |
 
 ## Project Structure
@@ -144,143 +157,120 @@ Tool and service to need map:
 specs/004-pilot-deployment/
 ├── plan.md                 # This file
 ├── research.md             # Phase 0: decisions, rationale, alternatives
-├── data-model.md           # Phase 1: new tables, audit actions, manifest, settings
+├── data-model.md           # Phase 1: tables, conditions, manifest, settings
 ├── quickstart.md           # Phase 1: prerequisites and validation scenarios
 ├── contracts/
 │   ├── http-api.md         # Phase 1: changes to the 001 to 003 HTTP API
-│   └── operations.md       # Phase 1: environments, parameters, commands, scripts, workflows, metrics
+│   └── operations.md       # Phase 1: environments, services, variables, commands, releases, monitors
 ├── checklists/
 │   └── requirements.md     # Spec quality checklist
 └── tasks.md                # Phase 2 (/speckit-tasks)
 
 docs/decisions/
-├── 0002-postgresql-as-the-only-data-store.md   # amended: revisited and kept
-├── 0003-postgresql-job-queue.md                # amended: revisited and kept
-├── 0007-github-webhooks-for-change-notifications.md  # amended: rate limit
-├── 0010-single-host-aws-deployment.md          # new
-├── 0011-terraform-and-approved-releases.md     # new
-├── 0012-cloudwatch-monitoring.md               # new
-└── 0013-pilot-access-list-and-limits.md        # new
+├── 0002-postgresql-as-the-only-data-store.md   # amended: revisited for Railway and kept
+├── 0003-postgresql-job-queue.md                # amended: revisited for Railway and kept
+├── 0010-single-host-aws-deployment.md          # superseded by 0014
+├── 0011-terraform-and-approved-releases.md     # superseded by 0015
+├── 0012-cloudwatch-monitoring.md               # superseded by 0016
+├── 0013-pilot-access-list-and-limits.md        # unchanged
+├── 0014-railway-hosting.md                     # new
+├── 0015-releases-on-merge.md                   # new
+└── 0016-status-endpoints-and-external-monitor.md   # new
 ```
 
 ### Source Code (repository root)
 
-New and changed files. Everything else is unchanged from 003. tasks.md names the task for each.
+New, changed, and removed files. Everything else is unchanged; tasks.md names the task for each.
 
 ```text
-infra/
-├── shared/                          # new: ECR, S3 bucket, SNS topic, OIDC provider and release role, hosted zone, budget
-│   ├── main.tf, iam.tf, variables.tf, outputs.tf, versions.tf
-│   └── shared.tfvars.example, backend.hcl.example
-└── stack/                           # new: one environment per state key
-    ├── main.tf                      # instance, data volume, Elastic IP, security group, instance role
-    ├── dns.tf, logs.tf
-    ├── monitoring.tf                # alarms, dashboard, health checks (pilot only)
-    ├── cloud-init.yaml.tftpl        # Docker, AWS CLI, CloudWatch agent, mount, swap, compose wrapper, timers
-    ├── variables.tf, outputs.tf, versions.tf
-    └── pilot.tfvars.example, drill.tfvars.example, loadtest.tfvars.example, backend.hcl.example
-
-deploy/                              # new: copied to the host as the release bundle
-├── compose.yml                      # caddy, web, api, worker, db, migrate; awslogs; restart policies
-├── Caddyfile                        # routes, HSTS, log filters
-├── release.sh                       # migrate, switch current, start, check, roll back
-├── render-config.sh                 # SSM parameters and derived settings to runtime/
-├── backup.sh, restore.sh, check-certificate.sh
-├── put-secrets.sh                   # developer machine: writes SSM parameters
-├── cloudwatch-agent.json            # memory and disk metrics, host log files
-├── systemd/                         # codeatlas-backup and codeatlas-cert-check services and timers
-└── tests/                           # bats tests with stub commands for every host script
-
-.github/workflows/
-├── ci.yml                           # + production image builds, terraform, shellcheck, bats, compose and Caddy checks
-├── release.yml                      # new: build artifacts, summary, approved push and release, outage probe, alert
-└── load-test.yml                    # new: perf_check per level, report artifact
+.railway/
+├── railway.ts                       # new: services, db image and volume, bucket, variables (secrets preserved), commands, healthchecks, cron
+└── package.json, package-lock.json  # new: the pinned `railway` package the file imports
 
 backend/
-├── Dockerfile                       # CODEATLAS_RELEASE build argument; fixture repositories for fake mode
+├── Dockerfile                       # + postgresql-client-17; release read from RAILWAY_GIT_COMMIT_SHA (build argument kept for local builds)
+├── pyproject.toml, uv.lock          # + boto3
 ├── alembic/versions/
-│   └── 0004_pilot_access.py         # new: pilot_users, pilot_usage_counters, audit actions
+│   └── 0005_operations_status.py    # new: worker_heartbeats, backups, jobs.error_permanent
 ├── src/codeatlas/
-│   ├── config.py                    # production validation, hide_input_in_errors, new settings
-│   ├── logging.py                   # allow-listed structured fields
-│   ├── metrics.py                   # new: EMF lines and the reporter thread
-│   ├── models.py                    # PilotUser, PilotUsageCounter, audit actions
+│   ├── config.py                    # GITHUB_APP_PRIVATE_KEY, CLIENT_ADDRESS_HEADER, thresholds, BACKUP_*, release alias; - EMIT_METRICS, METRICS_ENVIRONMENT
+│   ├── status.py                    # replaces metrics.py: the worker's reporter (heartbeat, worker_status line) and the four conditions
+│   ├── models.py                    # WorkerHeartbeat, Backup, Job.error_permanent
 │   ├── api/
-│   │   ├── app.py                   # /readyz, /version, request log and rate-limit middleware
-│   │   └── ratelimit.py             # new: per-address sliding window
-│   ├── auth/
-│   │   ├── access_list.py           # new: is_allowed, add, remove, delete_data
-│   │   └── github_login.py          # access check before any write
-│   ├── api/routes/auth.py           # not_invited redirect and denied audit event
-│   ├── github/
-│   │   ├── gateway.py, client.py    # get_user_by_login
-│   │   └── fake.py                  # the same, for tests
-│   ├── workspace/quotas.py          # pilot-wide reservation and refund
-│   ├── providers/answer_model.py, embeddings.py   # a provider-field warning before each raised error
+│   │   ├── app.py                   # client address from CLIENT_ADDRESS_HEADER; /status/* rate-limited; status router
+│   │   └── routes/status.py         # new: GET /status/{condition}
+│   ├── github/client.py             # signs with the key content or the key file
 │   ├── jobs/
-│   │   ├── queue.py                 # fail returns the final status; JobsFailed and job_finished where a job fails
-│   │   └── worker.py                # starts the metrics reporter; job_finished for other outcomes
-│   └── ops/                         # new: python -m codeatlas.ops
-│       ├── __init__.py
-│       ├── __main__.py              # pilot-users, backup-manifest, verify-restore
-│       └── backup.py                # pure: manifest building and comparison
-├── tests/
-│   ├── conftest.py                  # rate limit off and generous pilot-wide limits for the suites
-│   ├── unit/                        # new: test_ratelimit.py, test_production_settings.py, test_metrics.py,
-│   │                                # test_backup_manifest.py, test_bench_eval.py, test_github_users_client.py,
-│   │                                # test_perf_check.py; extended: test_config.py, test_logging_redaction.py,
-│   │                                # test_fake_github.py, test_gemini_answer_model.py, test_voyage_embedder.py
-│   └── integration/                 # new: test_pilot_schema.py, test_access_list.py, test_pilot_limits.py,
-│                                    # test_readiness.py, test_worker_metrics.py, test_ops_commands.py;
-│                                    # extended: test_logging.py
-└── evals/
-    ├── perf_check.py                # --json summary output
-    ├── load_report.py               # new: load test levels to a Markdown table
-    ├── run_bench_eval.py            # new: Code Review Bench runner, export, and comparison
-    └── README.md                    # benchmark section; review-status labels
+│   │   ├── queue.py                 # records error_permanent; no metric call
+│   │   └── worker.py                # always starts the reporter
+│   └── ops/
+│       ├── __main__.py              # + migrate, wait-for-api, backup, restore; - backup-manifest
+│       ├── backup.py                # pure: manifest and comparison (existing); keys and pruning choice (new)
+│       ├── dump.py                  # new: snapshot dump with counts, pg_restore list, restore into an empty schema
+│       ├── storage.py               # new: the bucket through boto3, behind a small protocol that tests replace
+│       └── release.py               # new: the migration decision, advisory lock, and release gate
+└── tests/
+    ├── unit/                        # new: test_status_conditions.py, test_release.py, test_backup_pruning.py,
+    │                                #      test_client_address.py, test_eval_pricing.py; extended: test_config.py,
+    │                                #      test_production_settings.py, test_github_client_auth.py; removed: test_metrics.py
+    └── integration/                 # new: test_status_endpoints.py, test_worker_reporter.py, test_backup_restore.py,
+                                     #      test_ops_migrate.py; extended: test_ops_commands.py, test_logging.py;
+                                     #      removed: test_worker_metrics.py
+
+backend/evals/
+├── pricing.py                       # new: the price function, moved from run_bench_eval.py
+├── run_qa_eval.py                   # per-question tokens, latency, and cost
+└── run_review_eval.py               # per-item cost
 
 frontend/
-├── Dockerfile                       # multi-stage: dev and production (standalone) targets
-├── next.config.ts                   # output: "standalone"
-├── src/
-│   ├── app/page.tsx, app/sign-in.tsx # not_invited explanation
-│   ├── app/layout.tsx               # footer with the release commit
-│   ├── components/ExternalProcessingAcceptance.tsx   # backup retention sentence
-│   └── lib/api/questions.ts, reviews.ts              # pilot_limit_reached messages
-└── tests/e2e/
-    └── pilot-access.spec.ts         # new
+├── Dockerfile                       # build stage: ARG API_ORIGIN, ARG RAILWAY_GIT_COMMIT_SHA; production stage copies the gate script
+├── next.config.ts                   # rewrites + /webhooks, /status, /readyz, /version; Strict-Transport-Security header
+└── scripts/
+    ├── wait-for-api.mjs             # new: the web app's release gate
+    └── wait-for-api.test.mjs        # new: node --test
+
+.github/workflows/
+├── ci.yml                           # - infra job; + schema job; build-argument check; postgresql-client-17; node --test
+├── release.yml                      # removed
+└── load-test.yml                    # network baseline against /version
+
+infra/                               # removed (history: c0b0e22)
+deploy/                              # removed (history: c0b0e22)
 
 docs/
-├── operations.md                    # new: operations guide
-├── reports/
-│   ├── load-test.md                 # new
-│   └── evaluation.md                # new
+├── operations.md                    # rewritten for Railway
+├── reports/load-test.md, evaluation.md   # new
 └── assets/demo.gif                  # new
 
-docker-compose.yml                   # web builds the dev target
-.env.example                         # the new limits, with the pilot's defaults noted
-.gitignore                           # .terraform/, *.tfstate*, infra/**/*.tfvars, plan files
-README.md                            # demo, architecture diagram, limitations, data section, links
-docs/design/codeatlas-v1.md          # superseded-in-part note for spec 004
+README.md                            # Deployment, architecture diagram, known limitations, data section
+.env.example                         # new thresholds and settings; - EMIT_METRICS
+.gitignore                           # - Terraform entries
 ```
 
-**Structure Decision**: The web application layout of 001 (ADR 0001), plus two top-level
-directories for operations.
+**Structure Decision**: The web application layout of 001 (ADR 0001), plus `.railway/` for the
+platform's configuration. Application changes stay inside existing packages; `codeatlas.ops` gains
+the platform-facing commands, with pure parts (`backup.py`, the migration decision) that unit tests
+cover without a database, and `storage.py` as the only code that talks to the bucket. The only
+other external boundaries remain `GitHubGateway` and the model adapters.
 
-- `infra/` holds the definition of the cloud environment; `deploy/` holds what runs on the host.
-  The release workflow copies `deploy/` to S3 for each commit, and the host keeps each bundle under
-  `/opt/codeatlas/releases/<sha>/` with `current` pointing at the running one, so a host always runs
-  the scripts of the commit it serves (research R7).
-- Application changes stay inside existing packages, except `codeatlas.ops` for operator commands,
-  whose pure parts (`backup.py`) take plain data so unit tests cover them without a database.
-- The only external boundaries are still `GitHubGateway` and the model adapters; the application
-  itself never calls AWS.
+### Carried over from the earlier implementation
+
+The earlier task list completed every task except the developer actions (T003, T038, T057, T062,
+T064, T068, T071, T075, T077) and two documentation tasks (T072, T076). Of that work, these parts
+are kept: migration `0004`, the access list and operator commands, the
+pilot-wide limits, the rate limiter, production settings validation without values in errors,
+`/readyz` and `/version`, structured `request` and `job_finished` lines with the field allow-list,
+provider warnings, the backup manifest and `verify-restore`, the invitation page and limit messages,
+the footer commit, the disclosure sentence, the standalone web image, the benchmark runner, and the
+load test workflow. The metric emission (EMF), the host scripts, Terraform, and the release
+workflow are replaced or removed (research R20).
 
 ## Complexity Tracking
 
 | Violation | Why needed | Simpler alternative rejected because |
 | --- | --- | --- |
-| Scheduled writes to the project's own AWS account run without a confirmation each time: the nightly backup upload and its metric, the certificate metric, the worker's and the agent's metrics, and alert emails. The rule says a confirmation covers only the draft shown | FR-014 and FR-015 require daily backups and continuous metrics and alerts; nobody can confirm each one. The developer confirms them once, in the Terraform plan and the release that install the timers, roles, and alarms, and each write does only what that preview showed: fixed destinations, no overwrite or delete of backups, and no write outside the account | A confirmation per backup or per alert defeats the purpose of both. Leaving out scheduled backups or alerts violates FR-014 and FR-015 |
+| Releases write to the platform after a merge, with no separate confirmation of the release. The rule asks for a draft and an explicit confirmation before an external write | The developer chose releases without approval (spec Input, FR-020). The draft is the pull request: its diff, its checks, and the `schema` job's report; the confirmation is the developer's merge, which covers exactly that commit. Railway deploys only `main` and only after every check passes (FR-019) | An approval step per release needs a release workflow holding platform credentials in CI, which FR-025 forbids, and was declined by the developer. Direct pushes to `main` also release, so the operations guide says to merge through pull requests |
+| Scheduled writes run without a confirmation each time: the nightly backup upload, pruning, and `backups` row; the worker's heartbeats; the monitors' checks and alert emails | FR-014 and FR-015 require daily backups and continuous alerts; nobody can confirm each one. The developer confirms them once, in `railway config plan` and the monitor setup, and each write does only what that preview showed: one bucket, one table, and one email address | A confirmation per backup or per alert defeats the purpose of both; leaving them out violates FR-014 and FR-015 |
 
 Every design-document mechanism left out is a simplification, recorded with its revisit condition
 in research.md.

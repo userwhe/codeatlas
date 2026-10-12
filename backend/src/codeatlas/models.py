@@ -3,7 +3,8 @@
 See specs/001-repository-qa/data-model.md for the rules behind each field,
 specs/002-push-reindexing/data-model.md for the access-state, trigger, and webhook additions,
 specs/003-pr-review/data-model.md for the pull request review additions, and
-specs/004-pilot-deployment/data-model.md for the pilot access list and pilot-wide usage.
+specs/004-pilot-deployment/data-model.md for the pilot access list, pilot-wide usage, and what
+the alert checks read.
 """
 
 import uuid
@@ -408,6 +409,9 @@ class Job(Base):
     error_code: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
     error_retryable: Mapped[bool | None]
+    # Whether the failure was permanent (not retried); null for jobs that have not failed and for
+    # failures recorded before 0005. The failing-jobs check reads it (specs/004-pilot-deployment).
+    error_permanent: Mapped[bool | None]
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -632,6 +636,38 @@ class AuditEvent(Base):
     request_id: Mapped[str | None] = mapped_column(Text)
     detail: Mapped[dict[str, Any]] = mapped_column(default=dict)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class WorkerHeartbeat(Base):
+    """A worker process's latest report (specs/004-pilot-deployment, research R10).
+
+    `GET /status/worker` reads the newest. Rows silent for 24 hours are deleted by the reporters,
+    so replaced replicas do not accumulate.
+    """
+
+    __tablename__ = "worker_heartbeats"
+
+    # `<hostname>:<pid>`.
+    worker_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    started_at: Mapped[datetime]
+    beat_at: Mapped[datetime]
+
+
+class Backup(Base):
+    """A completed backup: its dump and manifest are both in the bucket (research R12)."""
+
+    __tablename__ = "backups"
+    __table_args__ = (CheckConstraint("sha256 ~ '^[0-9a-f]{64}$'", name="sha256"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    # The dump's key, `backups/<UTC date>/<UTC time as HHMMSS>/codeatlas.dump`.
+    object_key: Mapped[str] = mapped_column(Text, unique=True)
+    completed_at: Mapped[datetime]
+    bytes: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(Text)
+    alembic_revision: Mapped[str] = mapped_column(Text)
+    # The commit running when the backup was taken.
+    release: Mapped[str] = mapped_column(Text)
 
 
 class WebhookDelivery(Base):

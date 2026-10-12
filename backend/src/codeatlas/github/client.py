@@ -412,16 +412,22 @@ class GitHubClient:
         )
 
     def _app_jwt(self) -> str:
-        key_path = self._settings.github_app_private_key_path
-        if not key_path:
-            raise RuntimeError("GITHUB_APP_PRIVATE_KEY_PATH is not set")
+        # The key's content, as the platform holds it, wins over a key file (research R5).
+        key = self._settings.github_app_private_key
+        if not key.strip():
+            key_path = self._settings.github_app_private_key_path
+            if not key_path:
+                raise RuntimeError(
+                    "Neither GITHUB_APP_PRIVATE_KEY nor GITHUB_APP_PRIVATE_KEY_PATH is set"
+                )
+            key = Path(key_path).read_text()
         now = _utcnow()
         claims = {
             "iss": self._settings.github_app_id,
             "iat": int((now - APP_JWT_BACKDATE).timestamp()),
             "exp": int((now + APP_JWT_LIFETIME).timestamp()),
         }
-        return jwt.encode(claims, Path(key_path).read_text(), algorithm="RS256")
+        return jwt.encode(claims, key, algorithm="RS256")
 
     def _installation_token(self, http: httpx.Client, installation_id: int) -> str:
         with _installation_tokens_lock:

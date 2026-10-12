@@ -52,6 +52,7 @@ from codeatlas.providers.answer_model import AnswerModel, GeminiAnswerModel
 from codeatlas.review.diff import read_tree
 from codeatlas.review.prompt import PROMPT_VERSION
 from codeatlas.review.review import Analysis, analyze
+from evals.pricing import model_cost, prices
 from evals.run_qa_eval import Rate
 from evals.run_review_eval import (
     EXIT_SETUP,
@@ -94,13 +95,6 @@ KEPT_LIMITS = (
     "review_max_input_tokens",
 )
 """Limits that keep the application's values, so a pull request is reviewed as in the pilot."""
-
-PRICES: tuple[tuple[str, float, float], ...] = (
-    ("2027-01-01", 1.50, 7.50),
-    ("0001-01-01", 0.75, 3.75),
-)
-"""(first day, input, output) in USD per million tokens, newest first: the paid-tier prices of the
-default review model from 001 research R11. Thinking tokens are billed as output."""
 
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _PULL_URL = re.compile(
@@ -484,13 +478,6 @@ def review_archives(
         _fill(result, analysis)
     result.seconds = time.monotonic() - started
     return result
-
-
-def review_cost(usage: Mapping[str, Any], day: str) -> float:
-    """The estimated model cost of one review in USD at the prices of `day` (YYYY-MM-DD)."""
-    _, input_price, output_price = next(price for price in PRICES if day >= price[0])
-    output = int(usage.get("output_tokens", 0)) + int(usage.get("thinking_tokens", 0))
-    return (int(usage.get("input_tokens", 0)) * input_price + output * output_price) / 1_000_000
 
 
 # --- The export ---------------------------------------------------------------------------------
@@ -965,12 +952,12 @@ def render_report(
             f"| {'yes' if r.partial else ''} | {len(r.risks) if r.reviewed else ''} "
             f"| {len(r.item.comments)} | {counts} | {r.seconds:.1f} "
             f"| {_tokens(r, 'input_tokens')} | {_tokens(r, 'output_tokens')} "
-            f"| {_tokens(r, 'thinking_tokens')} | ${review_cost(r.usage, day):.3f} "
+            f"| {_tokens(r, 'thinking_tokens')} | ${model_cost(r.usage, day):.3f} "
             f"| {_cell(failure)} |"
         )
     pairs, dedup = _judge_calls(results)
-    _, input_price, output_price = next(price for price in PRICES if day >= price[0])
-    total = sum(review_cost(r.usage, day) for r in results)
+    input_price, output_price = prices(day)
+    total = sum(model_cost(r.usage, day) for r in results)
     timed = [r.seconds for r in reviewed]
     lines += [
         "",
@@ -1089,14 +1076,14 @@ def report_json(
                 ),
                 "seconds": round(r.seconds, 1),
                 "usage": r.usage,
-                "estimated_cost_usd": round(review_cost(r.usage, day), 4),
+                "estimated_cost_usd": round(model_cost(r.usage, day), 4),
                 "failures": r.failures,
                 "judge_failure": r.judge_failure,
             }
             for r in results
         ],
         "cost": {
-            "review_estimated_usd": round(sum(review_cost(r.usage, day) for r in results), 4),
+            "review_estimated_usd": round(sum(model_cost(r.usage, day) for r in results), 4),
             "judge_comparisons": pairs,
             "dedup_calls": dedup,
         },

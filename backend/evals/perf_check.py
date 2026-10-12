@@ -33,8 +33,12 @@ overall `passed`, and per category in `categories`: `count` (its requests, inclu
 ones), `errors` and `error_kinds` (failed requests, by status or exception), `p50` and `p95`
 (seconds, over the successful requests; null when none succeeded), `limit` (seconds), and
 `passed`. The load test workflow (`.github/workflows/load-test.yml`, specs/004-pilot-deployment
-research R15) runs the check once per concurrency level against a load test environment, with
-`--origin` equal to its URL, and `evals/load_report.py` renders the level files as one table:
+research R15) runs the check once per concurrency level against a hosted target: a `loadtest`
+environment duplicated from `production` (the same services, sizes, and commit, with an empty
+database and its own domain), whose variables are overridden before its first deployment:
+`CODEATLAS_ENV=development`, `CODEATLAS_FAKE_EXTERNALS=1`, the daily limits raised as above,
+`RATE_LIMIT_PER_MINUTE=0`, a new `TOKEN_ENCRYPTION_KEY`, and no other secrets. `--origin` equals
+its URL, and `evals/load_report.py` renders the level files as one table:
 
     uv run python -m evals.perf_check --base-url https://<host> --origin https://<host> \\
         --users 20 --json evals/out/load-test/level-20.json

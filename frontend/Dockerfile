@@ -19,11 +19,18 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY . .
 
-# Inlined into the footer at build time; the release job passes the commit SHA.
+# The API's address, which Next.js fixes in its rewrites when it builds: the API's private address
+# on Railway (specs/004-pilot-deployment research R3).
+ARG API_ORIGIN=http://localhost:8000
+ENV API_ORIGIN=$API_ORIGIN
+# Inlined into the footer at build time: the platform's commit on Railway, or else
+# NEXT_PUBLIC_RELEASE (research R6).
 ARG NEXT_PUBLIC_RELEASE=development
-RUN npm run build
+ARG RAILWAY_GIT_COMMIT_SHA=
+RUN NEXT_PUBLIC_RELEASE="${RAILWAY_GIT_COMMIT_SHA:-$NEXT_PUBLIC_RELEASE}" npm run build
 
-# Release image: the standalone server and its static assets, without node_modules or sources.
+# Release image: the standalone server, its static assets, and the release gate, without
+# node_modules or sources.
 FROM node:24-slim AS production
 
 ENV NODE_ENV=production \
@@ -35,6 +42,8 @@ WORKDIR /app
 
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
+# The release gate, the service's pre-deploy command (research R7).
+COPY --chown=node:node scripts/wait-for-api.mjs ./scripts/
 
 USER node
 

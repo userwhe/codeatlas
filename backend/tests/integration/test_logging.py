@@ -15,7 +15,6 @@ A denied sign-in, each operator command, and a rate-limited request log no token
 """
 
 import difflib
-import hashlib
 import json
 import logging
 import os
@@ -503,9 +502,7 @@ def test_operator_commands_log_no_token_cookie_or_webhook_secret(
     assert connected.status_code == 202, connected.text
     session_cookies = [client.cookies.get(COOKIE_NAME) for client in clients.values()]
     assert all(session_cookies)
-    counts_file = tmp_path / "counts.json"
     manifest_file = tmp_path / "manifest.json"
-    sha256 = hashlib.sha256(b"dump").hexdigest()
     capsys.readouterr()
 
     # `main` runs a command as `python -m codeatlas.ops` does, except for `configure_logging`,
@@ -518,33 +515,17 @@ def test_operator_commands_log_no_token_cookie_or_webhook_secret(
             _run_command(capsys, ["pilot-users", "remove", "octocat"]),
             _run_command(capsys, ["pilot-users", "delete-data", "octocat"]),
         ]
-        write_counts(db, counts_file)
-        manifest = _run_command(
-            capsys,
-            [
-                "backup-manifest",
-                "--counts",
-                str(counts_file),
-                "--dump-key",
-                "backups/codeatlas.dump",
-                "--bytes",
-                "4",
-                "--sha256",
-                sha256,
-            ],
-        )
-        manifest_file.write_text(manifest)
-        printed += [manifest, _run_command(capsys, ["verify-restore", str(manifest_file)])]
+        write_counts(db, manifest_file)
+        printed.append(_run_command(capsys, ["verify-restore", str(manifest_file)]))
 
-    # `codeatlas-compose run` gives a command the api service's log driver, so what it prints
-    # reaches the api log group too. Each command printed its result.
+    # A command run through `railway ssh` prints to the developer's terminal, not to the service's
+    # logs, but what it prints must hold no secret either. Each command printed its result.
     prefixes = [
         "Added octocat",
         "Added hubot",
         "login\tgithub_user_id\tnote\tadded_at\n",
         "Removed octocat",
         "Disconnected 1 repository of octocat",
-        '{\n  "created_at"',
         "The restored database matches the backup",
     ]
     assert [text[: len(prefix)] for text, prefix in zip(printed, prefixes, strict=True)] == prefixes

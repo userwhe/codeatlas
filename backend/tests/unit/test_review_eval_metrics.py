@@ -4,6 +4,7 @@ no network)."""
 import hashlib
 import json
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from evals.run_review_eval import (
     Labels,
     Overlay,
     RiskRecord,
+    RunInfo,
     apply_overlay,
     audit_rows,
     audit_sample,
@@ -50,6 +52,7 @@ from evals.run_review_eval import (
     parse_overlay,
     prepare,
     read_archive,
+    render_report,
     select_items,
     set_digest,
     summarize,
@@ -662,6 +665,32 @@ def test_audit_rows_show_the_cited_excerpts_with_empty_judgment_columns() -> Non
         "[E1 after app/auth.py:8-11]\nline 8\nline 9\n\n[E2 before app/auth.py:3-3]\nx = 1"
     )
     assert rows[0]["correctly_explained"] == rows[0]["reviewer_notes"] == ""
+
+
+# Report -----------------------------------------------------------------------------------------
+
+
+def test_report_shows_each_item_cost_and_the_total() -> None:
+    usage = {"model_calls": 1, "input_tokens": 20_000, "output_tokens": 2_000,
+             "thinking_tokens": 2_000}  # fmt: skip
+    results = [
+        ItemResult(item("s1"), "reviewed", "high", [risk()], [True], [check()], usage=usage,
+                   seconds=12.34),
+        ItemResult(item("s2"), failures=["provider_unavailable: down"], seconds=3.0),
+    ]  # fmt: skip
+    info = RunInfo(
+        datetime(2026, 10, 8, tzinfo=UTC), "review.jsonl", "f" * 64, None, "real", "m", "low", 0
+    )
+
+    report = render_report(info, results, summarize(results), (1, 1))
+
+    assert "| Output tokens | Est. cost | Execution failure |" in report
+    assert "| 1/1 | 12.3 | 20000 | 2000 | $0.030 |  |" in report
+    assert "| 3.0 | 0 | 0 | $0.000 | provider_unavailable: down |" in report
+    assert (
+        "Model calls: 1; tokens: 20000 input, 2000 output, 2000 thinking; estimated cost $0.03 "
+        "at $0.75 input and $3.75 output (thinking included) per million tokens"
+    ) in report
 
 
 # The shipped set --------------------------------------------------------------------------------

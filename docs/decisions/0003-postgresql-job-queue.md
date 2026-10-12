@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-10-03
 - **Scope**: `specs/001-repository-qa`; revisited for `specs/004-pilot-deployment` and kept
-  (ADR 0010)
+  (ADR 0010, and again for Railway in ADR 0014)
 
 ## Context
 
