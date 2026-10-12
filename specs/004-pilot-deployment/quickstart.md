@@ -40,9 +40,9 @@ them, and locally they are skipped with a reason when missing.
 
 The operations guide has every command. For the MVP (User Story 1), in order:
 
-1. Create the project and apply `.railway/railway.ts`: `railway config plan`, review the diff,
-   `railway config apply`. Confirm that "Wait for CI" is on for every app service before anything
-   deploys.
+1. Give Railway's GitHub App access to the repository. Create the project and apply
+   `.railway/railway.ts`: `railway config plan`, review the diff, `railway config apply`. Confirm
+   that "Wait for CI" is on for every app service before anything deploys.
 2. Generate the web app's domain, and register the pilot GitHub App with its URLs.
 3. Set the sealed secrets on `api`, `worker`, and `db`; deploy the staged changes.
 4. Merge to `main` (or redeploy the current commit) and wait for `api` to pass its healthcheck,
@@ -158,7 +158,21 @@ PostgreSQL 17 with pgvector in Docker):
 - `.railway/railway.ts` type-checks against the pinned `railway` package; `railway config plan`
   needs the developer's account and is part of T024.
 
-**Not run yet**: every scenario on Railway (1 to 22), the fault tests, the recovery exercise, the
-load test, the evaluation, the credential scan, and the cost and availability checks. They need the
-Railway account, the pilot GitHub App, the Better Stack monitors, or model provider keys, and wait
-for the developer actions T004, T024, T042, T045, T048, T049, T051, T054, and T056.
+**2026-10-12, first deployment** (the pilot at `https://codeatlas-pilot.up.railway.app`, built
+from `main` at commit `17438c6`):
+
+- Scenario 1 (HTTPS) passed: HTTP answered 301 to HTTPS, the certificate is valid, and the page
+  carries `Strict-Transport-Security`.
+- `/version` reported `17438c6`, `/readyz` reported ready, and the four status endpoints answered;
+  `/status/backup` answered 503 until the first backup, then 200.
+- `api`'s pre-deploy command migrated the empty database through 0001 to 0005, and the release
+  gates of `web`, `worker`, and `backup` passed once `api` reported the commit.
+- A backup run by hand (`railway cron run -s backup -y`) succeeded: it stored
+  `backups/2026-10-12/212351/codeatlas.dump` (61,337 bytes). That is part of scenario 21; the
+  restore and the drill are still to do.
+- The developer was added to the access list.
+
+**Not run yet**: scenarios 2 to 20, 22, and the rest of 21, the fault tests, the recovery
+exercise, the load test, the evaluation, the credential scan, and the cost and availability
+checks. The developer action T004 is done; the others wait for T024, which continues with
+scenarios 2 to 11 and 20, and for T042, T045, T048, T049, T051, T054, and T056.

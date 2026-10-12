@@ -14,8 +14,9 @@
 // Secrets are declared with preserve(), so no value is in this file: the developer sets each one
 // with the CLI and seals it in the dashboard, and apply keeps it. A variable set on Railway
 // but not declared here appears in the next plan as a destructive deletion. Settings this file
-// cannot hold (the generated domain, notification rules, usage limits, and any field below that
-// `railway config plan` does not show) are recorded in docs/operations.md.
+// cannot hold (the generated domain, notification rules, usage limits, SSH keys, and the separate
+// backups project) are recorded in docs/operations.md. Railway's GitHub App must be able to read the
+// repository before the first apply, or the services get no deployment trigger.
 
 import { defineRailway, github, image, preserve, project, service, volume } from "railway/iac";
 
@@ -32,8 +33,10 @@ function fromMain(rootDirectory: string) {
   return github(repository, { branch: "main", rootDirectory, checkSuites: true });
 }
 
-// A crashed service restarts by itself, up to 10 times (research R2).
-const restartOnFailure = { restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 10 } as const;
+// A crashed service restarts by itself, up to 10 times (research R2): that is Railway's default
+// restart policy, which the platform does not report back, so the file leaves it unset except for
+// `backup`. Railway also builds with the Dockerfile in a service's root directory by itself; its API
+// has no Dockerfile builder to set, so the file names no builder either.
 
 // The release gate waits up to 20 minutes for `api` to report the deployment's commit; the
 // pre-deploy timeout leaves room above that (research R7).
@@ -75,14 +78,15 @@ const applicationSettings = {
 export default defineRailway(() => {
   // PostgreSQL 17 with pgvector, reachable only on the private network: no public domain and no
   // TCP proxy (research R1).
-  const dbData = volume("db-data", { region });
+  // 5 GB, the Hobby plan's cap, which Railway gives the volume when it is created.
+  const dbData = volume("db-data", { region, sizeMB: 5_000 });
   const db = service("db", {
     source: image("pgvector/pgvector:pg17"),
     // On Railway a start command replaces the image's ENTRYPOINT, so it runs the image's entrypoint
     // script, which initializes the data directory on first start and drops root privileges.
     start: "docker-entrypoint.sh postgres -c shared_buffers=256MB -c max_connections=50",
     replicas: oneReplicaInRegion,
-    deploy: { ...restartOnFailure, ...sizeLimit(1, 1) },
+    deploy: { ...sizeLimit(1, 1) },
     volumeMounts: { "/var/lib/postgresql/data": dbData },
     env: {
       POSTGRES_USER: "codeatlas",
@@ -98,11 +102,10 @@ export default defineRailway(() => {
   // The only public service, on the domain the developer generates.
   const web = service("web", {
     source: fromMain("frontend"),
-    build: { builder: "DOCKERFILE" },
     preDeploy: "node scripts/wait-for-api.mjs",
     healthcheck: "/",
     replicas: oneReplicaInRegion,
-    deploy: { ...releaseGateTimeout, ...restartOnFailure, ...sizeLimit(0.5, 0.5) },
+    deploy: { ...releaseGateTimeout, ...sizeLimit(0.5, 0.5) },
     env: {
       // A build argument for the rewrites, and the release gate's target at run time.
       API_ORIGIN: apiOrigin,
@@ -118,12 +121,11 @@ export default defineRailway(() => {
   // traffic moves only after /readyz passes (research R7).
   const api = service("api", {
     source: fromMain("backend"),
-    build: { builder: "DOCKERFILE" },
     start: "uvicorn codeatlas.api.app:app --host 0.0.0.0 --port 8000",
     preDeploy: "python -m codeatlas.ops migrate",
     healthcheck: "/readyz",
     replicas: oneReplicaInRegion,
-    deploy: { ...restartOnFailure, ...sizeLimit(1, 1) },
+    deploy: { ...sizeLimit(1, 1) },
     env: {
       ...applicationSettings,
       PORT: "8000",
@@ -137,11 +139,10 @@ export default defineRailway(() => {
   // starts; it gets 30 seconds after SIGTERM to finish its current job (research R7).
   const worker = service("worker", {
     source: fromMain("backend"),
-    build: { builder: "DOCKERFILE" },
     start: "python -m codeatlas.jobs.worker",
     preDeploy: "python -m codeatlas.ops wait-for-api",
     replicas: oneReplicaInRegion,
-    deploy: { ...releaseGateTimeout, ...restartOnFailure, ...sizeLimit(1, 2) },
+    deploy: { ...releaseGateTimeout, ...sizeLimit(1, 2) },
     env: {
       ...applicationSettings,
       API_ORIGIN: apiOrigin,
@@ -154,7 +155,6 @@ export default defineRailway(() => {
   // which the developer copies from that bucket and seals here.
   const backup = service("backup", {
     source: fromMain("backend"),
-    build: { builder: "DOCKERFILE" },
     start: "python -m codeatlas.ops backup",
     preDeploy: "python -m codeatlas.ops wait-for-api",
     replicas: oneReplicaInRegion,

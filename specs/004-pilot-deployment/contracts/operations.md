@@ -26,13 +26,17 @@ volumes and a new generated domain, and does not receive sealed variables. Delet
 | `api` | `main`, `backend/`, `Dockerfile` | `uvicorn codeatlas.api.app:app --host 0.0.0.0 --port 8000` | `python -m codeatlas.ops migrate` | `/readyz` | On failure, 10 retries | No | 1 vCPU, 1 GB |
 | `worker` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.jobs.worker` | `python -m codeatlas.ops wait-for-api` | none | On failure, 10 retries | No | 1 vCPU, 2 GB |
 | `backup` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC) | `python -m codeatlas.ops wait-for-api` | none | Never | No | 0.5 vCPU, 0.5 GB |
-| `db` | Image `pgvector/pgvector:pg17`; volume at `/var/lib/postgresql/data` | `docker-entrypoint.sh postgres -c shared_buffers=256MB -c max_connections=50` (a start command replaces the image's entrypoint) | none | none | On failure, 10 retries | No, and no TCP proxy | 1 vCPU, 1 GB |
+| `db` | Image `pgvector/pgvector:pg17`; 5 GB volume at `/var/lib/postgresql/data` | `docker-entrypoint.sh postgres -c shared_buffers=256MB -c max_connections=50` (a start command replaces the image's entrypoint) | none | none | On failure, 10 retries | No, and no TCP proxy | 1 vCPU, 1 GB |
 | `backups` | Railway bucket in the separate project `codeatlas-backups`, created once by the developer | n/a | n/a | n/a | n/a | No | n/a |
 
 `web`, `api`, `worker`, and `backup` deploy from `main` with "Wait for CI" on from the first
 deployment. Pull request environments are off. The pre-deploy commands of `web`, `worker`, and
 `backup` are the release gate: each waits, for up to 20 minutes, until `api` reports the
 deployment's own commit at `/version` (research R7); their pre-deploy timeout is 1,500 seconds.
+Railway builds each app service with the Dockerfile in its root directory without a builder
+setting, and "on failure, 10 retries" is its default restart policy, which the file leaves unset.
+`db` needs `POSTGRES_PASSWORD` before its first start: without it, the image refuses to initialize
+the database.
 
 ## Variables
 
@@ -68,18 +72,18 @@ it as the release, and `web`'s Dockerfile declares it as a build argument for th
 ## Settings outside the infrastructure file
 
 Recorded in `docs/operations.md` with their values, because `.railway/railway.ts` cannot hold
-them:
+them. The first `railway config plan` confirmed that the file applies everything else, the size
+limits, the cron schedule, "Wait for CI", and the pre-deploy timeout included; "Wait for CI" takes
+effect only when Railway's GitHub App can see the repository at `railway config apply`.
 
 | Setting | Where | Value |
 | --- | --- | --- |
-| The web app's generated domain | `web`, Settings, Networking (or `railway domain`) | `codeatlas.up.railway.app`, or the nearest free name |
-| Replica size limits, if `railway config plan` does not show them | Each service, Settings, Deploy | The sizes in "Services" |
-| Cron schedule, if `railway config plan` does not show it | `backup`, Settings, Deploy | `30 3 * * *` |
-| "Wait for CI", if `railway config plan` does not show it | `web`, `api`, `worker`, `backup`, Settings, Source | On, before the first deployment |
-| Pre-deploy timeout, if `railway config plan` does not show it | `web`, `worker`, `backup`, Settings, Deploy | 1,500 seconds |
+| The web app's generated domain | `web`, Settings, Networking (or `railway domain`) | `codeatlas-pilot.up.railway.app` (`codeatlas` was taken) |
 | Notification rules | Account, Notifications, with a project override | Email for build failed, deployment failed, and deployment crashed |
 | Usage limits | Workspace, Usage | Custom email alert $20; hard limit $50 |
 | SSH key | Account, SSH keys | The developer's public key |
+| Pull request environments | Project, Settings, Environments | Off (the default) |
+| The backups project and its bucket | Project `codeatlas-backups` | Bucket `backups` in US East; its five values copied to `backup` and sealed |
 
 ## Operator commands
 

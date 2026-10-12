@@ -35,10 +35,11 @@ and the decisions behind them in [research.md](../specs/004-pilot-deployment/res
   so that the repository stays linked to the pilot. This guide runs them in a subshell, for
   example `(cd ~/codeatlas-backups && railway bucket credentials -b backups)`, which prints the
   bucket's keys; the bucket's Credentials tab in the dashboard shows the same values.
-- `<domain>` is the web app's domain, chosen in ["The domain"](#the-domain), for example
-  `codeatlas.up.railway.app`.
+- `<domain>` is the web app's domain, chosen in ["The domain"](#the-domain): the pilot's is
+  `codeatlas-pilot.up.railway.app`.
 - **Operator commands** run in a service's container, with that service's variables, through the
-  platform's SSH (an SSH key registered on your Railway account):
+  platform's SSH (an SSH key registered on your Railway account, and the host key of
+  `ssh.railway.com` accepted; ["Tools and accounts"](#tools-and-accounts)):
 
   ```bash
   railway ssh -s api -- python -m codeatlas.ops <command>
@@ -91,10 +92,12 @@ environment's failed deployments email you as well; the monitors watch only the 
 ### Tools and accounts
 
 - A Railway account on the Hobby plan, connected to GitHub, with access for Railway's GitHub App to
-  this repository. "Wait for CI" needs the App's updated permissions; accept them on GitHub when
-  Railway asks.
+  this repository before the first `railway config apply` (on GitHub: Settings, Applications,
+  Railway, Configure, and add the repository). Without it, `apply` creates the app services with
+  no deployment trigger (["Wait for CI"](#wait-for-ci)). "Wait for CI" needs the App's updated
+  permissions; accept them on GitHub when Railway asks.
 - The Railway CLI, a version with `railway config` and `railway ssh` (`railway upgrade` updates
-  it), signed in with `railway login`.
+  it), signed in with `railway login`. The pilot was built with 5.66.0.
 - An SSH key registered on the Railway account, for `railway ssh`:
 
   ```bash
@@ -102,6 +105,18 @@ environment's failed deployments email you as well; the monitors watch only the 
   railway ssh keys list
   ```
 
+  `railway ssh` checks the host key of `ssh.railway.com`. In a shell that is not interactive, such
+  as a script, it fails with "Host key verification failed" until that key is in
+  `~/.ssh/known_hosts`. Connect once interactively and accept the key, or add it after checking
+  its fingerprint:
+
+  ```bash
+  ssh-keyscan -t ed25519 ssh.railway.com | ssh-keygen -lf -    # check the fingerprint
+  ssh-keyscan -t ed25519 ssh.railway.com >> ~/.ssh/known_hosts
+  ```
+
+  When the registered key is not one SSH finds by itself, choose it with
+  `railway ssh -i <private key file> -s <service>`.
 - Node.js 24 with npm, and the Railway CLI 5.42.1 or later: `railway config` runs
   `.railway/railway.ts` with Railway's SDK, the npm package `railway`, pinned in
   `.railway/package.json`. Install it before the first plan, and again after the pin changes:
@@ -110,15 +125,17 @@ environment's failed deployments email you as well; the monitors watch only the 
   npm ci --prefix .railway
   ```
 
-- `openssl`, and `uv` for `backend/`, to generate secrets; the GitHub CLI, `gh`, for the load test.
+- `openssl`, and `uv` for `backend/`, to generate secrets; the GitHub CLI, `gh`, for the load test,
+  and with `jq` for the App's manifest route.
 - Gemini (paid tier) and Voyage AI keys, as in 001.
 - A Better Stack account on the free plan, for the monitors (["Alerts"](#alerts)).
 - A password manager for the secrets.
 
 ### The project
 
-Create the project and link this directory to its `production` environment, then preview the
-configuration and apply it:
+Grant Railway's GitHub App access to the repository first (["Tools and
+accounts"](#tools-and-accounts)). Then create the project and link this directory to its
+`production` environment, preview the configuration, and apply it:
 
 ```bash
 railway init --name codeatlas
@@ -127,9 +144,11 @@ railway config plan
 railway config apply
 ```
 
-The plan lists every service, the volume, and every variable, with secret values redacted; the
-secrets declared with `preserve()` get their values below. `apply` runs the plan again, shows it,
-and asks for confirmation. It is rejected if the environment changed in between; plan again then.
+In a shell that is not interactive, `railway init` also needs `--workspace <workspace ID>`;
+`railway whoami --json` lists the workspaces with their IDs. The plan lists every service, the
+volume, and every variable, with secret values redacted; the secrets declared with `preserve()`
+get their values below. `apply` runs the plan again, shows it, and asks for confirmation. It is
+rejected if the environment changed in between; plan again then.
 
 ### The backups bucket
 
@@ -151,35 +170,59 @@ secrets"](#variables-and-secrets), before the first nightly run.
 
 ### Wait for CI
 
-From its first deployment, each app service waits for CI. Check `web`, `api`, `worker`, and
-`backup` (each service's Settings, Source): "Wait for CI" is on, and the branch is `main`. Unless
-the plan showed it, turn it on now and record it in ["Settings outside the infrastructure
-file"](#settings-outside-the-infrastructure-file). If a deployment started before that, abort it
-(the service's Deployments, the deployment's menu, "Abort deployment"). Pull request environments
-stay off in the project's settings. CI runs on every push to `main`, which "Wait for CI" requires.
+From its first deployment, each app service waits for CI. `apply` turns it on with each service's
+source (`checkSuites` in the file). Check `web`, `api`, `worker`, and `backup` (each service's
+Settings, Source): "Wait for CI" is on, and the branch is `main`.
+
+If Railway's GitHub App could not see the repository when `apply` ran, the app services have no
+deployment trigger: every deployment fails before building, with "Deployment does not have an
+associated build", and "Wait for CI" does not stick. Grant the access (["Tools and
+accounts"](#tools-and-accounts)), then create each app service's trigger with "Wait for CI". In the
+dashboard, reconnect the repository in the service's Settings, Source, which does both. Or use the
+CLI's GraphQL access, once per service, with the root directory `frontend` for `web` and `backend`
+for the others:
+
+```bash
+railway api 'mutation($input: DeploymentTriggerCreateInput!) {
+  deploymentTriggerCreate(input: $input) { id checkSuites validCheckSuites }
+}' --variables '{"input": {"projectId": "<project ID>", "environmentId": "<environment ID>",
+  "serviceId": "<service ID>", "provider": "github", "repository": "userwhe/codeatlas",
+  "branch": "main", "rootDirectory": "backend", "checkSuites": true}}'
+```
+
+`railway status --json` has the project's, the environment's, and the services' IDs.
+`validCheckSuites: 1` in the answer confirms that Railway sees the CI workflow.
+
+If a deployment started before "Wait for CI" was on, abort it (the service's Deployments, the
+deployment's menu, "Abort deployment"). Pull request environments stay off in the project's
+settings. CI runs on every push to `main`, which "Wait for CI" requires.
 
 ### The domain
 
 Generate the web app's domain on port 3000, then rename it to the name the pilot keeps. The first
-command prints the generated name:
+command prints the generated name, and the second its ID. `--domain` takes the full domain:
 
 ```bash
 railway domain -s web --port 3000
-railway domain update <generated name>.up.railway.app -s web --domain codeatlas
+railway domain list -s web --json
+railway domain update <domain ID> -s web --domain codeatlas-pilot.up.railway.app
 railway domain list -s web
 ```
 
-If `codeatlas` is taken, choose the nearest free name, and record it in ["Settings outside the
-infrastructure file"](#settings-outside-the-infrastructure-file). Railway's edge serves the domain
-over HTTPS with a certificate it renews, and redirects HTTP to HTTPS. Only `web` has a domain:
-`api`, `worker`, `backup`, and `db` have none, and `db` has no TCP proxy.
+`codeatlas` was taken, so the pilot's address is `https://codeatlas-pilot.up.railway.app`. If you
+rebuild and that name is taken too, choose the nearest free name, and record it in ["Settings
+outside the infrastructure file"](#settings-outside-the-infrastructure-file). Railway's edge serves
+the domain over HTTPS with a certificate it renews, and answers HTTP with a 301 to HTTPS; every
+page carries `Strict-Transport-Security`. Only `web` has a domain: `api`, `worker`, `backup`, and
+`db` have none, and `db` has no TCP proxy.
 
 ### The pilot GitHub App
 
-The pilot uses its own App, separate from the development App. In GitHub, open Settings, then
-Developer settings, then GitHub Apps, then New GitHub App, and set:
+The pilot uses its own App, separate from the development App: `CodeAtlas Pilot`, with the slug
+`codeatlas-pilot`. Register it with GitHub's form, or from a manifest (below). In GitHub, open
+Settings, then Developer settings, then GitHub Apps, then New GitHub App, and set:
 
-- **GitHub App name**: for example `CodeAtlas`; **Homepage URL**: `https://<domain>`.
+- **GitHub App name**: `CodeAtlas Pilot`; **Homepage URL**: `https://<domain>`.
 - **Callback URL**: `https://<domain>/auth/github/callback`.
 - **Expire user authorization tokens**: on.
 - **Webhook**: active, with the URL `https://<domain>/webhooks/github` and a secret generated with
@@ -193,9 +236,52 @@ Developer settings, then GitHub Apps, then New GitHub App, and set:
 After creating it, note the App ID, the client ID, and the slug (the last part of the App's public
 page URL), generate a client secret, and generate a private key, which downloads a `.pem` file.
 
+**From a manifest**, instead of the form: GitHub creates the App with these settings and returns
+its values, secrets included, so that they go to Railway without being shown. Save a page that
+posts the manifest to GitHub, open it in your browser, and submit it:
+
+```html
+<form action="https://github.com/settings/apps/new" method="post">
+  <input type="hidden" name="manifest" value='{
+    "name": "CodeAtlas Pilot",
+    "url": "https://<domain>",
+    "hook_attributes": {"url": "https://<domain>/webhooks/github"},
+    "redirect_url": "<a page to return to>",
+    "callback_urls": ["https://<domain>/auth/github/callback"],
+    "public": true,
+    "default_permissions": {"contents": "read", "metadata": "read", "pull_requests": "read"},
+    "default_events": ["push"]
+  }'>
+  <button type="submit">Create the pilot App</button>
+</form>
+```
+
+GitHub shows the App; choose Create. It then sends the browser to `redirect_url` with a one-time
+`code` in the query string. Exchange the code once, and set the six values on `api` and `worker`
+straight from the answer:
+
+```bash
+APP="$(gh api --method POST /app-manifests/<code>/conversions)"
+for service in api worker; do
+  for pair in GITHUB_APP_ID=.id GITHUB_APP_SLUG=.slug GITHUB_APP_CLIENT_ID=.client_id \
+    GITHUB_APP_CLIENT_SECRET=.client_secret GITHUB_WEBHOOK_SECRET=.webhook_secret \
+    GITHUB_APP_PRIVATE_KEY=.pem; do
+    printf '%s' "$APP" | jq -j "${pair#*=}" |
+      railway variable set "${pair%%=*}" --stdin -s "$service" --skip-deploys
+  done
+done
+```
+
+Copy the three secrets into your password manager without printing them, for example
+`printf '%s' "$APP" | jq -j .pem | pbcopy` for the private key, then `unset APP`. In the App's
+settings, check that "Expire user authorization tokens" is on. The App's secrets are sealed with
+the others in the next step.
+
 ### Variables and secrets
 
-The App's ID, slug, and client ID are not secrets. Set them on `api` and `worker`, unsealed:
+After the manifest route, the App's six values are set already; set the other secrets below, and
+seal them all. With the form, the App's ID, slug, and client ID are not secrets. Set them on `api`
+and `worker`, unsealed:
 
 ```bash
 for service in api worker; do
@@ -246,26 +332,41 @@ done
 unset VALUE
 ```
 
-| Variable on `backup` | Printed by `railway bucket credentials` as |
-| --- | --- |
-| `BACKUP_ENDPOINT_URL` | `AWS_ENDPOINT_URL` |
-| `BACKUP_REGION` | `AWS_DEFAULT_REGION` |
-| `BACKUP_BUCKET` | `AWS_S3_BUCKET_NAME` |
-| `BACKUP_ACCESS_KEY_ID` | `AWS_ACCESS_KEY_ID` |
-| `BACKUP_SECRET_ACCESS_KEY` | `AWS_SECRET_ACCESS_KEY` |
+| Variable on `backup` | Printed by `railway bucket credentials` as | Field with `--json` |
+| --- | --- | --- |
+| `BACKUP_ENDPOINT_URL` | `AWS_ENDPOINT_URL` | `endpoint` |
+| `BACKUP_REGION` | `AWS_DEFAULT_REGION` | `region` (`auto`) |
+| `BACKUP_BUCKET` | `AWS_S3_BUCKET_NAME` | `bucketName` |
+| `BACKUP_ACCESS_KEY_ID` | `AWS_ACCESS_KEY_ID` | `accessKeyId` |
+| `BACKUP_SECRET_ACCESS_KEY` | `AWS_SECRET_ACCESS_KEY` | `secretAccessKey` |
 
-Then seal every secret in the dashboard, the bucket's five values included. `api` and `worker`
-hold the same secrets; `web` holds none, and `backup` holds only the bucket's values, which the
-bucket can print again at any time.
+`--json` also reports `urlStyle`, `virtual-host`: the virtual-hosted addressing the backup command
+uses. Then seal every secret in the dashboard, the bucket's five values included. `api` and
+`worker` hold the same secrets; `web` holds none, and `backup` holds only the bucket's values,
+which the bucket can print again at any time.
 
 ### The first deployment
 
-Review the staged changes in the dashboard, and choose "Deploy". If an app service still has no
-deployment of the current `main` commit afterward, deploy it from the service's Command Palette
-(Cmd+K), "Deploy Latest Commit", or merge a pull request. Each deployment runs as in
-["Releases"](#releases): `api` migrates the empty database in its pre-deploy command and takes
-traffic once `/readyz` answers, and `web`, `worker`, and `backup` wait in their release gates until
-`api` reports their commit. Watch it, then check from outside:
+Review the staged changes in the dashboard. Variables set with `--skip-deploys` take effect at each
+service's next deployment. Deploy the services in this order; each app service's deployment runs as
+in ["Releases"](#releases):
+
+1. `db`, once `POSTGRES_PASSWORD` is set. Without it, the pgvector image refuses to initialize the
+   database, so a `db` deployment that started before the password was set failed. Deploy it
+   again with `railway redeploy -s db`, and wait until it runs (`railway logs -s db --lines 20`).
+2. `api`: its pre-deploy command migrates the empty database (0001 to 0005 at the pilot's first
+   deployment), and it takes traffic once `/readyz` answers.
+3. `web`, `worker`, and `backup`: their release gates pass once `api` reports their commit.
+
+Deploy an app service at the current `main` commit from its Command Palette (Cmd+K), "Deploy
+Latest Commit", or with the CLI's GraphQL access (the IDs as in ["Wait for CI"](#wait-for-ci)):
+
+```bash
+railway api 'mutation { serviceInstanceDeploy(serviceId: "<service ID>",
+  environmentId: "<environment ID>", latestCommit: true) }'
+```
+
+Watch each deployment, then check from outside:
 
 ```bash
 railway deployment list -s api
@@ -284,18 +385,14 @@ setting you changed in the dashboard in the table below.
 Change them in the dashboard (["Changing the configuration"](#changing-the-configuration)), and
 update this table with every change.
 
-The file declares the size limits, the cron schedule, "Wait for CI", and the pre-deploy timeout,
-but Railway documents them only as dashboard settings. The first `railway config plan` shows
-which of them it applies: set the others in the dashboard, and delete from this table the rows the
-plan shows.
+The first `railway config plan` confirmed that the file applies the size limits, the cron
+schedule, "Wait for CI", and the pre-deploy timeout, so they are not in this table. "Wait for CI"
+takes effect only when Railway's GitHub App can see the repository at `apply` (["Wait for
+CI"](#wait-for-ci)).
 
 | Setting | Where | Value |
 | --- | --- | --- |
-| The web app's generated domain | `web`, Settings, Networking (or `railway domain`) | `codeatlas.up.railway.app`, or the nearest free name |
-| Replica size limits, if `railway config plan` does not show them | Each service, Settings, Deploy | `web` 0.5 vCPU, 0.5 GB; `api` 1 vCPU, 1 GB; `worker` 1 vCPU, 2 GB; `backup` 0.5 vCPU, 0.5 GB; `db` 1 vCPU, 1 GB |
-| Cron schedule, if `railway config plan` does not show it | `backup`, Settings, Deploy | `30 3 * * *` |
-| "Wait for CI", if `railway config plan` does not show it | `web`, `api`, `worker`, `backup`, Settings, Source | On, before the first deployment |
-| Pre-deploy timeout, if `railway config plan` does not show it | `web`, `worker`, `backup`, Settings, Deploy | 1,500 seconds |
+| The web app's generated domain | `web`, Settings, Networking (or `railway domain`) | `codeatlas-pilot.up.railway.app` (`codeatlas` was taken) |
 | Notification rules | Account, Notifications, with a project override | Email for build failed, deployment failed, and deployment crashed |
 | Usage limits | Workspace, Usage | Custom email alert $20; hard limit $50 |
 | SSH key | Account, SSH keys | The developer's public key |
@@ -304,6 +401,12 @@ plan shows.
 
 The pilot GitHub App ([above](#the-pilot-github-app)) and the Better Stack monitors
 (["Monitors"](#monitors)) are also outside the file; their settings are in those sections.
+
+Two settings stay at Railway's defaults, so the file leaves them unset. Railway builds each app
+service with the Dockerfile in its root directory by itself (the build log shows `load build
+definition from backend/Dockerfile`); its API has no Dockerfile builder value, and the dashboard
+may still display Railpack. The restart policy of every service except `backup` is Railway's
+default, on failure with 10 retries, which the platform does not report back.
 
 ## Releases
 
@@ -457,8 +560,9 @@ commit; the integration tests cover the migration command's own failure.
 
 ## Changing the configuration
 
-- **Settings the file holds** (services, commands, healthchecks, restart policies, the volume, the
-  variables, and any setting the plan shows): change `.railway/railway.ts` through a pull request.
+- **Settings the file holds** (services, sources with "Wait for CI", commands, healthchecks,
+  `backup`'s restart policy and cron schedule, the pre-deploy timeout, the size limits, the volume,
+  and the variables): change `.railway/railway.ts` through a pull request.
   After it merges, from an up-to-date `main`:
 
   ```bash
@@ -628,9 +732,11 @@ On the workspace's Usage page, "Set Usage Limits": a custom email alert at $20 (
 monthly budget) and a hard limit at $50, twice the budget. Or from the command line:
 
 ```bash
-railway usage limit set --target workspace --soft 20 --hard 50
+railway usage limit set --target workspace --soft 20 --hard 50 --workspace <workspace ID>
 railway usage limit status
 ```
+
+`railway status --json` reports the workspace ID as `workspaceId`.
 
 Railway also warns at 75% and 90% of the hard limit, and at 100%, when it takes every service
 offline to stop further spending. To bring the pilot back, raise or remove the hard limit; Railway
@@ -657,8 +763,9 @@ A status endpoint answers 200 or 503 with `condition`, `status`, `value`, and `t
 worker silent for 5 minutes, a job waiting 30 minutes), so its monitor alerts on the first 503.
 `/status/backup` fails until the first nightly backup completes, so create its monitor once
 `backup`'s logs show `backup_completed`, or `curl -s https://<domain>/status/backup` reports
-`"status": "ok"`. The status paths are rate-limited per client address, at 60 requests a minute;
-the monitors stay far below it.
+`"status": "ok"`. To get there sooner, run a backup off its schedule (["Backups"](#backups)). The
+status paths are rate-limited per client address, at 60 requests a minute; the monitors stay far
+below it.
 
 ### When an alert arrives
 
@@ -777,16 +884,19 @@ psql -U codeatlas -d codeatlas \
 exit
 ```
 
-To run a backup by hand, for example after fixing a failure or after a restore, open an `api`
-session with the bucket's keys exported (["Restoring a backup"](#restoring-a-backup), step 3), and
-run the same command there:
+To run a backup by hand, for example after fixing a failure, after a restore, or before the first
+night, start the cron service off its schedule, with its own variables:
 
 ```bash
-python -m codeatlas.ops backup
+railway cron run -s backup -y
+railway logs -s backup --latest
 ```
 
-A second run on the same day stores a second backup under a new time and leaves the first
-untouched.
+The pilot's first backup ran this way: it stored `backups/2026-10-12/212351/codeatlas.dump`
+(61,337 bytes), and `/status/backup` turned from 503 to 200. In a restore session that has the
+bucket's keys exported (["Restoring a backup"](#restoring-a-backup), step 3),
+`python -m codeatlas.ops backup` runs the same command. A second run on the same day stores a
+second backup under a new time and leaves the first untouched.
 
 ## Restoring a backup
 
@@ -855,7 +965,7 @@ with the bucket's keys exported for that session only, so `api` holds them only 
 
 A backup's own `backups` row is written after its dump, so after a restore, the newest row is the
 one before the restored backup. `/status/backup` may therefore fail until the next nightly run.
-Expect the alert, or run a backup by hand in the session of step 3, before `exit`.
+Expect the alert, or run a backup by hand (["Backups"](#backups)) once the pilot is open again.
 
 ## Recovery exercise
 
@@ -950,10 +1060,10 @@ is deleted or unusable, rebuild it from `.railway/railway.ts`:
    `railway init`, and ["The backups bucket"](#the-backups-bucket), which survived) to ["The first
    deployment"](#the-first-deployment), with the secrets from your password manager, a new
    `POSTGRES_PASSWORD`, and the bucket's five values printed again. For the domain, take the old
-   name back with `railway domain update <generated name>.up.railway.app -s web --domain <old
-   name>` if it is free. Otherwise keep the new name: change the pilot App's homepage, callback,
-   and webhook URLs, the monitors' URLs, and the table in this guide, and tell the pilot users the
-   new address.
+   name back as in ["The domain"](#the-domain)
+   (`railway domain update <domain ID> -s web --domain codeatlas-pilot.up.railway.app`) if it is
+   free. Otherwise keep the new name: change the pilot App's homepage, callback, and webhook URLs,
+   the monitors' URLs, and the table in this guide, and tell the pilot users the new address.
 4. Restore the latest backup from `codeatlas-backups`: ["Restoring a
    backup"](#restoring-a-backup), steps 1 to 6. The new environment's `api` migrated an empty
    database; the restore replaces it, pilot users included.
