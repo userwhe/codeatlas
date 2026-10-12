@@ -557,12 +557,12 @@ tests.
 
 ### Implementation for User Story 4
 
-- [ ] T046 [P] [US4] Load test against Railway (research R15): in .github/workflows/load-test.yml,
+- [X] T046 [P] [US4] Load test against Railway (research R15): in .github/workflows/load-test.yml,
   measure the network baseline against `$BASE_URL/version` instead of `/healthz` (the step, its
   comment, and the summary text); in the docstring of backend/evals/perf_check.py, describe the
   hosted target as a `loadtest` environment duplicated from `production` with the variables of
   research R15.
-- [ ] T047 [P] [US4] Per-item cost and latency in the evaluations (FR-028; research R16), tests
+- [X] T047 [P] [US4] Per-item cost and latency in the evaluations (FR-028; research R16), tests
   first:
   - move `review_cost` and its price table from backend/evals/run_bench_eval.py to a new
     backend/evals/pricing.py as `model_cost(usage, day)`, and import it from the benchmark runner;

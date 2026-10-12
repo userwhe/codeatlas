@@ -63,6 +63,7 @@ from codeatlas.qa.runs import citations, submit
 from codeatlas.qa.schema import AnswerOutput
 from codeatlas.retrieval.evidence import assemble_evidence, file_lines
 from codeatlas.workspace.repositories import connect, reindex
+from evals.pricing import model_cost, prices
 
 SPLITS = ("tuning", "heldout")
 RECALL_K = 5
@@ -279,6 +280,11 @@ class QuestionResult:
     gaps: list[str] = field(default_factory=list)
     claims: list[ClaimRecord] = field(default_factory=list)
     citations: list[CitationCheck] = field(default_factory=list)
+    usage: dict[str, Any] = field(default_factory=dict)
+    """The published answer's `analysis_runs.usage`: model calls and token counts."""
+    seconds: float | None = None
+    """The answer job's time from its creation (the submission) to its end; None if it did not
+    end."""
     failures: list[str] = field(default_factory=list)
     """Execution failures, kept apart from answer quality."""
 
@@ -426,6 +432,10 @@ def _rate_text(rate: Rate, *, percent: bool) -> str:
     return f"{rate.value:.3f} (mean of {rate.denominator})"
 
 
+def _tokens(result: QuestionResult, key: str) -> int:
+    return int(result.usage.get(key, 0))
+
+
 def _status(rate: Rate, target: float, applies: bool = True) -> str:
     if not applies:
         return "not applicable"
@@ -439,6 +449,7 @@ def render_report(
     results: Sequence[QuestionResult],
     summary: Summary,
 ) -> str:
+    day = info.started_at.date().isoformat()
     answerable = sum(1 for r in results if r.question.answerable)
     lines = [
         "# Answer-quality evaluation",
@@ -495,22 +506,54 @@ def render_report(
             f"Documentation search ran in reduced (keyword-only) mode for {degraded} questions.",
             "",
         ]
+    if not info.retrieval_only:
+        lines += _usage_lines(results, day)
     lines += [
         "## Per-question results",
         "",
-        "| ID | Split | Answerable | Recall@5 | Result | Valid citations | Execution failure |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| ID | Split | Answerable | Recall@5 | Result | Valid citations | Seconds | Input tokens "
+        "| Output tokens | Est. cost | Execution failure |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in results:
         valid = sum(1 for c in r.citations if c.problem is None)
+        model_cells = (
+            f"{_tokens(r, 'input_tokens')} | {_tokens(r, 'output_tokens')} "
+            f"| ${model_cost(r.usage, day):.3f}"
+            if r.answered
+            else " |  | "
+        )
         lines.append(
             f"| {r.question.id} | {r.question.split} | {'yes' if r.question.answerable else 'no'} "
             f"| {'' if r.recall is None else f'{r.recall:.2f}'} | {r.quality_state or ''} "
             f"| {f'{valid}/{len(r.citations)}' if r.answered else ''} "
+            f"| {'' if r.seconds is None else f'{r.seconds:.1f}'} | {model_cells} "
             f"| {_cell('; '.join(r.failures))} |"
         )
     lines += ["", "## Failures", "", *_failure_sections(results)]
     return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _usage_lines(results: Sequence[QuestionResult], day: str) -> list[str]:
+    answered = [r for r in results if r.answered]
+    timed = [r.seconds for r in answered if r.seconds is not None]
+    totals = {
+        key: sum(_tokens(r, key) for r in answered)
+        for key in ("model_calls", "input_tokens", "output_tokens", "thinking_tokens")
+    }
+    mean = sum(timed) / len(timed) if timed else 0.0
+    input_price, output_price = prices(day)
+    cost = sum(model_cost(r.usage, day) for r in answered)
+    return [
+        f"Model calls: {totals['model_calls']}; tokens: {totals['input_tokens']} input, "
+        f"{totals['output_tokens']} output, {totals['thinking_tokens']} thinking; estimated cost "
+        f"${cost:.2f} at ${input_price:.2f} input and ${output_price:.2f} output (thinking "
+        "included) per million tokens (001 research R11), over the published answers "
+        f"({len(answered)} of {len(results)} questions; a failed answer stores no token counts). "
+        "Answer time, from a question's submission to the end of its job: "
+        f"mean {mean:.1f} s, max {max(timed, default=0.0):.1f} s.",
+        "",
+    ]
 
 
 def _section(title: str, items: Sequence[str]) -> list[str]:
@@ -585,6 +628,8 @@ class JobOutcome:
     status: str
     error_code: str | None
     error_message: str | None
+    seconds: float | None = None
+    """From the job's creation to its end; None while it has not ended."""
 
 
 def _check_settings(settings: Settings, *, fixtures: bool, retrieval_only: bool) -> None:
@@ -715,7 +760,10 @@ def _drive_job(job_id: uuid.UUID, timeout_seconds: float) -> JobOutcome:
             job = db.get(Job, job_id)
             if job is None:
                 raise EvalError(f"Job {job_id} disappeared.")
-            outcome = JobOutcome(job.status, job.error_code, job.error_message)
+            seconds = (
+                (job.finished_at - job.created_at).total_seconds() if job.finished_at else None
+            )
+            outcome = JobOutcome(job.status, job.error_code, job.error_message, seconds)
         if outcome.status in TERMINAL_JOB_STATUSES:
             return outcome
         if time.monotonic() > deadline:
@@ -847,6 +895,7 @@ def _answer(target: IndexedTarget, result: QuestionResult, timeout_seconds: floa
 
     outcome = _drive_job(job_id, timeout_seconds)
     result.answer_status = outcome.status
+    result.seconds = outcome.seconds
     if outcome.status != "succeeded":
         result.failures.append(
             f"answer {outcome.status}: {outcome.error_code}: {outcome.error_message}"
@@ -860,6 +909,7 @@ def _answer(target: IndexedTarget, result: QuestionResult, timeout_seconds: floa
             return
         output = AnswerOutput.model_validate(stored.result)
         result.quality_state = stored.quality_state
+        result.usage = dict(stored.usage)
         result.summary = output.summary
         result.gaps = list(output.gaps)
         result.claims = [

@@ -75,13 +75,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - name: Measure the network baseline
-        # Median connection and TLS times of 20 new connections to /healthz, so the report can
-        # separate network time from server time. The runner's region is not guaranteed.
+        # Median connection and TLS times of 20 new connections to /version, which reads no
+        # database, so the report can separate network time from server time (/healthz is not
+        # public). The runner's region is not guaranteed.
         run: |
           mkdir -p "$OUT"
           for _ in $(seq 20); do
             curl -sS --fail -o /dev/null --max-time 30 \
-              -w '%{time_connect} %{time_appconnect}\n' "$BASE_URL/healthz"
+              -w '%{time_connect} %{time_appconnect}\n' "$BASE_URL/version"
           done > "$OUT/network.txt"
           median_ms() {
             sort -g | awk '{ v[NR] = $1 } END {
@@ -92,7 +93,7 @@ jobs:
           connect_ms="$(awk '{ print $1 }' "$OUT/network.txt" | median_ms)"
           tls_ms="$(awk '{ print $2 }' "$OUT/network.txt" | median_ms)"
           {
-            echo "Network baseline: over 20 \`curl\` calls to \`$BASE_URL/healthz\` from this"
+            echo "Network baseline: over 20 \`curl\` calls to \`$BASE_URL/version\` from this"
             echo "runner (its region is not guaranteed), the median \`time_connect\` was"
             echo "$connect_ms ms and the median \`time_appconnect\` (TLS handshake done) $tls_ms ms."
           } > "$OUT/network.md"

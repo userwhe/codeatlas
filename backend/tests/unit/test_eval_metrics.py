@@ -1,6 +1,7 @@
 """Pure metric and set-validation functions of the answer-quality evaluation (no database)."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from evals.run_qa_eval import (
     Question,
     QuestionResult,
     Rate,
+    RunInfo,
     audit_rows,
     citation_problem,
     eval_branch,
@@ -21,6 +23,7 @@ from evals.run_qa_eval import (
     parse_question,
     ranges_overlap,
     recall_at_k,
+    render_report,
     select_questions,
     summarize,
 )
@@ -204,6 +207,57 @@ def test_audit_rows_list_each_claim_with_its_excerpts_and_empty_review_columns()
     assert "[E2] b.py:3-3\nx = 1" in rows[1]["cited_excerpts"]
     assert rows[0]["answer_summary"] == "Checked in access.py."
     assert rows[0]["supported"] == rows[0]["reviewer_notes"] == ""
+
+
+# Report -----------------------------------------------------------------------------------------
+
+
+def run_info(*, retrieval_only: bool = False) -> RunInfo:
+    return RunInfo(
+        started_at=datetime(2026, 10, 8, tzinfo=UTC),
+        set_path="evals/qa_v1.jsonl",
+        set_sha256="f" * 64,
+        split="heldout",
+        limit=None,
+        mode="real providers",
+        retrieval_only=retrieval_only,
+        answer_model="m",
+        thinking_level="low",
+        embedding_model="e",
+        index_version="v",
+    )
+
+
+def test_report_shows_each_answer_latency_tokens_and_cost() -> None:
+    usage = {"model_calls": 2, "input_tokens": 20_000, "output_tokens": 2_000,
+             "thinking_tokens": 2_000, "cached_tokens": 0, "docs_degraded": False}  # fmt: skip
+    results = [
+        QuestionResult(question("a1"), recall=1.0, answer_status="succeeded",
+                       quality_state="answered", citations=[check()], usage=usage, seconds=8.34),
+        QuestionResult(question("u1", answerable=False), answer_status="failed",
+                       failures=["answer failed: provider_unavailable: down"], seconds=61.0),
+        QuestionResult(question("a2"), failures=["retrieval: boom"]),
+    ]  # fmt: skip
+
+    report = render_report(run_info(), [], results, summarize(results))
+
+    assert "| Seconds | Input tokens | Output tokens | Est. cost | Execution failure |" in report
+    assert "| answered | 1/1 | 8.3 | 20000 | 2000 | $0.030 |  |" in report
+    assert "|  |  | 61.0 |  |  |  | answer failed: provider_unavailable: down |" in report
+    assert "|  |  |  |  |  |  | retrieval: boom |" in report
+    assert (
+        "Model calls: 2; tokens: 20000 input, 2000 output, 2000 thinking; estimated cost $0.03 "
+        "at $0.75 input and $3.75 output (thinking included) per million tokens"
+    ) in report
+    assert "mean 8.3 s, max 8.3 s" in report
+
+
+def test_retrieval_only_reports_have_no_answer_totals() -> None:
+    results = [QuestionResult(question(), recall=1.0)]
+
+    report = render_report(run_info(retrieval_only=True), [], results, summarize(results))
+
+    assert "Model calls" not in report
 
 
 # The question set -------------------------------------------------------------------------------

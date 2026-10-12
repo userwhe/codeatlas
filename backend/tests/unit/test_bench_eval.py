@@ -44,7 +44,6 @@ from evals.run_bench_eval import (
     render_report,
     resolve_pull_request,
     review_archives,
-    review_cost,
     select_items,
     step_command,
     tool_totals,
@@ -621,13 +620,6 @@ def test_review_archives_records_an_exceeded_limit_as_a_failure() -> None:
 
     assert not result.reviewed
     assert result.failures == ["limit_exceeded: max_files_per_snapshot (1)"]
-
-
-def test_review_cost_uses_the_prices_of_the_run_date() -> None:
-    usage = {"input_tokens": 1_000_000, "output_tokens": 100_000, "thinking_tokens": 100_000}
-
-    assert review_cost(usage, "2026-10-08") == pytest.approx(0.75 + 0.2 * 3.75)
-    assert review_cost(usage, "2027-01-01") == pytest.approx(1.50 + 0.2 * 7.50)
 
 
 def test_report_shows_denominators_flagged_items_and_limits() -> None:

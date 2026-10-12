@@ -54,6 +54,7 @@ from codeatlas.review.diff import Tree, changed_files, read_tree, select_for_rev
 from codeatlas.review.prompt import PROMPT_VERSION
 from codeatlas.review.review import Analysis, analyze
 from codeatlas.review.schema import RiskCategory
+from evals.pricing import model_cost, prices
 from evals.run_qa_eval import MAX_CELL_CHARS, Rate, meets
 
 Side = Literal["before", "after"]
@@ -994,6 +995,7 @@ def render_report(
     summary: Summary,
     sample_size: tuple[int, int],
 ) -> str:
+    day = info.started_at.date().isoformat()
     counts = {kind: sum(1 for r in results if r.item.labels.kind == kind) for kind in KINDS}
     verdicts = dict(target_checks(summary))
     lines = [
@@ -1037,12 +1039,12 @@ def render_report(
         f"SC-004 audit sheet: {sample_size[0]} risks from {sample_size[1]} reviews "
         f"(at least {AUDIT_MIN_RISKS} from {AUDIT_MIN_REVIEWS} are needed).",
         "",
-        *_usage_lines(results),
+        *_usage_lines(results, day),
         "## Per-item results",
         "",
         "| ID | Kind | Level | Risks (H/M/L) | Defects found | Citations valid | Seconds "
-        "| Input tokens | Output tokens | Execution failure |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Input tokens | Output tokens | Est. cost | Execution failure |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in results:
         by_severity = [sum(1 for risk in r.risks if risk.severity == s) for s in SEVERITY_RANK]
@@ -1053,22 +1055,26 @@ def render_report(
             f"| {'/'.join(map(str, by_severity)) if r.reviewed else ''} | {defects} "
             f"| {f'{valid}/{len(r.citations)}' if r.reviewed else ''} | {r.seconds:.1f} "
             f"| {_tokens(r, 'input_tokens')} | {_tokens(r, 'output_tokens')} "
-            f"| {_cell('; '.join(r.failures))} |"
+            f"| ${model_cost(r.usage, day):.3f} | {_cell('; '.join(r.failures))} |"
         )
     lines += ["", "## Failures", "", *_failure_sections(results)]
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
-def _usage_lines(results: Sequence[ItemResult]) -> list[str]:
+def _usage_lines(results: Sequence[ItemResult], day: str) -> list[str]:
     timed = [r.seconds for r in results if r.reviewed]
     totals = {
         key: sum(_tokens(r, key) for r in results)
         for key in ("model_calls", "input_tokens", "output_tokens", "thinking_tokens")
     }
     mean = sum(timed) / len(timed) if timed else 0.0
+    input_price, output_price = prices(day)
+    cost = sum(model_cost(r.usage, day) for r in results)
     return [
         f"Model calls: {totals['model_calls']}; tokens: {totals['input_tokens']} input, "
-        f"{totals['output_tokens']} output, {totals['thinking_tokens']} thinking. "
+        f"{totals['output_tokens']} output, {totals['thinking_tokens']} thinking; estimated cost "
+        f"${cost:.2f} at ${input_price:.2f} input and ${output_price:.2f} output (thinking "
+        "included) per million tokens (001 research R11). "
         f"Review time: mean {mean:.1f} s, max {max(timed, default=0.0):.1f} s.",
         "",
     ]

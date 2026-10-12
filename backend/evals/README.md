@@ -285,13 +285,20 @@ metric is reported with its denominator.
 Each run writes two files to `evals/out/`, named with the UTC start time:
 
 - `qa-eval-<time>.md`: the run settings (set file and its SHA-256, split, models, prompt and
-  index versions), the indexed commits, the metrics table with targets, a row per question, and
-  the failures: retrieval misses with the missed ranges and the top 5 retrieved items, invalid
-  citations, unanswerable questions that were answered, answerable questions that abstained,
-  and execution failures.
+  index versions), the indexed commits, the metrics table with targets, the total model calls,
+  tokens, estimated cost, and answer times (except in a `--retrieval-only` run), a row per
+  question (Recall@5, result, valid citations, and for each answer its seconds, input and output
+  tokens, and estimated cost), and the failures: retrieval misses with the missed ranges and the
+  top 5 retrieved items, invalid citations, unanswerable questions that were answered,
+  answerable questions that abstained, and execution failures.
 - `qa-eval-<time>-audit.csv`: the human audit sheet for SC-005, with one row per claim of every
   published answer: the question, the answer summary and gaps, the claim and its kind, and each
   cited excerpt with its path and lines.
+
+An answer's token counts are read from its `analysis_runs.usage`, and its seconds run from its
+job's `created_at` (the submission) to its `finished_at`, retries included. A failed answer stores
+no token counts, so the totals cover published answers only. Costs are estimated at the prices of
+001 research R11 on the run's day (`evals/pricing.py`), with thinking tokens billed as output.
 
 ### Human audit (SC-005)
 
@@ -548,12 +555,14 @@ Each run writes two files to `evals/out/`, named with the UTC start time:
 
 - `review-eval-<time>.md`: the run settings (the set and its SHA-256, the mode, the model, and
   the prompt version), the metrics table with targets, the size of the audit sample, total model
-  calls and tokens, review durations, a row per item (kind, overall level, risks by severity,
-  defects found, valid citations, seconds, and input and output tokens), and the failures:
-  missed defects with their descriptions and what the risks cited, high risks on safe items,
-  invalid citations, checklist items without a valid reference, mismatched overall levels, and
-  execution failures.
+  calls, tokens, and estimated cost, review durations, a row per item (kind, overall level, risks
+  by severity, defects found, valid citations, seconds, input and output tokens, and estimated
+  cost), and the failures: missed defects with their descriptions and what the risks cited, high
+  risks on safe items, invalid citations, checklist items without a valid reference, mismatched
+  overall levels, and execution failures.
 - `review-eval-<time>-audit.csv`: the SC-004 audit sheet.
+
+Costs are estimated as in the question runner's [outputs](#outputs).
 
 #### Human audit (SC-004)
 
