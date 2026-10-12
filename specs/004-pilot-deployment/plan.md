@@ -183,7 +183,8 @@ New, changed, and removed files. Everything else is unchanged; tasks.md names th
 
 ```text
 .railway/
-└── railway.ts                       # new: services, db image and volume, bucket, variables (secrets preserved), commands, healthchecks, cron
+├── railway.ts                       # new: services, db image and volume, bucket, variables (secrets preserved), commands, healthchecks, cron
+└── package.json, package-lock.json  # new: the pinned `railway` package the file imports
 
 backend/
 ├── Dockerfile                       # + postgresql-client-17; release read from RAILWAY_GIT_COMMIT_SHA (build argument kept for local builds)

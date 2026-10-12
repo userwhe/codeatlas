@@ -1,0 +1,8 @@
+{
+  "name": "codeatlas-railway",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "railway": "3.13.1"
+  }
+}

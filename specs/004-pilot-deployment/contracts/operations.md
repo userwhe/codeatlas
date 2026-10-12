@@ -26,7 +26,7 @@ volumes and a new generated domain, and does not receive sealed variables. Delet
 | `api` | `main`, `backend/`, `Dockerfile` | `uvicorn codeatlas.api.app:app --host 0.0.0.0 --port 8000` | `python -m codeatlas.ops migrate` | `/readyz` | On failure, 10 retries | No | 1 vCPU, 1 GB |
 | `worker` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.jobs.worker` | `python -m codeatlas.ops wait-for-api` | none | On failure, 10 retries | No | 1 vCPU, 2 GB |
 | `backup` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC) | `python -m codeatlas.ops wait-for-api` | none | Never | No | 0.5 vCPU, 0.5 GB |
-| `db` | Image `pgvector/pgvector:pg17`; volume at `/var/lib/postgresql/data` | `postgres -c shared_buffers=256MB -c max_connections=50` | none | none | On failure, 10 retries | No, and no TCP proxy | 1 vCPU, 1 GB |
+| `db` | Image `pgvector/pgvector:pg17`; volume at `/var/lib/postgresql/data` | `docker-entrypoint.sh postgres -c shared_buffers=256MB -c max_connections=50` (a start command replaces the image's entrypoint) | none | none | On failure, 10 retries | No, and no TCP proxy | 1 vCPU, 1 GB |
 | `backups` | Railway bucket | n/a | n/a | n/a | n/a | No | n/a |
 
 `web`, `api`, `worker`, and `backup` deploy from `main` with "Wait for CI" on from the first
@@ -49,7 +49,7 @@ variable.
 | `API_ORIGIN` | web (build argument and run time), worker, backup | Ref: `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` |
 | `PORT` | web, api | `3000`, `8000` |
 | `CLIENT_ADDRESS_HEADER` | api | `X-Real-IP` |
-| `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID` | api, worker | The pilot App's values |
+| `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID` | api, worker | The pilot App's values, set on Railway (not sealed) after the App is registered; the file declares them with `preserve()` |
 | `GITHUB_APP_CLIENT_SECRET`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET` | api, worker | Sealed |
 | `TOKEN_ENCRYPTION_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY` | api, worker | Sealed |
 | `POSTGRES_USER`, `POSTGRES_DB` | db | `codeatlas` |

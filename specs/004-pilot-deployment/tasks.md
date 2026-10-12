@@ -250,7 +250,7 @@ indexed, asks a question, and reviews a pull request; a second account is turned
   `RAILWAY_GIT_COMMIT_SHA`, printing one line when it starts waiting and one with the outcome, and
   exiting 0 or 1. Add a step running `node --test scripts/` to the `frontend` job of
   `.github/workflows/ci.yml` (after T003).
-- [ ] T022 [US1] Create .railway/railway.ts with Railway's TypeScript infrastructure as code
+- [X] T022 [US1] Create .railway/railway.ts with Railway's TypeScript infrastructure as code
   (research R8; contracts/operations.md, "Services" and "Variables"), following Railway's reference
   for its exact API:
   - the project `codeatlas` and the environment `production`, in the US East region;
@@ -264,7 +264,7 @@ indexed, asks a question, and reviews a pull request; a second account is turned
     and `worker`;
   - `db` from the image `pgvector/pgvector:pg17` with a volume at `/var/lib/postgresql/data`,
     `PGDATA=/var/lib/postgresql/data/pgdata`, start command
-    `postgres -c shared_buffers=256MB -c max_connections=50`, no TCP proxy;
+    `docker-entrypoint.sh postgres -c shared_buffers=256MB -c max_connections=50`, no TCP proxy;
   - every variable in contracts/operations.md "Variables" for these services, with reference
     variables for `APP_ORIGIN`, `DATABASE_URL`, and `API_ORIGIN` (on `web` and `worker`), and every
     secret declared with `preserve()` so that no value is in the file;
@@ -473,7 +473,7 @@ exercise).
   - remove `backup-manifest`;
   - both use only `DATABASE_URL`, the release, and the `BACKUP_*` settings, so they run on a service
     without `CODEATLAS_ENV` and the application's secrets.
-- [ ] T040 [US2] Add to .railway/railway.ts (after T022): the `backups` bucket; the `backup`
+- [X] T040 [US2] Add to .railway/railway.ts (after T022): the `backups` bucket; the `backup`
   service (`main`, root `backend`, start command `python -m codeatlas.ops backup`, cron
   `30 3 * * *`, pre-deploy `python -m codeatlas.ops wait-for-api` with a 1,500-second timeout,
   "Wait for CI", restart policy never, its size limit) with `DATABASE_URL`, `API_ORIGIN`, the
@@ -520,7 +520,7 @@ place from Phase 1 and User Story 1 (T003, T022).
 
 ### Implementation for User Story 3
 
-- [ ] T043 [US3] Add to .railway/railway.ts (after T040): `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS=10`
+- [X] T043 [US3] Add to .railway/railway.ts (after T040): `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS=10`
   and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=10` on `web` and `api`, and
   `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30` on `worker`. Check with `railway config plan`.
 - [ ] T044 [US3] docs/operations.md, part 3 (after T041): "Releases" (merge through pull requests,

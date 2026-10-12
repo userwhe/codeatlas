@@ -81,7 +81,9 @@ PostgreSQL 17 client tools (`pg_dump`, `pg_restore`). The frontend gains no npm 
 - **Database**: the same image as development and CI (`pgvector/pgvector:pg17`), because Railway's
   own PostgreSQL image has no pgvector, and its community pgvector template uses PostgreSQL 18.
   `PGDATA=/var/lib/postgresql/data/pgdata` (a volume's root holds `lost+found`, which `initdb`
-  refuses); start command `postgres -c shared_buffers=256MB -c max_connections=50`. The service has
+  refuses); start command `docker-entrypoint.sh postgres -c shared_buffers=256MB -c
+  max_connections=50`, because on Railway a start command replaces the image's entrypoint, which
+  initializes the data directory and drops root privileges. The service has
   no public domain and no TCP proxy, so only services in the same environment reach it, at
   `db.railway.internal:5432` (FR-007). Hobby volumes are capped at 5 GB.
 
@@ -406,6 +408,10 @@ scripts. The gate turns per-service deployments into one release that succeeds o
   the `db` image and its volume, the `backups` bucket, and every variable: non-secret values and
   reference variables in the file, secrets declared with `preserve()` so that their values stay in
   the platform and never in the repository.
+- **Package**: the file imports the `railway` npm package, pinned in `.railway/package.json` and
+  its lock file and installed with `npm ci --prefix .railway`; it needs the Railway CLI 5.42.1 or
+  later and Node.js 22.6 or later. The package sits in `.railway/`, not at the repository root,
+  because a root lock file would change how Next.js finds the frontend's workspace root.
 - **Preview and apply** (FR-025): the developer runs `railway config plan`, which shows every
   change as a diff with secret values redacted and destructive changes marked, and then
   `railway config apply`, which refuses a stale plan. The developer runs both from their machine,

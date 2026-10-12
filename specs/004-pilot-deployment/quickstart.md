@@ -13,8 +13,9 @@ that draft; any change to it needs a new confirmation.
 
 ## Prerequisites
 
-- A Railway account on the Hobby plan, the Railway CLI (a version with `railway config` and
-  `railway ssh`), signed in with `railway login`, and an SSH key registered on the account.
+- A Railway account on the Hobby plan, the Railway CLI 5.42.1 or later (for `railway config` and
+  `railway ssh`), signed in with `railway login`, an SSH key registered on the account, and
+  Node.js 22.6 or later for `npm ci --prefix .railway`.
 - The pilot GitHub App (research R5), with the pilot's callback and webhook URLs on the web app's
   Railway domain.
 - Gemini (paid tier) and Voyage AI keys, as in 001.
