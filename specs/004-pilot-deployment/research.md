@@ -68,10 +68,10 @@ PostgreSQL 17 client tools (`pg_dump`, `pg_restore`). The frontend gains no npm 
 
   | Service | Source | Runs | Public | Size limit (vCPU, memory) |
   | --- | --- | --- | --- | --- |
-  | `web` | `frontend/Dockerfile`, last stage `production` | Next.js standalone server | Yes, the platform's domain | 0.5, 0.5 GB |
+  | `web` | `frontend/Dockerfile`, last stage `production` | Next.js standalone server; pre-deploy release gate | Yes, the platform's domain | 0.5, 0.5 GB |
   | `api` | `backend/Dockerfile` | uvicorn; pre-deploy `python -m codeatlas.ops migrate` | No | 1, 1 GB |
-  | `worker` | `backend/Dockerfile` | `python -m codeatlas.jobs.worker` | No | 1, 2 GB |
-  | `backup` | `backend/Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC) | No | 0.5, 0.5 GB |
+  | `worker` | `backend/Dockerfile` | `python -m codeatlas.jobs.worker`; pre-deploy release gate | No | 1, 2 GB |
+  | `backup` | `backend/Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC); pre-deploy release gate | No | 0.5, 0.5 GB |
   | `db` | image `pgvector/pgvector:pg17`, volume at `/var/lib/postgresql/data` | PostgreSQL 17 with pgvector | No | 1, 1 GB |
   | `backups` | Railway bucket | S3-compatible storage | No (credentials only) | n/a |
 
@@ -220,22 +220,25 @@ and tests unchanged.
 **Decision**:
 
 - **Store**: Railway variables, per service and per environment. Secrets are sealed: the platform
-  gives them to the service's builds and deployments but never shows them again in the dashboard
-  or API, and does not copy them into duplicated environments. Each service gets only the
-  variables it uses:
+  never shows them again in the dashboard or API, and does not copy them into duplicated
+  environments. It gives a service's variables to its deployments, and to a Dockerfile build only
+  as the build arguments that Dockerfile declares. Neither Dockerfile declares a secret, and CI
+  fails when one declares an argument other than `CODEATLAS_RELEASE`, `API_ORIGIN`,
+  `RAILWAY_GIT_COMMIT_SHA`, and `NEXT_PUBLIC_RELEASE` (R18), so no credential reaches a build
+  (SC-006). Each service gets only the variables it uses:
 
   | Service | Variables |
   | --- | --- |
   | `api` | `CODEATLAS_ENV`, `CODEATLAS_FAKE_EXTERNALS`, `APP_ORIGIN`, `DATABASE_URL`, `PORT`, `CLIENT_ADDRESS_HEADER`, the GitHub App settings including `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `TOKEN_ENCRYPTION_KEY`, `GEMINI_API_KEY`, `VOYAGE_API_KEY`, the limits and thresholds, and the deployment timings (R7) |
-  | `worker` | The same as `api` except `PORT` and `CLIENT_ADDRESS_HEADER` |
-  | `backup` | `DATABASE_URL`, the `BACKUP_*` settings from the bucket, and `BACKUP_RETENTION_DAYS`. No `CODEATLAS_ENV`: `ops backup` uses only the database, the release, and the bucket, so the production check, which requires the App and provider secrets, does not apply, and the service receives none of them |
-  | `web` | `API_ORIGIN` (build argument), `PORT` |
+  | `worker` | The same as `api` except `PORT` and `CLIENT_ADDRESS_HEADER`, plus `API_ORIGIN` for the release gate (R7) |
+  | `backup` | `DATABASE_URL`, `API_ORIGIN` for the release gate, the `BACKUP_*` settings from the bucket, and `BACKUP_RETENTION_DAYS`. No `CODEATLAS_ENV`: `ops backup` uses only the database, the release, and the bucket, so the production check, which requires the App and provider secrets, does not apply, and the service receives none of them |
+  | `web` | `API_ORIGIN` (a build argument for the rewrites, and at run time for the release gate), `PORT` |
   | `db` | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `PGDATA` |
 
 - **Reference variables** keep values consistent and make a copied environment correct by
   itself: `APP_ORIGIN=https://${{web.RAILWAY_PUBLIC_DOMAIN}}`,
   `DATABASE_URL=postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas`,
-  `API_ORIGIN=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000`, and
+  `API_ORIGIN=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` (on `web`, `worker`, and `backup`), and
   `BACKUP_ENDPOINT_URL=${{backups.ENDPOINT}}` with the bucket's `BUCKET`, `REGION`,
   `ACCESS_KEY_ID`, and `SECRET_ACCESS_KEY`.
 - **Private key**: Railway variables are strings, and the key was read from a file. A new setting,
@@ -273,35 +276,44 @@ variables remove hand-copied values, which was the earlier design's render step.
 **Decision**:
 
 - Railway gives every GitHub-triggered build and deployment `RAILWAY_GIT_COMMIT_SHA`. The API's
-  `CODEATLAS_RELEASE` setting also reads it (`AliasChoices`), so `/version` reports the commit
-  (FR-019) with no build argument. `CODEATLAS_RELEASE` still wins when set, for local builds.
-- The web app inlines its footer's commit at build time: the `production` stage declares
-  `ARG RAILWAY_GIT_COMMIT_SHA` and passes it to `NEXT_PUBLIC_RELEASE`.
+  `release` setting reads it first (`AliasChoices("RAILWAY_GIT_COMMIT_SHA", "CODEATLAS_RELEASE")`),
+  so `/version` and each backup's manifest report the deployed commit (FR-019).
+  `CODEATLAS_RELEASE` applies only where the platform's variable is absent: local builds, tests,
+  and a deployment made with `railway up`.
+- The backend Dockerfile keeps `ARG CODEATLAS_RELEASE=development` and its `ENV` line for local
+  builds. That line always defines `CODEATLAS_RELEASE` in the image, so with the opposite
+  precedence every deployment would report `development`; the platform's variable must win.
+- The web app inlines its footer's commit at build time: the `build` stage declares
+  `ARG RAILWAY_GIT_COMMIT_SHA` and builds with `NEXT_PUBLIC_RELEASE` set to it, falling back to the
+  `NEXT_PUBLIC_RELEASE` argument.
 - Railway's deployment history labels each deployment with its commit, which is the release record
   (data model).
 
-**Rationale**: The platform already knows the commit; reading it removes the earlier design's
-image tags and build arguments.
+**Rationale**: The platform already knows the commit; reading it first removes the earlier
+design's image tags and release arguments, and cannot be masked by the image's local default.
 
 **Alternatives considered**: a `CODEATLAS_RELEASE` variable set per release (a manual step that can
-drift); reading the commit from the Git checkout (not present in the image).
+drift); dropping the image's default (local builds would report nothing); reading the commit from
+the Git checkout (not present in the image).
 
 ## R7. Releases (FR-019 to FR-024, ADR 0015)
 
 **Decision**:
 
 - **Trigger** (FR-019, FR-020): each app service (`web`, `api`, `worker`, `backup`) deploys from
-  this repository's `main` branch through Railway's GitHub integration, with "Wait for CI" on. A
-  push to `main` puts the deployment in a waiting state until every GitHub Actions check suite on
-  the commit finishes; if one fails, Railway skips the deployment, and after 2 hours it gives up.
-  The CI workflow already runs on pushes to `main`, which "Wait for CI" requires. Only the
-  connected branch deploys; pull request environments stay off, and Railway never deploys pull
-  requests from people outside the project. No approval step exists; merging a reviewed pull
-  request is the developer's confirmation (Complexity Tracking in the plan).
-- **Schema report** (FR-020): a CI job, `schema`, runs on pull requests. It lists the files the
-  pull request adds or changes under `backend/alembic/versions/`, writes them to the job summary
-  with the expand-then-contract rule (add in one release, remove in a later one), and raises a
-  warning annotation on the pull request. It never fails the build.
+  this repository's `main` branch through Railway's GitHub integration, with "Wait for CI" on from
+  the first deployment. A push to `main` puts the deployment in a waiting state until every GitHub
+  Actions check suite on the commit finishes; if one fails, Railway skips the deployment, and after
+  2 hours it gives up. The CI workflow already runs on pushes to `main`, which "Wait for CI"
+  requires. Only the connected branch deploys; pull request environments stay off, and Railway
+  never deploys pull requests from people outside the project. No approval step exists; merging a
+  reviewed pull request is the developer's confirmation (Complexity Tracking in the plan).
+- **Schema report** (FR-020): a CI job, `schema`, runs on pull requests from the first change of
+  this feature on, so the migration `0005` is already reported. It lists every file the pull
+  request adds, modifies, deletes, renames, or copies under `backend/alembic/versions/`, with its
+  status (`git diff --name-status`, no status filter), writes them to the job summary with the
+  expand-then-contract rule (add in one release, remove in a later one), and raises a warning
+  annotation on the pull request. It never fails the build.
 - **Migrations first** (FR-021): `api`'s pre-deploy command, `python -m codeatlas.ops migrate`,
   runs in its own container with the service's variables and private network after the build and
   before the new version starts. A non-zero exit fails the deployment, and the previous version
@@ -313,10 +325,20 @@ drift); reading the commit from the Git checkout (not present in the image).
     `migrations_skipped` with both revisions and exits 0, because the schema rule keeps older
     versions working with newer schemas. Without this, the earlier design found that a rollback
     fails on "Can't locate revision".
-- **Worker and schema**: `api`, `worker`, and `web` deploy in parallel, so the new worker may start
-  before `api`'s migration finishes. At startup, the worker waits while the database's revision is
-  older than its own (checking every 5 seconds, for up to 10 minutes, then exiting so the restart
-  policy tries again), and starts at once when the revision equals its own or is newer.
+- **Release gate** (FR-021, FR-022): Railway deploys the services of a commit in parallel, and each
+  service's failure keeps only that service's previous version. So that a failure of `api` stops
+  the whole release, `web`, `worker`, and `backup` each run a pre-deploy gate that waits until
+  `api`, at `API_ORIGIN` over the private network, reports the gate's own commit in `/version`.
+  `api` reports a commit only after its migration succeeded and its readiness check passed, so if
+  either fails, every gate times out after 20 minutes, those deployments fail, and the previous
+  versions of all four services keep running. The gate is `python -m codeatlas.ops wait-for-api`
+  in the backend image and `node scripts/wait-for-api.mjs` in the web image (`node:24-slim` has no
+  Python or `curl`); both poll every 5 seconds, and both pass at once when `RAILWAY_GIT_COMMIT_SHA`
+  is not set (a deployment that did not come from GitHub). `preDeployTimeoutSeconds` is 1,500 for
+  the gated services. Hobby builds at most three services at a time, and the 20 minutes cover a
+  fourth build that waits its turn. When two merges land within minutes, the older commit's gated
+  deployments may wait for a commit `api` never reports and fail after 20 minutes, which emails the
+  developer; the newer commit's deployments proceed, so the guide says to expect those failures.
 - **Readiness gate** (FR-022): `api`'s healthcheck path is `/readyz` and `web`'s is `/`, with
   Railway's default 300-second timeout. Railway moves traffic to a new deployment only after its
   check returns 2xx; otherwise it marks the deployment failed and the previous one keeps serving.
@@ -324,34 +346,42 @@ drift); reading the commit from the Git checkout (not present in the image).
 - **Overlap and draining** (FR-023): `RAILWAY_DEPLOYMENT_OVERLAP_SECONDS=10` and
   `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=10` on `web` and `api` keep the old version answering
   in-flight requests after the switch. The worker has no healthcheck, so its new deployment is
-  active as soon as it starts and the old one is stopped at once;
+  active as soon as its gate passes and it starts, and the old one is stopped at once;
   `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30` gives the old worker 30 seconds between `SIGTERM` and
   `SIGKILL`. The worker already stops after its current job on `SIGTERM` (001); a job still running
   at `SIGKILL` loses its lease within 60 seconds, and the new worker claims it as a new attempt.
   Fencing tokens prevent a duplicate publication (001 R3), so no job is lost or duplicated.
 - **Interruption** (FR-023, SC-009): the readiness gate makes the switch nearly seamless for `web`
   and `api`. During each measured release, a probe on the developer's machine requests `/readyz`
-  and `/` once a second and reports the longest run of failures (quickstart). `db` is not
-  redeployed by releases; changing its image or volume causes a brief outage, which the operations
-  guide schedules.
-- **Mixed versions**: for a minute or so during a release, the web app and the API may run
-  different commits. Changes that need both together follow the same expand-then-contract rule as
-  the schema.
+  and `/` once a second and reports the longest run of failures of either (quickstart). `db` is
+  not redeployed by releases; changing its image or volume causes a brief outage, which the
+  operations guide schedules.
+- **Mixed versions**: between `api`'s switch and the gated services' switches, for a minute or so,
+  the API may run a newer commit than the web app and the worker. Changes that need both together
+  follow the same expand-then-contract rule as the schema.
 - **Rollback** (FR-024, SC-010): in a service's Deployments list, "Rollback" on the previous
-  deployment redeploys its image and variables without a rebuild, in one action per service. The
-  CLI has no rollback command. Hobby keeps a removed deployment's image for 72 hours; after that a
-  rollback becomes a redeploy of the earlier commit (`railway redeploy` from a checkout, or a revert
-  on `main`). Because `api`'s pre-deploy command skips migrations when the database is ahead, a
-  rolled-back API starts against the newer schema.
-- **Rehearsal** (SC-010): changing `api`'s healthcheck path to one that returns 404 and redeploying
-  makes a release fail its readiness check without changing code; restoring the path ends the
-  rehearsal.
+  deployment redeploys its image and variables without a rebuild, in one action per service. A
+  release is rolled back as a whole, `api` first: if the platform runs pre-deploy commands on a
+  rollback, the other services' gates then pass because `api` reports the earlier commit, and if
+  it does not, the order does no harm; the quickstart records which applies. Because `api`'s
+  pre-deploy command skips migrations when the database is ahead, the rolled-back API starts
+  against the newer schema. Hobby keeps a replaced deployment's image for 72 hours. After that a
+  rollback redeploys the earlier commit (`git revert` on `main` through a pull request, or
+  `railway redeploy` of that commit), which builds again and serves within about 15 minutes
+  (FR-024). The CLI has no rollback command.
+- **Rehearsals** (SC-010): changing `api`'s healthcheck path to one that returns 404 and redeploying
+  makes `api` fail its readiness check without changing code, and the previous `api` keeps
+  serving. In a duplicated environment (`drill`) with that broken path, merging a visible change
+  to `main` makes the new `api` fail while the other services' gates time out, so every service
+  keeps its previous version: the whole-release stop. A failed migration stops a release through
+  the same gate, because `api` then never reports the new commit; the integration tests cover the
+  migration command's failure itself.
 
 **Rationale**: The developer chose releases without approval (spec Input). Railway's GitHub
-integration, "Wait for CI", the pre-deploy command, and the healthcheck together give the earlier
-pipeline's guarantees (main only, checks first, migrations first, readiness before traffic,
-previous version kept on failure) without a release workflow, images, credentials in CI, or host
-scripts.
+integration, "Wait for CI", the pre-deploy commands, and the healthchecks together give the earlier
+pipeline's guarantees (main only, checks first, migrations first, readiness before traffic, the
+previous release kept on failure) without a release workflow, images, credentials in CI, or host
+scripts. The gate turns per-service deployments into one release that succeeds or stops together.
 
 **Alternatives considered**:
 
@@ -360,10 +390,11 @@ scripts.
   forbids, and the developer chose not to approve each release.
 - **Releasing from GitHub Actions with the Railway CLI**: explicit ordering of migrations and
   services, but a Railway token stored in CI.
+- **Gating on the schema only** (the worker waits until the database's revision is its own): it
+  stops the worker when a migration fails, but not the web app, and not when `api` fails its
+  readiness check after migrating.
 - **A release only when a tag is pushed**: an extra manual step that "merge to `main`" already
   covers.
-- **Migrating in the worker's pre-deploy command too**: two migrators racing; the advisory lock
-  would make it safe but the worker's wait is simpler.
 
 ## R8. Recorded configuration (FR-016, FR-025)
 
@@ -388,10 +419,11 @@ scripts.
   The guide says to change settings in the file when the file can hold them.
 - **Configuration as code (`railway.json`)** is not used: Railway deprecated it, services created
   after 2026-08-28 cannot use it, and Railway stops reading existing files on 2026-12-01.
-- **Field support**: the reference documents the fields above except the cron schedule, the
-  draining and overlap times, and the size limits, which the package's types accept. The cron
-  schedule goes in the file if `railway config plan` shows it, and in the dashboard otherwise; the
-  timings are variables (R7), which the file always holds.
+- **Field support**: the reference documents the fields above except the cron schedule, "Wait for
+  CI" (the source's check suites), the pre-deploy timeout, the draining and overlap times, and the
+  size limits, which the package's types accept. Each of these goes in the file if
+  `railway config plan` shows it, and in the dashboard otherwise, recorded in the operations guide;
+  the timings are variables (R7), which the file always holds.
 
 **Rationale**: A plan-then-apply workflow is the preview FR-025 asks for, and a file in the
 repository is the record FR-016 asks for. Keeping secrets out of the file and the Railway token out
@@ -455,20 +487,24 @@ log drain (a Pro feature).
     every 60 seconds next to its job loop, because an indexing job can run for 15 minutes.
   - `GET /status/jobs-waiting` reads the oldest runnable job with the queue's own
     `runnable_waiting`, so jobs held back by their workspace's one-at-a-time rule do not count.
-  - `GET /status/jobs-failing` counts the jobs that failed in the last hour with a counted
-    failure, using the new `jobs.error_permanent` column with the rule of the earlier `JobsFailed`
-    metric.
+  - `GET /status/jobs-failing` reads the jobs that failed with a counted failure, using the new
+    `jobs.error_permanent` column with the rule of the earlier `JobsFailed` metric. It fails while
+    any counted failure of the last hour completes a run of 3 within 60 minutes, so the condition
+    stays true for an hour after the third failure instead of only until the first of the three
+    leaves a rolling hour, which could last seconds and fall between two checks.
   - `GET /status/backup` reads the newest row of `backups`.
 - **External monitor**: Better Stack's free plan (10 monitors, checks every 3 minutes, email alerts
   with recovery notices, for personal projects). Six monitors, all on the public address:
-  `/` (the web app) and `/readyz` (the API and the database through the web app), each alerting
-  after it has failed for about 5 minutes (FR-014's public address condition), and the four status
+  `/` (the web app) and `/readyz` (the API and the database through the web app), each with a
+  5-minute confirmation period, so it alerts once its checks have failed for 5 minutes (FR-014's
+  public address condition), 5 to 8 minutes after the outage starts; and the four status
   endpoints, each alerting on its first 503 because the endpoint already includes the duration.
   The monitor runs outside Railway, so an outage of the platform still alerts (spec edge case).
   Its settings are recorded in the operations guide (R8).
-- **Timing** (SC-007): a status condition alerts within one check, about 3 minutes, of becoming
-  true; the stopped-worker alert therefore arrives 5 to 8 minutes after the last heartbeat, and the
-  backup alert within minutes of the 26-hour mark.
+- **Timing** (SC-007): an outage alerts within about 3 minutes of its 5-minute mark; a status
+  condition alerts within one check, about 3 minutes, of becoming true, so the stopped-worker alert
+  arrives 5 to 8 minutes after the last heartbeat, and the backup alert within minutes of the
+  26-hour mark. Every alert therefore arrives within 10 minutes of its condition.
 - **Removed**: the CloudWatch embedded metric format, `EMIT_METRICS`, and `METRICS_ENVIRONMENT`;
   the disk and certificate alerts, which the developer dropped (the platform manages the
   certificate, and an invalid one fails the external check like an outage).
@@ -500,7 +536,8 @@ notices. Nothing in the application needs credentials for a monitoring service.
 - `GET /readyz`: `SELECT 1` with a 2-second statement timeout; 200 or 503 `not_ready`. It checks
   neither GitHub nor the model providers (FR-011). It is `api`'s deployment healthcheck (R7) and an
   external monitor (R10).
-- `GET /version`: `{"commit": ...}` from `CODEATLAS_RELEASE` or `RAILWAY_GIT_COMMIT_SHA` (R6).
+- `GET /version`: `{"commit": ...}` from `RAILWAY_GIT_COMMIT_SHA`, else `CODEATLAS_RELEASE` (R6).
+  The release gates of the other services read it (R7).
 - The web footer shows the short commit.
 
 **Rationale**: as before, separating liveness from readiness keeps a database outage from looking
@@ -515,40 +552,63 @@ then block releases and restart the API).
 
 - **Nightly backup**: the `backup` service is a Railway cron service, `30 3 * * *` (UTC). It runs
   `python -m codeatlas.ops backup` and exits; Railway skips a run while the previous one is still
-  active. The command:
-  1. opens a `REPEATABLE READ` transaction, exports its snapshot with `pg_export_snapshot()`, and
+  active. The developer may also run it by hand. Each run:
+  1. **prunes first**: deletes from the bucket every backup dated before the last
+     `BACKUP_RETENTION_DAYS` (7) UTC days, today included, so dates from `today - 6` on are kept;
+     then, if the database answers, deletes the `backups` rows of the deleted keys. Pruning runs
+     whether or not the rest of the run succeeds, so a failing backup does not keep old backups
+     alive;
+  2. opens a `REPEATABLE READ` transaction, exports its snapshot with `pg_export_snapshot()`, and
      runs `pg_dump -Fc --snapshot=<id>` into a temporary file while the transaction stays open;
-  2. in the same transaction, counts the rows of every table in the `public` schema and reads the
+  3. in the same transaction, counts the rows of every table in the `public` schema and reads the
      Alembic revision, so the counts describe the dumped data even while users write;
-  3. checks the dump with `pg_restore --list`, and computes its size and SHA-256;
-  4. builds `manifest.json` with the existing pure functions in `codeatlas.ops.backup`;
-  5. uploads `backups/<UTC date>/codeatlas.dump`, then `manifest.json`, to the bucket;
-  6. inserts the `backups` row (data model) only after both uploads; and
-  7. deletes the objects and rows of backups older than `BACKUP_RETENTION_DAYS` (7).
-  Any failure exits non-zero with no row, so `/status/backup` alerts after 26 hours.
+  4. checks the dump with `pg_restore --list`, and computes its size and SHA-256;
+  5. builds `manifest.json` with the existing pure functions in `codeatlas.ops.backup`;
+  6. uploads `backups/<UTC date>/<UTC time>/codeatlas.dump`, then `manifest.json` beside it. The
+     time (`HHMMSS`) makes every run's keys new, so a second run on the same day never overwrites
+     the first; the run stops if the keys already exist; and
+  7. inserts the `backups` row (data model) only after both uploads.
+  Any failure after pruning exits non-zero with no row, so `/status/backup` alerts after 26 hours.
+  A dump uploaded without its manifest is incomplete: restore ignores it, and pruning removes it
+  with its date.
+- **Retention bound** (FR-018): data deleted on day D is purged by D+1 (001 FR-035), so the last
+  backup holding it is dated D+1 at the latest, and the run on D+8 prunes it: at most 8 days and a
+  few hours after deletion, within the disclosed 10 days. The bound holds while the nightly runs
+  happen; if they stop, the backup alert fires after 26 hours.
 - **Storage**: a Railway bucket, `backups`, private and encrypted at rest. Its endpoint is
-  S3-compatible (`boto3`, with the endpoint, region, and addressing style the bucket's credentials
-  give). Railway buckets have no lifecycle rules, versioning, or object lock, and one key pair per
-  bucket with full access, so the backup command prunes old backups itself, and the backup service
-  could also delete backups. Uploads cross the public network and count as egress (R19).
-- **Restore**: `python -m codeatlas.ops restore <UTC date>`, run in the `api` service through
-  `railway ssh` with the bucket's credentials exported for that session only (from the bucket's
-  Credentials tab), so `api` holds them only while the developer restores. It downloads the dump
-  and manifest, checks the SHA-256, runs `pg_restore --clean --if-exists --no-owner
-  --exit-on-error` into `db`, and runs `verify-restore`, which compares the Alembic revision and
-  every table's row count with the manifest. The guide stops the worker first (`railway down -s
-  worker`) and redeploys it afterward.
-- **Recovery exercise** (SC-008): the developer duplicates `production` into `drill`. The copy
-  has the services, configuration, and non-secret variables, an empty volume, and a new domain;
-  the developer sets the sealed secrets again, removes the worker's deployment so no background
-  job acts on the restored data, waits for `api` to migrate the empty database, restores the latest
-  backup, and adds `https://<drill domain>/auth/github/callback` as a second callback URL of the
-  pilot App. They sign in on the drill, check their repositories, answers, and reviews, record the
-  time from duplication to that check, and delete the environment and the callback URL.
+  S3-compatible (`boto3`, with the endpoint, region, and virtual-hosted addressing that the bucket's
+  credentials give). Railway buckets have no lifecycle rules, versioning, or object lock, and one
+  key pair per bucket with full access, so the backup command prunes old backups itself, and the
+  backup service could also delete backups. Uploads cross the public network and count as egress
+  (R19).
+- **Restore**: `python -m codeatlas.ops restore <backup>`, where `<backup>` is a UTC date (the
+  newest complete backup of that day) or a date and time. It runs in the `api` service through
+  `railway ssh`, with the bucket's credentials exported for that session only (from the bucket's
+  Credentials tab), so `api` holds them only while the developer restores. The guide first stops
+  `web` (`railway down -s web`), the only public entry, so nothing writes through the API, and
+  `worker`. The command:
+  1. downloads the dump and manifest and checks the SHA-256;
+  2. asks for confirmation unless `--yes`;
+  3. ends every other session on the database (`pg_terminate_backend`), so no open transaction
+     writes or holds a lock;
+  4. drops and recreates the `public` schema, so the restore starts from an empty schema whatever
+     revision the database had, including a new environment that `api` already migrated;
+  5. runs `pg_restore --no-owner --exit-on-error`, then the `verify-restore` comparison, which
+     requires the Alembic revision and every table's row count to equal the manifest's; and
+  6. runs the same migration step as `ops migrate`, which brings a backup taken before a
+     schema-changing release up to this release's revision.
+  The developer then redeploys `worker` and `web`.
+- **Recovery exercise** (SC-008): the developer duplicates `production` into `drill`. The copy has
+  the services, configuration, and non-secret variables, an empty volume, and a new domain; the
+  developer sets the sealed secrets again, removes the worker's deployment so no background job
+  acts on the restored data, waits for `api` to start, stops `web`, restores the latest backup,
+  starts `web`, and adds `https://<drill domain>/auth/github/callback` as a second callback URL of
+  the pilot App. They sign in on the drill, check their repositories, answers, and reviews, record
+  the time from duplication to that check, and delete the environment and the callback URL.
 - **Losses in the pilot**:
   - A crashed or restarted service returns by itself (R2).
-  - A lost database volume: create a new volume for `db`, let `api` migrate the empty database,
-    restore the latest backup, and redeploy the worker. Up to 24 hours of changes are lost
+  - A lost database volume: create a new volume for `db`, let `api` start, restore the latest
+    backup as above, and redeploy the worker and the web app. Up to 24 hours of changes are lost
     (FR-031). The guide tells the developer to inform pilot users of the backup time, so they can
     disconnect repositories again; access losses are found again by the daily check (002 FR-012).
   - A lost environment or project: rebuild it with `railway config apply` (R8), set the secrets,
@@ -558,18 +618,25 @@ then block releases and restart the API).
   `/status/backup` may alert until the next nightly run; the guide says to expect it, or to run the
   backup once by hand.
 - **Disclosure** (FR-018): `ExternalProcessingAcceptance` and the README's data section keep saying
-  that deleted data can remain in encrypted backups for up to 10 days: purged within 24 hours
-  (001 FR-035), then held by backups that the nightly run deletes once they are more than 7 days
-  old.
+  that deleted data can remain in encrypted backups for up to 10 days.
 
 **Rationale**: A logical dump is portable to any PostgreSQL 17, can be verified by counting rows,
-and restores into a new environment, which Railway's own volume backups (Pro) cannot. Doing the
-whole backup in Python keeps the snapshot handling, the manifest, and the pruning in tested code.
+and restores into a new environment, which Railway's own volume backups (Pro) cannot. Restoring
+into an empty schema and migrating afterward makes the result independent of the schema the target
+had. Doing the whole backup in Python keeps the snapshot handling, the manifest, the keys, and the
+pruning in tested code.
 
 **Alternatives considered**:
 
 - **Railway volume backups** (Pro plan): no code, but they restore only into the same environment,
   cannot be verified by row counts, and are lost with the project.
+- **`pg_restore --clean` into the migrated database**: it drops and recreates only the dump's own
+  objects, so tables added by later migrations survive with the wrong revision recorded, and the
+  next migration fails.
+- **A maintenance mode in the API for restores**: code for an operation that runs a few times a
+  year; stopping the web app closes the only public entry.
+- **One backup per day under a fixed key**: simpler keys, but a manual run would overwrite the
+  nightly one before its row could conflict.
 - **A shell script with `psql` and the AWS CLI** (the earlier design): the snapshot needed `psql`'s
   `\!` and `:SHELL_ERROR`, and the AWS CLI would join the image.
 - **An external bucket** (S3 or R2): backups would survive the loss of the Railway account, but
@@ -658,6 +725,12 @@ pilot itself (its data, limits, and users would be affected).
   `review_v2.jsonl` with the real providers, labeled "measured on a set no person has reviewed yet"
   and "measured on a set reviewed only by a model". The human audits of 001 SC-005 and 003 SC-004
   are deferred and listed.
+- **Per-item cost and latency** (FR-028): the benchmark runner already records each review's
+  tokens, time, and cost (`review_cost`, at the prices of the run's day). The review runner records
+  tokens and time but no cost, and the question runner neither. The price function moves to a
+  shared `evals/pricing.py`; `run_review_eval.py` adds each item's cost; `run_qa_eval.py` reads each
+  answer's token counts from its `analysis_runs.usage`, its latency from the job's `created_at` to
+  `finished_at`, and adds both with the cost to its per-question table and totals.
 - **Report**: `docs/reports/evaluation.md`, with denominators, per-item failures, model cost and
   latency per item, and the commit, set versions, and SHA-256 of each set (SC-012).
 - **Caveats in the report**: models may have seen the benchmark's repositories; the judge is a
@@ -693,42 +766,51 @@ to GitHub forks, re-splitting risks with a model, or a judge of our own were rej
 **Decision**:
 
 - **Unit tests**:
-  - settings: `GITHUB_APP_PRIVATE_KEY` content versus path, `RAILWAY_GIT_COMMIT_SHA` as the
-    release, `CLIENT_ADDRESS_HEADER`, the new thresholds, and the backup settings named when
-    missing;
+  - settings: `GITHUB_APP_PRIVATE_KEY` content versus path, `RAILWAY_GIT_COMMIT_SHA` taking
+    precedence over `CODEATLAS_RELEASE`, `CLIENT_ADDRESS_HEADER`, the new thresholds, and the backup
+    settings named when missing;
   - the rate limiter's client address: the configured header, its absence, and no header
     configured;
-  - the migration decision: upgrade, skip when the database is ahead, and what counts as ahead,
-    from plain revision sets;
-  - the backup pruning choice (which dates are older than the retention) and the manifest
+  - the migration decision (upgrade, current, skip when the database is ahead) from plain revision
+    sets, and the release gate (pass on the own commit, keep waiting on another commit or an error,
+    give up at the deadline, pass at once without a commit) against `httpx.MockTransport`;
+  - the web app's gate script, with Node's built-in test runner (`node --test`) and a stubbed
+    `fetch`, with the same cases;
+  - the backup keys and pruning choice (which dates fall outside the retention) and the manifest
     (existing);
-  - the status conditions' thresholds, from plain values.
+  - the status conditions' thresholds, including the failing-jobs window, from plain values;
+  - the evaluation runners' per-item cost from token counts.
 - **Integration tests** against PostgreSQL:
   - each `/status/*` endpoint: fresh and stale heartbeats; no runnable job, a recent one, an old
-    one, and an old one held back by its workspace; counted and uncounted failures inside and
-    outside the hour; no backup, a recent one, and an old one; 503 when the database is down;
+    one, and an old one held back by its workspace; counted and uncounted failures, inside and
+    outside the window, including three failures whose window holds after the hour passes; no
+    backup, a recent one, and an old one; 503 when the database is down;
   - the worker's reporter upserts its heartbeat and prunes old rows; a failed job records
     `error_permanent`;
-  - `ops backup` end to end with an in-memory object store standing in for the bucket, and
-    `ops restore` of its output into a second database, verified by `verify-restore` (both need
-    `pg_dump` 17, which the CI job installs);
-  - `ops migrate` on an empty database, a current one, and one ahead of the code; and the worker's
-    schema wait.
+  - `ops backup` end to end with an in-memory object store standing in for the bucket: two runs on
+    one day keep two backups, pruning runs even when the dump fails, and the manifest's counts
+    equal the dump's own snapshot; `ops restore` of its output into a second database, and of a
+    backup taken at an older revision into a database at the head, each verified by
+    `verify-restore` and migrated (both need `pg_dump` 17, which the CI job installs);
+  - `ops migrate` on an empty database, a current one, and one ahead of the code.
 - **Existing tests**: the access list, the pilot-wide limits, readiness, logging, and the operator
   commands stay. The EMF tests (`test_metrics.py`, `test_worker_metrics.py`) are replaced by the
-  status and reporter tests above.
+  status and reporter tests above, and the logging test that ran `backup-manifest` runs the new
+  commands instead.
 - **End-to-end** (Playwright, fake mode): unchanged; the shared stack keeps the access list off.
 - **CI**:
   - removes the `infra` job (Terraform, shellcheck, bats, Compose, Caddy, and CloudWatch agent
     checks) and `release.yml`;
-  - adds the `schema` job on pull requests (R7);
+  - adds the `schema` job on pull requests (R7), before the first migration of this feature;
+  - fails the backend and frontend jobs when a Dockerfile declares a build argument outside
+    `CODEATLAS_RELEASE`, `API_ORIGIN`, `RAILWAY_GIT_COMMIT_SHA`, and `NEXT_PUBLIC_RELEASE` (R5);
   - installs `postgresql-client-17` from the PostgreSQL apt repository in the backend job for the
-    backup tests;
+    backup tests, and runs `node --test scripts/` in the frontend job;
   - keeps the production image builds of both Dockerfiles, which Railway builds the same way.
 - **Operational checks**, run by the developer and recorded in the quickstart: the fault tests
-  (SC-007), the recovery exercise (SC-008), five releases with the probe and a failed-readiness
-  rehearsal and rollback (SC-009, SC-010), the public-surface check (SC-005), and the credential
-  scan (SC-006).
+  (SC-007), the recovery exercise (SC-008), five releases with the probe, a failed-readiness and a
+  failed-migration rehearsal, and rollbacks (SC-009, SC-010), the public-surface check (SC-005), and
+  the credential scan (SC-006).
 
 ## R19. Monthly cost (SC-002)
 

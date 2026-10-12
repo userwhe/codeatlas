@@ -220,9 +220,9 @@ reports states its denominator and the commit and configuration it was measured 
 - The pilot-wide limit is reached partway through a day. New questions and reviews are refused
   with the reset time; jobs already accepted finish; browsing and search continue.
 - A user deletes data that a backup already holds. Deleted data is purged within 24 hours
-  (001 FR-035), and each nightly backup run deletes backups more than 7 days old. The disclosure
-  therefore says the data can remain in backups for up to 10 days; if the nightly runs stop, the
-  backup alert fires after 26 hours.
+  (001 FR-035), and each nightly backup run first deletes the backups dated before the last 7
+  days, even when the backup itself then fails. The disclosure therefore says the data can remain
+  in backups for up to 10 days; if the nightly runs stop, the backup alert fires after 26 hours.
 - A GitHub account outside the pilot installs the pilot's public App. Its notifications are
   ignored (002 FR-010). CodeAtlas keeps only the delivery record that 002 keeps for every verified
   delivery, for 14 days, to drop duplicates: the delivery ID, event and action, installation and
@@ -330,8 +330,10 @@ reports states its denominator and the commit and configuration it was measured 
   previous version MUST keep serving, and the developer MUST be alerted.
 - **FR-023**: A release MUST NOT lose or duplicate jobs, and MUST interrupt service for at most 60
   seconds.
-- **FR-024**: The developer MUST be able to roll back each service to its previous release in one
-  action, and the previous release MUST serve again within 5 minutes.
+- **FR-024**: While the hosting platform still holds the previous release (at least 72 hours after
+  it was replaced), the developer MUST be able to roll back each service to it in one action, and
+  the previous release MUST serve again within 5 minutes. After that, rolling back redeploys the
+  earlier commit, which MUST serve within 15 minutes.
 - **FR-025**: The repository and the CI service MUST hold no credentials for the hosting
   platform. Changes to the hosting configuration MUST be shown to the developer in full before
   they take effect, and the recorded configuration (FR-016) MUST be updated with them.

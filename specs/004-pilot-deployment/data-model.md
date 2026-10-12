@@ -14,7 +14,7 @@ is unchanged from 003.
 | Pilot-wide usage allowance | Table `pilot_usage_counters` (research R14) |
 | Audit event (extended) | New `action` values on `audit_events`; denied sign-ins use the existing outcome `denied` |
 | Release | Not in the database: the hosting platform's deployment history of each service (commit, status, start and end times; a failed build, pre-deploy command, or readiness check marks the deployment failed, and a rollback creates a new deployment of the earlier image), and the CI report on the pull request that says whether it changes the schema (research R7) |
-| Backup | Table `backups` (one row per completed backup) and two objects in the backup bucket, `backups/<UTC date>/codeatlas.dump` and its `manifest.json` (research R12) |
+| Backup | Table `backups` (one row per completed backup) and two objects in the backup bucket, `backups/<UTC date>/<UTC time>/codeatlas.dump` and its `manifest.json` beside it (research R12) |
 
 ## pilot_users (0004)
 
@@ -82,7 +82,7 @@ them. The migration's downgrade deletes rows with the new actions before restori
 | Field | Type | Rules |
 | --- | --- | --- |
 | id | uuid | Primary key |
-| object_key | text | Unique; the dump's key, `backups/<UTC date>/codeatlas.dump` |
+| object_key | text | Unique; the dump's key, `backups/<UTC date>/<UTC time>/codeatlas.dump`, with the time as `HHMMSS`, so every run has its own keys |
 | completed_at | timestamptz | When the dump and its manifest were both uploaded |
 | bytes | bigint | The dump's size |
 | sha256 | text | 64 lowercase hexadecimal characters |
@@ -93,8 +93,10 @@ them. The migration's downgrade deletes rows with the new actions before restori
   complete backup. The row is written after the dump, so a backup's own row is not inside it;
   after a restore, the newest row is the one before the restored backup until the next nightly
   run (research R12).
-- When `ops backup` prunes objects older than `BACKUP_RETENTION_DAYS` (7), it deletes their rows in
-  the same run, so the table lists the backups that still exist.
+- Each run of `ops backup` first prunes the backups dated before the last `BACKUP_RETENTION_DAYS`
+  (7) UTC days, today included (dates from `today - 6` are kept), whether or not the rest of the run
+  succeeds, and deletes their rows when the database answers, so the table lists the backups that
+  still exist.
 
 ## jobs: changes (0005)
 
@@ -116,7 +118,7 @@ and checked from outside the platform every 3 minutes (research R10).
 | --- | --- | --- |
 | `worker` | No `worker_heartbeats` row has `beat_at` within the threshold | `WORKER_SILENT_SECONDS` (300) |
 | `jobs-waiting` | The oldest job that `claim_next` could claim now (`runnable_waiting`: waiting, due, and no running job of its workspace and kind) became due longer ago than the threshold | `JOBS_WAITING_ALERT_SECONDS` (1800) |
-| `jobs-failing` | At least the threshold of jobs have `status = 'failed'`, `finished_at` within the last hour, and a counted failure (above) | `JOBS_FAILING_ALERT_COUNT` (3) |
+| `jobs-failing` | A counted failure (above) finished within the last hour, and the counted failures that finished in the 60 minutes up to and including it number at least the threshold. The condition therefore holds for an hour after the third failure of a run. `value` is the largest such number, 0 when none | `JOBS_FAILING_ALERT_COUNT` (3) |
 | `backup` | The newest `backups.completed_at` is older than the threshold, or the table is empty | `BACKUP_MISSING_HOURS` (26) |
 
 A new environment has no backup until its first nightly run, so `backup` fails there until then;
@@ -132,7 +134,7 @@ Built by `ops backup` with the existing pure functions in `codeatlas.ops.backup`
   "created_at": "2026-10-13T03:30:12Z",
   "release": "<commit SHA running when the backup was taken>",
   "alembic_revision": "0005",
-  "dump": { "key": "backups/2026-10-13/codeatlas.dump", "bytes": 734003200, "sha256": "<hex>" },
+  "dump": { "key": "backups/2026-10-13/033012/codeatlas.dump", "bytes": 734003200, "sha256": "<hex>" },
   "row_counts": { "users": 6, "workspaces": 6, "repositories": 21, "snapshots": 48, "...": 0 }
 }
 ```
@@ -141,7 +143,8 @@ Built by `ops backup` with the existing pure functions in `codeatlas.ops.backup`
   revision, in the same repeatable-read transaction whose exported snapshot `pg_dump` uses, so the
   counts describe exactly the dumped data (research R12).
 - `verify-restore` passes when the restored database's Alembic revision equals the manifest's and
-  every table's row count equals the manifest's; otherwise it prints each difference.
+  every table's row count equals the manifest's; otherwise it prints each difference. `ops restore`
+  runs it on the restored schema before migrating it to the release's revision.
 
 ## Settings
 
@@ -152,7 +155,8 @@ Built by `ops backup` with the existing pure functions in `codeatlas.ops.backup`
 | `PILOT_DAILY_QUESTION_LIMIT` | `30` | Pilot-wide; FR-005 |
 | `PILOT_DAILY_REVIEW_LIMIT` | `15` | Pilot-wide; FR-005 |
 | `RATE_LIMIT_PER_MINUTE` | `60` | Per client address on `/auth/*`, `/webhooks/*`, and `/status/*`; 0 disables |
-| `CODEATLAS_RELEASE` | `development` | The commit reported by `/version`. Also read from `RAILWAY_GIT_COMMIT_SHA`, which the platform sets for deployments from GitHub (changed) |
+| `CODEATLAS_RELEASE` | `development` | The commit reported by `/version`. `RAILWAY_GIT_COMMIT_SHA`, which the platform sets for deployments from GitHub, takes precedence, because the image always defines `CODEATLAS_RELEASE` (changed; research R6) |
+| `API_ORIGIN` | `http://localhost:8000` | New for the backend: the API's private address, which `ops wait-for-api` polls (research R7); the web app already reads it |
 | `GITHUB_APP_PRIVATE_KEY` | empty | New: the App's private key itself, in PEM. Production needs this or a readable `GITHUB_APP_PRIVATE_KEY_PATH`; the content wins when both are set |
 | `WORKER_REPORT_SECONDS` | `60` | New: how often the worker reports its heartbeat and queue state |
 | `WORKER_SILENT_SECONDS` | `300` | New: `worker` condition |

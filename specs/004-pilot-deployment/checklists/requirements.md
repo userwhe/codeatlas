@@ -65,4 +65,8 @@
   and User Story 3 now ask for a rollback of each service in one action; SC-007's failing-jobs
   fault now names a failure that counts, such as exceeding a deadline, which the developer can
   cause without changing code. All items still pass.
+- Iteration 7 (2026-10-12, after the cross-artifact analysis): FR-024 now bounds the one-action
+  rollback by the platform's 72-hour image window and gives 15 minutes for redeploying an earlier
+  commit after it; the backup edge case says pruning runs at the start of every run. All items
+  still pass.
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`

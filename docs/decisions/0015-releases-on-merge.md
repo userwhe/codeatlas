@@ -26,22 +26,25 @@ FR-020).
 
 Option 1:
 
-- `web`, `api`, `worker`, and `backup` deploy from `main`; Railway waits until every GitHub Actions
-  check suite on the commit passes and skips the deployment if one fails. Pull request
-  environments are off.
+- `web`, `api`, `worker`, and `backup` deploy from `main`; from the first deployment, Railway
+  waits until every GitHub Actions check suite on the commit passes and skips the deployment if
+  one fails. Pull request environments are off.
 - `api`'s pre-deploy command, `python -m codeatlas.ops migrate`, runs before the new version
   starts: under a PostgreSQL advisory lock, it upgrades the schema when the database's revision is
   one the release knows, and skips with a log line when the database is ahead, so a rolled-back API
   starts against a newer schema. A failure keeps the previous version serving.
-- The worker waits at startup while the database's schema is older than its own, because the
-  services deploy in parallel.
+- The services deploy in parallel, so `web`, `worker`, and `backup` each run a pre-deploy release
+  gate that waits, for up to 20 minutes, until `api` reports their own commit at `/version`.
+  `api` reports it only after migrating and passing its readiness check, so a failure of either
+  stops the whole release, and every service keeps its previous version.
 - `api` (`/readyz`) and `web` (`/`) receive traffic only after their healthchecks pass. Overlap and
   draining times keep in-flight requests answered, and give the old worker 30 seconds after
   `SIGTERM`; leases and fencing tokens cover a job cut short.
-- A CI job reports schema changes on every pull request, with the expand-then-contract rule, so the
-  developer checks them in review before merging.
+- A CI job lists every added, changed, deleted, or renamed migration on every pull request, with
+  the expand-then-contract rule, so the developer checks schema changes in review before merging.
 - Rollback is Railway's "Rollback" on a service's previous deployment: one action per service, no
-  rebuild.
+  rebuild, `api` first. On Hobby the previous image is kept for 72 hours after it is replaced;
+  after that, the earlier commit is redeployed and builds again.
 
 ## Trade-off
 
@@ -51,10 +54,11 @@ Option 1:
 - **Accepted**:
   - The merge is the only confirmation of a release; a direct push to `main` also releases, so the
     operations guide says to merge through pull requests.
-  - Services deploy in parallel, so for a minute the web app and the API may run different commits;
-    changes that need both follow the expand-then-contract rule.
-  - Rollback is per service, and on Hobby an image stays available for 72 hours after its
-    deployment is replaced; later, the earlier commit is redeployed.
+  - Between `api`'s switch and the gated services' switches, the API may run a newer commit than
+    the web app and the worker; changes that need both follow the expand-then-contract rule.
+  - Two small gate programs, one in each image, because the web image has no Python.
+  - Rollback is per service and is done for the whole release, `api` first; after the 72-hour
+    window it takes a build, about 15 minutes instead of 5.
   - "Wait for CI" waits for every check suite on the commit, including ones from other GitHub Apps.
 - **Revisit when**:
   - a bad release reaches pilot users: add an approval step or a staging environment;

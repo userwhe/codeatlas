@@ -32,8 +32,10 @@ Option 1:
   60 seconds; the queue's own `runnable_waiting`; a new `jobs.error_permanent` column, which keeps
   the earlier rule for counting failures; and a new `backups` table, written after each upload.
   The migration is `0005_operations_status`.
+- The failing-jobs condition holds for an hour after the third counted failure within 60 minutes,
+  so a run of failures cannot fall between two checks.
 - Better Stack's free plan checks the four endpoints, `/`, and `/readyz` every 3 minutes and emails
-  on failure and recovery.
+  on failure and recovery; `/` and `/readyz` alert after a 5-minute confirmation period.
 - Metrics come from Railway (CPU, memory, disk, network, HTTP) and from structured log lines: the
   worker writes its queue numbers every minute. The CloudWatch embedded metric format and its
   settings are removed, and so are the disk and certificate alerts.

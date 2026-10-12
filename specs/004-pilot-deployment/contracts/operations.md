@@ -22,15 +22,17 @@ volumes and a new generated domain, and does not receive sealed variables. Delet
 
 | Service | Source and root directory | Start command | Pre-deploy | Healthcheck | Restart policy | Public domain | Size limit |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `web` | `main`, `frontend/`, `Dockerfile` (stage `production`) | `node server.js` | none | `/` | On failure, 10 retries | Yes | 0.5 vCPU, 0.5 GB |
+| `web` | `main`, `frontend/`, `Dockerfile` (stage `production`) | `node server.js` | `node scripts/wait-for-api.mjs` | `/` | On failure, 10 retries | Yes | 0.5 vCPU, 0.5 GB |
 | `api` | `main`, `backend/`, `Dockerfile` | `uvicorn codeatlas.api.app:app --host 0.0.0.0 --port 8000` | `python -m codeatlas.ops migrate` | `/readyz` | On failure, 10 retries | No | 1 vCPU, 1 GB |
-| `worker` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.jobs.worker` | none | none | On failure, 10 retries | No | 1 vCPU, 2 GB |
-| `backup` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC) | none | none | Never | No | 0.5 vCPU, 0.5 GB |
+| `worker` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.jobs.worker` | `python -m codeatlas.ops wait-for-api` | none | On failure, 10 retries | No | 1 vCPU, 2 GB |
+| `backup` | `main`, `backend/`, `Dockerfile` | `python -m codeatlas.ops backup`, cron `30 3 * * *` (UTC) | `python -m codeatlas.ops wait-for-api` | none | Never | No | 0.5 vCPU, 0.5 GB |
 | `db` | Image `pgvector/pgvector:pg17`; volume at `/var/lib/postgresql/data` | `postgres -c shared_buffers=256MB -c max_connections=50` | none | none | On failure, 10 retries | No, and no TCP proxy | 1 vCPU, 1 GB |
 | `backups` | Railway bucket | n/a | n/a | n/a | n/a | No | n/a |
 
-`web`, `api`, `worker`, and `backup` deploy from `main` with "Wait for CI" on. Pull request
-environments are off.
+`web`, `api`, `worker`, and `backup` deploy from `main` with "Wait for CI" on from the first
+deployment. Pull request environments are off. The pre-deploy commands of `web`, `worker`, and
+`backup` are the release gate: each waits, for up to 20 minutes, until `api` reports the
+deployment's own commit at `/version` (research R7); their pre-deploy timeout is 1,500 seconds.
 
 ## Variables
 
@@ -44,7 +46,7 @@ variable.
 | `CODEATLAS_FAKE_EXTERNALS` | api, worker | `0` (`1` in `loadtest`) |
 | `APP_ORIGIN` | api, worker | Ref: `https://${{web.RAILWAY_PUBLIC_DOMAIN}}` |
 | `DATABASE_URL` | api, worker, backup | Ref: `postgresql+psycopg://codeatlas:${{db.POSTGRES_PASSWORD}}@${{db.RAILWAY_PRIVATE_DOMAIN}}:5432/codeatlas` |
-| `API_ORIGIN` | web (build argument) | Ref: `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` |
+| `API_ORIGIN` | web (build argument and run time), worker, backup | Ref: `http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000` |
 | `PORT` | web, api | `3000`, `8000` |
 | `CLIENT_ADDRESS_HEADER` | api | `X-Real-IP` |
 | `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID` | api, worker | The pilot App's values |
@@ -72,6 +74,8 @@ them:
 | The web app's generated domain | `web`, Settings, Networking (or `railway domain`) | `codeatlas.up.railway.app`, or the nearest free name |
 | Replica size limits, if `railway config plan` does not show them | Each service, Settings, Deploy | The sizes in "Services" |
 | Cron schedule, if `railway config plan` does not show it | `backup`, Settings, Deploy | `30 3 * * *` |
+| "Wait for CI", if `railway config plan` does not show it | `web`, `api`, `worker`, `backup`, Settings, Source | On, before the first deployment |
+| Pre-deploy timeout, if `railway config plan` does not show it | `web`, `worker`, `backup`, Settings, Deploy | 1,500 seconds |
 | Notification rules | Account, Notifications, with a project override | Email for build failed, deployment failed, and deployment crashed |
 | Usage limits | Workspace, Usage | Custom email alert $20; hard limit $50 |
 | SSH key | Account, SSH keys | The developer's public key |
@@ -88,9 +92,10 @@ noted.
 | `pilot-users remove <login>` | Deletes the row and revokes the user's sessions; audit `pilot_user_remove` | 0; 1 if not listed |
 | `pilot-users delete-data <login>` | For a user not on the list: disconnects all their repositories, deletes their stored GitHub tokens, revokes sessions; audit `pilot_user_delete_data` | 0; 1 if the user is still listed or unknown |
 | `pilot-users list` | Prints login, user ID, note, and date added | 0 |
+| `wait-for-api` | The release gate of `worker` and `backup`: polls `API_ORIGIN/version` every 5 seconds until its `commit` equals `RAILWAY_GIT_COMMIT_SHA`; passes at once when that variable is unset | 0 when it matches or no commit is set; 1 after 20 minutes |
 | `migrate` | `api`'s pre-deploy command. Under an advisory lock: `alembic upgrade head` when the database's revision is known to this release or absent; otherwise logs `migrations_skipped` with both revisions | 0 migrated or skipped; 1 if a migration fails |
-| `backup` | The `backup` service's cron command: dump and counts in one snapshot, `pg_restore --list` check, manifest, upload of the dump and then the manifest, a `backups` row, and pruning of backups older than `BACKUP_RETENTION_DAYS` | 0; 1 on any failure, with no row written |
-| `restore <UTC date> [--yes]` | Downloads that day's dump and manifest, checks the SHA-256, restores into the database with `pg_restore --clean --if-exists --no-owner --exit-on-error`, and runs the `verify-restore` comparison. Needs the `BACKUP_*` variables exported in the SSH session. Asks for confirmation unless `--yes` | 0 restored and verified; 1 on a missing setting, a checksum mismatch, a restore error, or a verification difference |
+| `backup` | The `backup` service's cron command: first pruning of the backups dated before the last `BACKUP_RETENTION_DAYS` UTC days (objects, then rows), whatever happens next; then dump and counts in one snapshot, `pg_restore --list` check, manifest, upload of the dump and then the manifest under `backups/<UTC date>/<UTC time>/` (stopping if those keys exist), and a `backups` row | 0; 1 on any failure after pruning, with no row written |
+| `restore <backup> [--yes]` | `<backup>` is a UTC date (the newest backup of that day with a manifest) or `<UTC date>/<UTC time>`. Downloads the dump and manifest, checks the SHA-256, asks for confirmation unless `--yes`, ends every other database session, drops and recreates the `public` schema, runs `pg_restore --no-owner --exit-on-error`, runs the `verify-restore` comparison, and then migrates the schema as `migrate` does. Needs the `BACKUP_*` variables exported in the SSH session; the guide stops `web` and `worker` first | 0 restored, verified, and migrated; 1 on a missing setting, a missing backup, a checksum mismatch, a restore error, a verification difference, or a failed migration |
 | `verify-restore MANIFEST` | Compares the database's Alembic revision and row counts with a manifest file; prints differences | 0 when equal; 1 otherwise |
 
 `backup-manifest` is removed: `backup` builds the manifest itself.
@@ -100,11 +105,11 @@ noted.
 | Aspect | Contract |
 | --- | --- |
 | Trigger | A push to `main` (a merged pull request) whose GitHub Actions check suites all pass; Railway waits up to 2 hours, and skips the deployment if a suite fails |
-| Order per service | Build from the commit; for `api`, the pre-deploy `migrate` in its own container; start; for `web` and `api`, traffic moves only after the healthcheck returns 2xx within 300 seconds |
-| Failure | A failed build, pre-deploy command, or healthcheck marks the deployment failed; the previous deployment keeps serving; the developer is emailed |
+| Order per service | Build from the commit; the pre-deploy command in its own container (`migrate` for `api`, the release gate for the others); start; for `web` and `api`, traffic moves only after the healthcheck returns 2xx within 300 seconds |
+| Failure | A failed build, pre-deploy command, or healthcheck marks the deployment failed; the previous deployment keeps serving; the developer is emailed. When `api` fails, the other services' gates time out, so the whole release stops |
 | Old deployment | `web` and `api` overlap for 10 seconds, then get `SIGTERM` and 10 seconds before `SIGKILL`; `worker` gets `SIGTERM` and 30 seconds |
-| Schema report | CI's `schema` job on each pull request lists added or changed files under `backend/alembic/versions/` in its summary and as a warning annotation; it never fails |
-| Rollback | A service's Deployments list, "Rollback" on the previous deployment: same image and variables, no rebuild. Within 72 hours of that deployment's removal on Hobby; later, redeploy the earlier commit |
+| Schema report | CI's `schema` job on each pull request lists every added, modified, deleted, renamed, or copied file under `backend/alembic/versions/`, with its status, in its summary and as a warning annotation; it never fails |
+| Rollback | A service's Deployments list, "Rollback" on the previous deployment: same image and variables, no rebuild, serving within 5 minutes. A release is rolled back as a whole, `api` first. Within 72 hours of that deployment's replacement on Hobby; later, redeploy the earlier commit, serving within 15 minutes |
 | Credentials | None in the repository or CI; the platform's GitHub integration pulls the repository |
 
 ## External monitor (Better Stack, free plan)
@@ -113,8 +118,8 @@ Checks every 3 minutes from outside the platform; email on failure and on recove
 
 | Monitor | URL | Alerts when |
 | --- | --- | --- |
-| Web app | `https://<domain>/` | Not 2xx for about 5 minutes (two consecutive failed checks) |
-| API and database | `https://<domain>/readyz` | Not 2xx for about 5 minutes |
+| Web app | `https://<domain>/` | Not 2xx for 5 minutes (confirmation period 5 minutes) |
+| API and database | `https://<domain>/readyz` | Not 2xx for 5 minutes (confirmation period 5 minutes) |
 | Worker | `https://<domain>/status/worker` | 503 or no answer |
 | Waiting jobs | `https://<domain>/status/jobs-waiting` | 503 or no answer |
 | Failing jobs | `https://<domain>/status/jobs-failing` | 503 or no answer |
@@ -129,8 +134,9 @@ by `@httpStatus` and `@totalDuration`.
 Structured lines: `request` (`method`, `route`, `status`, `duration_ms`); `job_finished` (`kind`,
 `outcome`, `attempt`, `duration_ms`); provider warnings (`provider`); `worker_status` every 60
 seconds (`queued_jobs`, `oldest_runnable_job_age_seconds`); `migrations_skipped`
-(`database_revision`, `release_revision`); and the backup command's `backup_completed` and
-`backup_pruned`.
+(`database_revision`, `release_revision`); the release gate's `release_gate_waiting` (`commit`,
+`reported_commit`); and the backup command's `backup_completed` (`object_key`, `bytes`) and
+`backup_pruned` (`pruned`).
 
 ## Metrics
 

@@ -55,8 +55,10 @@ a 2-second timeout. It does not contact GitHub or the model providers.
 { "commit": "3f9c2e1d4b5a69788c7d0e1f2a3b4c5d6e7f8091" }
 ```
 
-`commit` is `CODEATLAS_RELEASE`, or else the platform's `RAILWAY_GIT_COMMIT_SHA`, or
+`commit` is the platform's `RAILWAY_GIT_COMMIT_SHA`, or else `CODEATLAS_RELEASE`, or
 `"development"` when neither is set (FR-019). No authentication; it reveals only the public commit.
+The release gates of `web`, `worker`, and `backup` poll it over the private network (research
+R7).
 
 ## `GET /status/{condition}` (new; not in the OpenAPI document)
 
@@ -75,7 +77,7 @@ external monitor checks each every 3 minutes and alerts on 503, with a recovery 
 | --- | --- | --- |
 | `worker` | Seconds since the newest heartbeat, or null when there is none | `WORKER_SILENT_SECONDS` |
 | `jobs-waiting` | Seconds since the oldest runnable job became due, 0 when none | `JOBS_WAITING_ALERT_SECONDS` |
-| `jobs-failing` | Counted failures in the last hour | `JOBS_FAILING_ALERT_COUNT` |
+| `jobs-failing` | The largest number of counted failures within 60 minutes ending at a counted failure of the last hour, 0 when none | `JOBS_FAILING_ALERT_COUNT` |
 | `backup` | Hours since the newest completed backup, or null when there is none | `BACKUP_MISSING_HOURS` |
 
 No authentication: the bodies hold only these numbers, and the paths are rate-limited per client

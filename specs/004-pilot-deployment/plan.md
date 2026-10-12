@@ -29,11 +29,13 @@ Technical approach:
 - **Configuration** (ADR 0014): Railway's infrastructure as code in `.railway/railway.ts`, previewed
   with `railway config plan` and applied by the developer; secrets are sealed variables kept out of
   the file. Reference variables derive each environment's origin and database URL.
-- **Releases** (ADR 0015): Railway deploys `main` after every GitHub check passes ("Wait for CI").
-  `api`'s pre-deploy command migrates under an advisory lock and skips when the database is ahead,
-  so rollbacks work; the worker waits for the schema; healthchecks gate traffic; rollback is one
-  action per service. A CI job flags schema changes on pull requests. No platform credentials in
-  CI.
+- **Releases** (ADR 0015): Railway deploys `main` after every GitHub check passes ("Wait for CI",
+  on from the first deployment). `api`'s pre-deploy command migrates under an advisory lock and
+  skips when the database is ahead, so rollbacks work; the other services' pre-deploy gates wait
+  until `api` reports their commit, so a failed migration or readiness check stops the whole
+  release; healthchecks gate traffic; rollback is one action per service, `api` first, within the
+  platform's 72-hour image window. A CI job lists every schema change on pull requests. No
+  platform credentials in CI.
 - **Monitoring** (ADR 0016): Railway's logs (JSON fields searchable), metrics, deploy-failure
   emails, and usage limits. What the platform cannot see is served by four `/status/*` endpoints
   backed by a worker heartbeat table, the queue, a new `jobs.error_permanent` column, and a
@@ -68,15 +70,18 @@ days.
 
 **Testing**:
 
-- pytest unit tests for the new settings, the client address, the migration decision, backup
-  pruning, and the status thresholds.
-- Integration tests against PostgreSQL for the four status endpoints, the worker's reporter and
-  schema wait, `error_permanent`, `ops migrate`, and `ops backup` with `ops restore` end to end
-  against an in-memory object store (needs `pg_dump` 17).
+- pytest unit tests for the new settings, the client address, the migration decision, the
+  release gate, backup keys and pruning, the status thresholds, and the evaluations' per-item
+  cost; Node's built-in test runner for the web app's gate script.
+- Integration tests against PostgreSQL for the four status endpoints, the worker's reporter,
+  `error_permanent`, `ops migrate`, and `ops backup` with `ops restore` end to end against an
+  in-memory object store, including same-day runs, pruning after a failed dump, and restoring an
+  older revision (needs `pg_dump` 17).
 - Existing unit, integration, and Playwright suites unchanged, except the EMF tests, which the
-  status tests replace.
-- CI: the backend job installs `postgresql-client-17`; a `schema` job reports migrations on pull
-  requests; the infrastructure job and the release workflow are removed; both production images
+  status tests replace, and the logging test that ran `backup-manifest`.
+- CI: the backend job installs `postgresql-client-17`; the frontend job runs `node --test`; a
+  `schema` job reports migrations on pull requests; a check limits the Dockerfiles' build
+  arguments; the infrastructure job and the release workflow are removed; both production images
   are still built.
 - Operational validation by the developer: fault tests, the recovery exercise, releases with a
   probe, a failed-readiness rehearsal and rollbacks, the public-surface check, and a credential
@@ -110,7 +115,7 @@ configuration.
 - At most 10 pilot users, with 001 and 003's per-workspace limits, and 30 questions and 15 reviews
   a day across the pilot.
 - One always-on environment and two temporary copies; 5 services and a bucket per environment.
-- 1 migration, 1 new route module with 4 endpoints, 3 new operator commands, 1 infrastructure file,
+- 1 migration, 1 new route module with 4 endpoints, 4 new operator commands, 1 infrastructure file,
   1 new CI job, 3 ADRs, and 2 reports.
 
 ## Project Rules Check
@@ -121,7 +126,7 @@ configuration.
 | --- | --- | --- | --- |
 | English only | All artifacts, ADRs, code, and commit messages in English | Pass | Pass: every artifact is in English |
 | Simplicity | Every new tool, service, table, endpoint, and dependency serves a current requirement | Pass, with the design document's ECS, RDS, SQS, staging, and tracing flagged for review | Pass: a managed platform instead of a host and Terraform; no staging, SQS, tracing, metrics stack, or operations UI; two small tables and one column for the alert conditions; one dependency (`boto3`) for the bucket; the AWS code is removed rather than kept as a second deployment. Each tool maps to a requirement below, and each deferral has a revisit condition (research deviations table) |
-| Tested core | Core logic has automated tests; a story is done only when its tests pass | Pass | Pass: R18 covers the settings, client address, migration decision, status conditions and endpoints, reporter, schema wait, and backup and restore end to end; the platform's behavior is validated by recorded exercises (quickstart) |
+| Tested core | Core logic has automated tests; a story is done only when its tests pass | Pass | Pass: R18 covers the settings, client address, migration decision, status conditions and endpoints, reporter, both release gates, evaluation costs, and backup and restore end to end; the platform's behavior is validated by recorded exercises (quickstart) |
 | Recorded decisions | Costly-to-reverse choices have ADRs | Pending | Pass: ADR 0014 (Railway, configuration, backups, the `boto3` dependency), ADR 0015 (releases on merge), ADR 0016 (status endpoints and the external monitor, with the schema change); ADRs 0010 to 0012 are marked superseded by them; ADRs 0002 and 0003 record that they were revisited again and kept; ADR 0013 is unchanged |
 | Human in the loop | No external write without a draft and confirmation | Pass | Pass with two recorded deviations (Complexity Tracking): releases follow merges with no separate approval, and scheduled writes (the nightly backup, heartbeats, monitor checks, alert emails) run without a per-run confirmation. Configuration changes apply only after `railway config plan` or the staged diff; secrets, domains, the GitHub App, monitors, and operator commands are developer actions; the evaluation never posts to GitHub |
 | Repository hygiene | No absolute local paths, secrets, or personal notes committed | Pass | Pass: secrets are sealed variables declared with `preserve()` and never in `.railway/railway.ts`; no token in CI; bucket keys reach only the `backup` service, and `api` only for a restore session |
@@ -195,26 +200,35 @@ backend/
 │   ├── github/client.py             # signs with the key content or the key file
 │   ├── jobs/
 │   │   ├── queue.py                 # records error_permanent; no metric call
-│   │   └── worker.py                # always starts the reporter; waits for the schema at startup
+│   │   └── worker.py                # always starts the reporter
 │   └── ops/
-│       ├── __main__.py              # + migrate, backup, restore; - backup-manifest
-│       ├── backup.py                # pure: manifest and comparison (existing); pruning choice (new)
-│       ├── dump.py                  # new: snapshot dump with counts, pg_restore list and restore
+│       ├── __main__.py              # + migrate, wait-for-api, backup, restore; - backup-manifest
+│       ├── backup.py                # pure: manifest and comparison (existing); keys and pruning choice (new)
+│       ├── dump.py                  # new: snapshot dump with counts, pg_restore list, restore into an empty schema
 │       ├── storage.py               # new: the bucket through boto3, behind a small protocol that tests replace
-│       └── migrate.py               # new: the migration decision, advisory lock, and schema wait
+│       └── release.py               # new: the migration decision, advisory lock, and release gate
 └── tests/
-    ├── unit/                        # new: test_status_conditions.py, test_migrate_decision.py, test_backup_pruning.py,
-    │                                #      test_client_address.py; extended: test_config.py, test_production_settings.py;
-    │                                #      removed: test_metrics.py
+    ├── unit/                        # new: test_status_conditions.py, test_release.py, test_backup_pruning.py,
+    │                                #      test_client_address.py, test_eval_pricing.py; extended: test_config.py,
+    │                                #      test_production_settings.py, test_github_client_auth.py; removed: test_metrics.py
     └── integration/                 # new: test_status_endpoints.py, test_worker_reporter.py, test_backup_restore.py,
-                                     #      test_ops_migrate.py; extended: test_ops_commands.py; removed: test_worker_metrics.py
+                                     #      test_ops_migrate.py; extended: test_ops_commands.py, test_logging.py;
+                                     #      removed: test_worker_metrics.py
+
+backend/evals/
+├── pricing.py                       # new: the price function, moved from run_bench_eval.py
+├── run_qa_eval.py                   # per-question tokens, latency, and cost
+└── run_review_eval.py               # per-item cost
 
 frontend/
-├── Dockerfile                       # production stage: ARG API_ORIGIN; ARG RAILWAY_GIT_COMMIT_SHA for NEXT_PUBLIC_RELEASE
-└── next.config.ts                   # rewrites + /webhooks, /status, /readyz, /version; Strict-Transport-Security header
+├── Dockerfile                       # build stage: ARG API_ORIGIN, ARG RAILWAY_GIT_COMMIT_SHA; production stage copies the gate script
+├── next.config.ts                   # rewrites + /webhooks, /status, /readyz, /version; Strict-Transport-Security header
+└── scripts/
+    ├── wait-for-api.mjs             # new: the web app's release gate
+    └── wait-for-api.test.mjs        # new: node --test
 
 .github/workflows/
-├── ci.yml                           # - infra job; + schema job on pull requests; backend job installs postgresql-client-17
+├── ci.yml                           # - infra job; + schema job; build-argument check; postgresql-client-17; node --test
 ├── release.yml                      # removed
 └── load-test.yml                    # network baseline against /version
 

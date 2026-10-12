@@ -28,7 +28,7 @@ As in 003, with the new tests, and without the infrastructure checks of the earl
 
 ```bash
 (cd backend && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run pytest)
-(cd frontend && npm run lint && npm run typecheck && npm run build && npm run test:e2e)
+(cd frontend && npm run lint && npm run typecheck && node --test scripts/ && npm run build && npm run test:e2e)
 docker build backend && docker build --target production frontend
 ```
 
@@ -40,16 +40,19 @@ them, and locally they are skipped with a reason when missing.
 The operations guide has every command. For the MVP (User Story 1), in order:
 
 1. Create the project and apply `.railway/railway.ts`: `railway config plan`, review the diff,
-   `railway config apply`.
+   `railway config apply`. Confirm that "Wait for CI" is on for every app service before anything
+   deploys.
 2. Generate the web app's domain, and register the pilot GitHub App with its URLs.
 3. Set the sealed secrets on `api`, `worker`, and `db`; deploy the staged changes.
-4. Merge to `main` (or redeploy the current commit) and wait for `web` and `api` to pass their
-   healthchecks.
+4. Merge to `main` (or redeploy the current commit) and wait for `api` to pass its healthcheck,
+   the other services' release gates to pass, and `web` to pass its healthcheck.
 5. Add yourself and the other pilot users with `railway ssh -s api -- python -m codeatlas.ops
    pilot-users add <login>`.
 
 User Story 2 then adds the notification rules, the usage limits, and the monitors (the backup
-monitor after the first nightly backup). User Story 3 needs nothing more: releases follow merges.
+monitor after the first nightly backup). User Story 3 adds the deployment timings and rehearses
+failed releases and rollbacks; "Wait for CI", the release gates, and the schema report are on from
+the start.
 
 ## Validation scenarios
 
@@ -66,16 +69,17 @@ monitor after the first nightly backup). User Story 3 needs nothing more: releas
 | 9 | Public surface | List each service's networking settings; try `psql` and `curl` against `db.railway.internal`, `api.railway.internal`, and every service's public domain from outside Railway | Only `web` has a domain; no TCP proxy exists; the private names do not resolve from outside | US1-7, FR-007, SC-005 |
 | 10 | Readiness | In `drill`, remove the `db` deployment | `/readyz` returns 503 through the web app; `/healthz` on `api` returns 200 (`railway ssh -s api -- python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/healthz').status)"`); with `db` back and `GEMINI_API_KEY` invalid, `/readyz` returns 200 | FR-011 |
 | 11 | Logs | Take a request ID from a failed request's response and filter `@request_id:<id>`; also search the HTTP logs for the OAuth callback | Its lines from `web`'s proxy path and the API; no token, source text, prompt, or model output in the application logs; record whether the edge's HTTP log holds the callback's `code` (research R9) | US2-5, FR-012 |
-| 12 | Release | Start the probe (`while :; do curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/readyz; sleep 1; done`), merge a visible change | The new commit in `/version` and the footer within 15 minutes of the merge; the probe's longest run of failures is under 60 seconds | US3-1, SC-009 |
+| 12 | Release | Start the probe (`while :; do for p in readyz ''; do curl -s -o /dev/null -w "/$p %{http_code}\n" "https://<domain>/$p"; done; sleep 1; done`), merge a visible change | The new commit in `/version` and the footer within 15 minutes of the merge; the longest run of failures of either path is at most 60 seconds | US3-1, SC-009 |
 | 13 | Failed checks and other branches | (a) Push a commit with a failing test to a pull request branch; (b) merge a commit whose CI fails on `main` | (a) No deployment; (b) the deployments wait and are skipped; the pilot keeps serving the previous commit | US3-2, FR-019 |
 | 14 | Schema report | Open a pull request that adds a migration | The `schema` job's summary and a warning annotation list the migration and the expand-then-contract rule | US3-3, FR-020 |
-| 15 | Failed readiness and rollback | Change `api`'s healthcheck path to `/readyz-missing` and redeploy; restore the path; then roll back `web` and `api` to their previous deployments in the dashboard | The new deployment fails, the previous one keeps serving throughout, and an email arrives; each rollback serves within 5 minutes; after a migration, the rolled-back `api` logs `migrations_skipped` and starts | US3-4, US3-6, FR-022, FR-024, SC-010 |
+| 15 | Failed readiness and rollback | Change `api`'s healthcheck path to `/readyz-missing` and redeploy; restore the path; then roll back the last release in the dashboard, `api` first, then `worker`, `web`, and `backup` | The new deployment fails, the previous one keeps serving throughout, and an email arrives; each rollback serves within 5 minutes; record whether the platform ran the gates on the rollback; after a migration, the rolled-back `api` logs `migrations_skipped` and starts | US3-4, US3-6, FR-022, FR-024, SC-010 |
 | 16 | Jobs during a release | Start an indexing job, then merge a change while it runs | The job finishes, resumed by the new worker if needed; one result, no duplicate | US3-1, FR-023 |
 | 17 | Configuration change | Change a service's start command or a variable in `.railway/railway.ts` and run `railway config plan`; change a variable in the dashboard | The plan shows the diff with secrets redacted, and nothing changes until `apply`; the dashboard change is staged with its diff until "Deploy" | US3-7, FR-025 |
 | 18 | Restarts | `railway ssh -s worker -- kill -KILL 1` during a job; `railway restart -s api` | Each service returns without manual steps; the interrupted job resumes or fails with a reason | US2-8, FR-017 |
 | 19 | No stored credentials | `gh secret list`, `gh variable list`, and a search of the repository for Railway tokens | No Railway token or bucket key | US3-8, FR-025 |
 | 20 | Outside installation | Install the pilot App with an account that is not on the list, and push to one of its repositories | No job and no repository row; the delivery's `webhook_deliveries` row has outcome `ignored` and only the fields in the spec's edge case; it is purged after 14 days | Spec edge case, 002 FR-010 |
-| 21 | Backup | After the first night, list the bucket and the `backups` table; run `ops verify-restore` against a restored copy in `drill` | A dump and a manifest under the night's date; one row; the verification passes | FR-015 |
+| 21 | Backup | After the first night, list the bucket and the `backups` table; run `ops backup` once more by hand; restore the newest backup in `drill` | A dump and a manifest under `backups/<date>/<time>/` for each run, the earlier one untouched; one row each; the restore verifies and migrates | FR-015 |
+| 22 | Whole release stops | In `drill`, set `api`'s healthcheck path to `/readyz-missing`, then merge a visible change to `main` | `api`'s new deployment fails; the gates of `web`, `worker`, and `backup` time out after 20 minutes and their deployments fail; every service keeps the previous commit in `drill`, and the pilot releases normally | FR-021, FR-022, research R7 |
 
 ## Fault tests (SC-007)
 
@@ -95,10 +99,11 @@ must follow where the spec asks for one.
 ## Recovery exercise (SC-008)
 
 Follow "Recovery exercise" in the operations guide: duplicate `production` into `drill`, set its
-secrets, remove its worker deployment, restore the latest backup with `ops restore`, add the
+secrets, remove its worker deployment, stop its web app, restore the latest backup with
+`ops restore`, start the web app, add the
 drill's callback URL to the pilot App, sign in on the drill's domain, and confirm your
 repositories, answers, and reviews. Record the start and end times, then delete `drill` and the
-callback URL. The target is under 2 hours, losing only changes made after the backup.
+callback URL. The target is at most 2 hours, losing only changes made after the backup.
 
 ## Load test (SC-011)
 
