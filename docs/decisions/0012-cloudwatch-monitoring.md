@@ -1,7 +1,7 @@
 # ADR 0012: CloudWatch monitoring with a few custom metrics and log queries
 
 - **Status**: Accepted
-- **Date**: 2026-10-07
+- **Date**: 2026-10-07 (revised 2026-10-09: health checks only in `us-east-1`)
 - **Scope**: `specs/004-pilot-deployment`
 
 ## Context
@@ -31,27 +31,33 @@ Option 1:
   worker sends the heartbeat and queue metrics, so a long job does not silence them.
 - Request latency and errors by route group, job durations and retries by kind, and provider errors
   come from Logs Insights widgets on one dashboard, over the structured JSON logs.
-- Ten alarms, each notifying on alarm and on recovery, plus AWS Budgets alerts on actual and
-  forecast spend. Daily metrics are checked as 26 one-hour periods that must all breach, because
-  CloudWatch evaluates longer alarms only hourly and ignores the missing-data setting when enough
-  real data points exist.
+- Ten alarms (eight outside `us-east-1`), each notifying on alarm and on recovery, plus AWS Budgets
+  alerts on actual and forecast spend. Daily metrics are checked as 26 one-hour periods that must
+  all breach, because CloudWatch evaluates longer alarms only hourly and ignores the missing-data
+  setting when enough real data points exist.
 - Two HTTPS Route 53 health checks, of `/readyz` (the API and the database) and `/` (the web app),
-  provide the outside view.
+  provide the outside view. Route 53 publishes their metrics only in `us-east-1`, and an alarm can
+  notify only a topic in its own region, so they and their two alarms exist only when the pilot
+  runs there. The pilot in `us-east-2` (ADR 0010) has the other eight alarms.
 
 ## Trade-off
 
 - **Gained**:
-  - Monitoring costs about $2 a month (the health checks' HTTPS option); the rest is in the free
-    tier.
+  - Monitoring costs about $2 a month (the health checks' HTTPS option; nothing without them); the
+    rest is in the free tier.
   - Logs, metrics, and alarms live outside the host, so they report its failure.
   - Containers need no credentials and no metrics library.
 - **Accepted**:
   - Dashboard numbers from log queries are computed on view and cannot drive alarms.
   - With the worker stopped, the queue metrics stop too; the heartbeat alarm covers that case.
   - No tracing; identifiers in the logs connect a request to its jobs.
+  - Outside `us-east-1`, a stopped edge proxy or web app on a running host sends no alert; a lost
+    host still does, through the status check and the worker's heartbeat.
 - **Revisit when**:
   - an alarm is needed on a number that comes only from logs: promote it to a custom metric;
-  - log volume leaves the free tier; or
+  - log volume leaves the free tier;
+  - a stopped edge proxy or web app goes unnoticed outside `us-east-1`: add an outside check in the
+    pilot's region; or
   - a request path spans more services than the API and the database: add tracing.
 
-Details: `specs/004-pilot-deployment/research.md` R9 and R10.
+Details: `specs/004-pilot-deployment/research.md` R9, R10, and R20.

@@ -196,9 +196,9 @@ refute_backup_published() {
 	[ "$(jq -r '.alembic_revision' "$bucket_dir/manifest.json")" = 0004 ]
 
 	for name in codeatlas.dump manifest.json; do
-		grep -qxF "aws s3api put-object --region us-east-1 --bucket codeatlas-123456789012-us-east-1 --key backups/$TODAY/$name --body $BACKUP/$name --if-none-match *" "$STUB_LOG"
+		grep -qxF "aws s3api put-object --region us-east-2 --bucket codeatlas-123456789012-us-east-2 --key backups/$TODAY/$name --body $BACKUP/$name --if-none-match *" "$STUB_LOG"
 	done
-	grep -qxF 'aws cloudwatch put-metric-data --region us-east-1 --namespace CodeAtlas --metric-name BackupCompleted --value 1 --unit Count --dimensions Environment=pilot' "$STUB_LOG"
+	grep -qxF 'aws cloudwatch put-metric-data --region us-east-2 --namespace CodeAtlas --metric-name BackupCompleted --value 1 --unit Count --dimensions Environment=pilot' "$STUB_LOG"
 
 	# The staged files are gone, and the run is in its log file.
 	[ -z "$(ls -A "$BACKUP")" ]
@@ -283,8 +283,8 @@ restore() {
 	restore "$DATE"
 	[ "$status" -eq 0 ]
 
-	grep -qxF "aws s3 cp --region us-east-1 --only-show-errors s3://codeatlas-123456789012-us-east-1/backups/$DATE/manifest.json $BACKUP/manifest.json" "$STUB_LOG"
-	grep -qxF "aws s3 cp --region us-east-1 --only-show-errors s3://codeatlas-123456789012-us-east-1/backups/$DATE/codeatlas.dump $BACKUP/codeatlas.dump" "$STUB_LOG"
+	grep -qxF "aws s3 cp --region us-east-2 --only-show-errors s3://codeatlas-123456789012-us-east-2/backups/$DATE/manifest.json $BACKUP/manifest.json" "$STUB_LOG"
+	grep -qxF "aws s3 cp --region us-east-2 --only-show-errors s3://codeatlas-123456789012-us-east-2/backups/$DATE/codeatlas.dump $BACKUP/codeatlas.dump" "$STUB_LOG"
 	grep -qxF 'codeatlas-compose stop api worker' "$STUB_LOG"
 	grep -qxF 'pg_restore --clean --if-exists --no-owner --exit-on-error -U codeatlas -d codeatlas /backup/codeatlas.dump' "$STUB_LOG"
 	grep -qxF "codeatlas-compose run --rm -T -v $BACKUP:/backup:ro api python -m codeatlas.ops verify-restore /backup/manifest.json" "$STUB_LOG"
@@ -354,7 +354,7 @@ check_certificate() {
 	[ "$status" -eq 0 ]
 	grep -qxF 'openssl s_client -servername pilot.example.dev -connect 127.0.0.1:443' "$STUB_LOG"
 	grep -qxF 'openssl x509 -noout -enddate -dateopt iso_8601' "$STUB_LOG"
-	grep -qxF 'aws cloudwatch put-metric-data --region us-east-1 --namespace CodeAtlas --metric-name CertificateDaysLeft --value 30 --unit Count --dimensions Environment=pilot' "$STUB_LOG"
+	grep -qxF 'aws cloudwatch put-metric-data --region us-east-2 --namespace CodeAtlas --metric-name CertificateDaysLeft --value 30 --unit Count --dimensions Environment=pilot' "$STUB_LOG"
 	grep -q 'check-certificate: 30 days left' "$CODEATLAS_LOG_DIR/check-certificate.log"
 }
 

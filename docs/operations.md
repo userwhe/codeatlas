@@ -14,11 +14,11 @@ Read each Terraform plan before applying it, and each command before running it.
 ## Conventions
 
 - Commands run from the repository root unless they are marked as running on the host.
-- AWS credentials come from IAM Identity Center. Before a session:
+- AWS credentials are short-lived, from your console sign-in. Before a session:
 
   ```bash
-  aws sso login --profile codeatlas
-  export AWS_PROFILE=codeatlas AWS_REGION=us-east-1
+  aws login --profile codeatlas
+  export AWS_PROFILE=codeatlas AWS_REGION=us-east-2
   ```
 
 - Placeholders: `example.dev` is your domain, `codeatlas.example.dev` the pilot's name, and
@@ -59,12 +59,23 @@ is protected from `terraform destroy`.
 
 ### AWS access
 
-In the AWS account, enable IAM Identity Center, create your user, and assign it an administrator
-permission set. Then configure a profile for `us-east-1`:
+Sign the AWS CLI (2.32 or later) in with the console sign-in you already use, under a profile for
+`us-east-2`:
 
 ```bash
-aws configure sso --profile codeatlas
+aws login --profile codeatlas
+aws configure set region us-east-2 --profile codeatlas
 ```
+
+The pilot runs in `us-east-2` (research R20). If your account belongs to an organization whose
+policies allow only some regions, check that `us-east-2` is one of them: `aws ec2
+describe-availability-zones --region us-east-2` must list its zones. Two parts of the design depend
+on the account:
+
+- The Route 53 health checks and their two alarms exist only when the pilot runs in `us-east-1`,
+  the only region with health check metrics (["Monitoring"](#monitoring)).
+- The Release workflow's role needs an account that may create an OIDC provider; without it,
+  release by hand (["Setting up releases"](#setting-up-releases)).
 
 ### The state bucket
 
@@ -73,7 +84,8 @@ Terraform keeps its state in a versioned bucket, created once:
 ```bash
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 STATE_BUCKET="codeatlas-tfstate-$ACCOUNT_ID"
-aws s3api create-bucket --bucket "$STATE_BUCKET" --region us-east-1
+aws s3api create-bucket --bucket "$STATE_BUCKET" --region us-east-2 \
+  --create-bucket-configuration LocationConstraint=us-east-2
 aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
   --versioning-configuration Status=Enabled
 aws s3api put-public-access-block --bucket "$STATE_BUCKET" \
@@ -89,14 +101,13 @@ aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" \
 `infra/shared/` holds the image repositories, the bucket for release bundles and backups, the hosted
 zone, the alert topic `codeatlas-alerts` with an email subscription, and the monthly budget
 `codeatlas-monthly`. Copy the examples and fill them in: the account ID in `backend.hcl`; the
-domain, the alert email address, the monthly budget, and the repository's OIDC subject prefix in
-`shared.tfvars` (the release workflow uses the prefix later, in ["Setting up
-releases"](#setting-up-releases), but the variable is required now).
+domain, the alert email address, and the monthly budget in `shared.tfvars`. Leave
+`enable_release_role` off; ["Setting up releases"](#setting-up-releases) turns it on where the
+account allows.
 
 ```bash
 cp infra/shared/backend.hcl.example infra/shared/backend.hcl
 cp infra/shared/shared.tfvars.example infra/shared/shared.tfvars
-gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix   # the OIDC subject prefix
 
 terraform -chdir=infra/shared init -backend-config=backend.hcl
 terraform -chdir=infra/shared plan -var-file=shared.tfvars -out=plan.out
@@ -198,11 +209,17 @@ the pilot users (["Managing pilot users"](#managing-pilot-users)), starting with
 
 ### Setting up releases
 
-Once the pilot runs, releases go through the `Release` workflow (["Releases"](#releases)). It needs
-the release role from `infra/shared`, the GitHub environment `pilot`, and six repository variables.
-GitHub holds no AWS key: the workflow's `release` job gets short-lived credentials through GitHub's
-OIDC provider for the role `codeatlas-release`, which trusts only this repository's jobs in the
-`pilot` environment.
+Once the pilot runs, releases can go through the `Release` workflow (["Releases"](#releases)). It
+needs the release role from `infra/shared`, the GitHub environment `pilot`, and six repository
+variables. GitHub holds no AWS key: the workflow's `release` job gets short-lived credentials
+through GitHub's OIDC provider for the role `codeatlas-release`, which trusts only this
+repository's jobs in the `pilot` environment.
+
+The account must allow creating an OIDC provider. If an organization policy forbids it (for
+example, `aws iam list-open-id-connect-providers` is refused by a service control policy), skip
+this section and release by hand (["Releasing by hand"](#releasing-by-hand)): the same steps with
+your own short-lived credentials. The workflow skips every job while the repository variable
+`RELEASE_ROLE_ARN` is unset.
 
 1. Read the repository's OIDC subject prefix:
 
@@ -211,10 +228,10 @@ OIDC provider for the role `codeatlas-release`, which trusts only this repositor
    ```
 
    The repository uses GitHub's immutable subject format, so the prefix has the form
-   `repo:<owner>@<owner ID>/<repo>@<repo ID>`. Set `github_oidc_subject_prefix` to it in
-   `infra/shared/shared.tfvars`. Transferring or recreating the repository changes the IDs, and so
-   the prefix; a wrong prefix makes the release job fail with "Not authorized to perform
-   sts:AssumeRoleWithWebIdentity".
+   `repo:<owner>@<owner ID>/<repo>@<repo ID>`. In `infra/shared/shared.tfvars`, set
+   `enable_release_role = true` and `github_oidc_subject_prefix` to the prefix. Transferring or
+   recreating the repository changes the IDs, and so the prefix; a wrong prefix makes the release
+   job fail with "Not authorized to perform sts:AssumeRoleWithWebIdentity".
 2. Apply `infra/shared` as in ["Shared resources"](#shared-resources). The plan adds the OIDC
    provider for `token.actions.githubusercontent.com`, the role `codeatlas-release`, and its policy:
    pushing to the two image repositories, uploading under `releases/` in the bucket, Run Command on
@@ -223,7 +240,7 @@ OIDC provider for the role `codeatlas-release`, which trusts only this repositor
    before planning:
 
    ```bash
-   terraform -chdir=infra/shared import -var-file=shared.tfvars aws_iam_openid_connect_provider.github \
+   terraform -chdir=infra/shared import -var-file=shared.tfvars 'aws_iam_openid_connect_provider.github[0]' \
      "arn:aws:iam::<account ID>:oidc-provider/token.actions.githubusercontent.com"
    ```
 
@@ -246,7 +263,7 @@ OIDC provider for the role `codeatlas-release`, which trusts only this repositor
    settings, not secrets:
 
    ```bash
-   gh variable set AWS_REGION --body us-east-1
+   gh variable set AWS_REGION --body us-east-2
    gh variable set RELEASE_ROLE_ARN --body "$(terraform -chdir=infra/shared output -raw release_role_arn)"
    gh variable set RELEASE_BUCKET --body "$(terraform -chdir=infra/shared output -raw bucket)"
    gh variable set ALERT_TOPIC_ARN --body "$(terraform -chdir=infra/shared output -raw alert_topic_arn)"
@@ -265,7 +282,7 @@ OIDC provider for the role `codeatlas-release`, which trusts only this repositor
 
 ## Releases
 
-Every push to `main` whose CI run succeeds starts the `Release` workflow
+Once releases are set up, every push to `main` whose CI run succeeds starts the `Release` workflow
 (`.github/workflows/release.yml`) for that commit. Nothing is written to AWS until you approve it:
 
 1. `build` builds both images for the commit on Arm runners, without cloud credentials, and keeps
@@ -629,9 +646,12 @@ connections from `api` and `worker` fail.
 ## Monitoring
 
 The pilot reports to CloudWatch (research R10): the services' logs, the host scripts' log files
-(shipped by the CloudWatch agent), the worker's metrics, the agent's memory and disk metrics, and
-two Route 53 health checks. The drill and the load test have logs and agent metrics, but no alarms,
-dashboard, or health checks.
+(shipped by the CloudWatch agent), the worker's metrics, the agent's memory and disk metrics, and,
+when the pilot runs in `us-east-1`, two Route 53 health checks. Route 53 publishes health check
+metrics only in `us-east-1`, and an alarm can notify only a topic in its own region, so in
+`us-east-2` the pilot has eight alarms and no outside check; `host-status-check` and `worker-down`
+still report a lost host (research R20). The drill and the load test have logs and agent metrics,
+but no alarms, dashboard, or health checks.
 
 ### Alerts
 
@@ -640,8 +660,8 @@ separately (["Confirming the alert subscription"](#confirming-the-alert-subscrip
 
 | Alarm | Fires when | Look first at (on the host unless noted) |
 | --- | --- | --- |
-| `site-down` | `https://codeatlas.example.dev/readyz` has failed for 5 minutes: the API, its database, or Caddy is down | `sudo codeatlas-compose ps`, then `sudo codeatlas-compose logs --tail 100 api db caddy` |
-| `web-down` | `https://codeatlas.example.dev/` has failed for 5 minutes | `sudo codeatlas-compose ps`, then the `web` and `caddy` logs |
+| `site-down` (`us-east-1` only) | `https://codeatlas.example.dev/readyz` has failed for 5 minutes: the API, its database, or Caddy is down | `sudo codeatlas-compose ps`, then `sudo codeatlas-compose logs --tail 100 api db caddy` |
+| `web-down` (`us-east-1` only) | `https://codeatlas.example.dev/` has failed for 5 minutes | `sudo codeatlas-compose ps`, then the `web` and `caddy` logs |
 | `worker-down` | The worker has sent no heartbeat for 5 minutes | `sudo codeatlas-compose logs --tail 100 worker`; `sudo codeatlas-compose up -d worker` |
 | `jobs-waiting` | A job that could run has waited 30 minutes | The dashboard's queue graph and the worker's log: a stuck job, or more work than one worker handles |
 | `jobs-failing` | 3 or more jobs failed in an hour (retries used up, timeouts, internal errors) | The saved query "Failed jobs", then the job's lines; the dashboard's provider errors |
@@ -661,11 +681,12 @@ sudo resize2fs "$(findmnt -n -o SOURCE /var/lib/codeatlas)"
 ### The dashboard
 
 The CloudWatch dashboard `codeatlas-pilot` (CloudWatch console, Dashboards) shows the last 7 days:
-the alarms' states; the health checks; the worker's heartbeat, queued jobs, and oldest runnable job;
-CPU, memory, and both volumes; failed jobs, backups, status checks, and the certificate's days left;
-and, from the logs, requests and p95 latency by route group (searches, views, submissions, other),
-5xx responses, jobs by kind and outcome (`retry_wait` counts the retries), and model provider
-errors by provider. The log widgets run Logs Insights queries whenever the dashboard loads.
+the alarms' states; the health checks (in `us-east-1` only); the worker's heartbeat, queued jobs,
+and oldest runnable job; CPU, memory, and both volumes; failed jobs, backups, status checks, and the
+certificate's days left; and, from the logs, requests and p95 latency by route group (searches,
+views, submissions, other), 5xx responses, jobs by kind and outcome (`retry_wait` counts the
+retries), and model provider errors by provider. The log widgets run Logs Insights queries whenever
+the dashboard loads.
 
 ### Logs
 
@@ -713,7 +734,7 @@ and SHA-256, and the row counts), uploads both files, and publishes the `BackupC
 Any failure stops it before the metric, and `backup-missing` fires within about an hour once 26
 hours have passed without a successful backup.
 
-- **Where**: `s3://codeatlas-<account ID>-us-east-1/backups/<UTC date>/codeatlas.dump` and
+- **Where**: `s3://codeatlas-<account ID>-us-east-2/backups/<UTC date>/codeatlas.dump` and
   `manifest.json`, encrypted by S3. They expire 7 days after they are taken (rounded up to the next
   midnight UTC); deleted data can therefore remain in a backup for up to 10 days after deletion,
   which the external processing disclosure states.
@@ -893,7 +914,8 @@ instance failed, replace the host instead (above); the data is intact.
 The fault tests (SC-007) prove that each alert arrives within 10 minutes (the backup alert within an
 hour after the 26-hour mark) and that a recovery email follows. They disturb the pilot, so run them
 at a quiet time, and record when each fault starts and when each email arrives in the quickstart's
-validation record. On the host:
+validation record. Outside `us-east-1` there are no health checks, so skip the first two faults.
+On the host:
 
 | Fault | Start it | Expected alert | End it |
 | --- | --- | --- | --- |

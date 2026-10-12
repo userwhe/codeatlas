@@ -1,7 +1,7 @@
 variable "region" {
   description = "AWS region of every CodeAtlas resource."
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "domain" {
@@ -14,12 +14,19 @@ variable "domain" {
   }
 }
 
+variable "enable_release_role" {
+  description = "Create GitHub's OIDC provider and the release role for the Release workflow. The account's policies must allow creating an OIDC provider; without the role, releases go by hand (docs/operations.md, \"Releasing by hand\")."
+  type        = bool
+  default     = false
+}
+
 variable "github_oidc_subject_prefix" {
-  description = "The repository's OIDC subject prefix, read with `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`, for example repo:<owner>@<owner ID>/<repo>@<repo ID>. The release role trusts <prefix>:environment:pilot."
+  description = "The repository's OIDC subject prefix, read with `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`, for example repo:<owner>@<owner ID>/<repo>@<repo ID>. The release role trusts <prefix>:environment:pilot. Required when enable_release_role is true."
   type        = string
+  default     = null
 
   validation {
-    condition     = startswith(var.github_oidc_subject_prefix, "repo:")
+    condition     = var.github_oidc_subject_prefix == null ? true : startswith(var.github_oidc_subject_prefix, "repo:")
     error_message = "github_oidc_subject_prefix must start with \"repo:\"."
   }
 }

@@ -64,9 +64,9 @@ setup_host() {
 write_environment() {
 	cat >"$CODEATLAS_ROOT/environment" <<EOF
 ENVIRONMENT=$1
-AWS_REGION=us-east-1
-REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com
-BUCKET=codeatlas-123456789012-us-east-1
+AWS_REGION=us-east-2
+REGISTRY=123456789012.dkr.ecr.us-east-2.amazonaws.com
+BUCKET=codeatlas-123456789012-us-east-2
 CODEATLAS_HOSTNAME=$1.example.dev
 PARAMETERS_PATH=${2:-/codeatlas/$1}
 EOF

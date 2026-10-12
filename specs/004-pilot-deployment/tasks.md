@@ -67,10 +67,11 @@ leak into later tests (research R18).
   research R8 and quickstart.md "Prerequisites":
   - Install Terraform 1.11 or later, the AWS CLI v2, the Session Manager plugin, `shellcheck`, and
     `bats`.
-  - In the AWS account, enable IAM Identity Center, create the developer's user with an
-    administrator permission set, and run `aws configure sso` for `us-east-1`.
-  - Create the Terraform state bucket `codeatlas-tfstate-<account ID>` with the AWS CLI:
-    versioning on, all public access blocked, default SSE-S3 encryption.
+  - Sign the AWS CLI in to the AWS account with `aws login` under a `codeatlas` profile for
+    `us-east-2` (research R20).
+  - Create the Terraform state bucket `codeatlas-tfstate-<account ID>` in `us-east-2` with the AWS
+    CLI (`--create-bucket-configuration LocationConstraint=us-east-2`): versioning on, all public
+    access blocked, default SSE-S3 encryption.
   - Register the domain at any registrar (its name servers are changed in T038).
 
 ---
@@ -738,7 +739,7 @@ latest backup shows a pilot user's data within 2 hours.
   apply the pilot stack (the plan replaces the host, so the new bootstrap installs the agent and
   timers), release the running commit to the new host, and then:
   - run the quickstart's fault tests and alarm notification checks (SC-007) and record each
-    alert's delay;
+    alert's delay (the edge proxy and web app faults only in `us-east-1`, research R20);
   - run the recovery exercise (SC-008) and record its duration; and
   - run quickstart scenarios 8, 10, 11, and 17 on the drill or pilot as written, and record them.
 
@@ -825,20 +826,23 @@ minutes; dispatch a release with `expect_version=wrong` and see the previous com
     `get-command-invocation` until it ends (at most 20 minutes); write the outcome and the longest
     outage to the summary; on any failure publish the commit and exit status to
     `ALERT_TOPIC_ARN`.
-- [ ] T062 [US3] Developer action: read the OIDC subject prefix and add it to `shared.tfvars`;
-  apply the OIDC changes to `infra/shared`; create the GitHub environment `pilot` with the
-  developer as required reviewer and only `main` allowed; set the repository variables of T061.
+- [ ] T062 [US3] Developer action, only in an account that allows OIDC providers (research R20;
+  otherwise skip it and release by hand): set `enable_release_role = true` and the OIDC subject
+  prefix in `shared.tfvars`; apply the OIDC changes to `infra/shared`; create the GitHub
+  environment `pilot` with the developer as required reviewer and only `main` allowed; set the
+  repository variables of T061.
 - [X] T063 [US3] Extend docs/operations.md: setting up releases (reading the OIDC subject prefix,
   applying `infra/shared`, creating the `pilot` environment, and the repository variables); the
   release flow and the summary; rejecting a stale
   run that waits for approval (it blocks newer runs); the expand-then-contract rule for
   migrations; rolling back by hand (`release.sh <previous sha>`); the forced-rollback rehearsal;
   and replacing credentials with `release.sh --refresh-config`.
-- [ ] T064 [US3] Developer action: validate User Story 3 with quickstart scenarios 12 to 16 and
-  18; record five releases' approval-to-serving times and longest outages (SC-009) and the forced
-  rollback's recovery time (SC-010). If one of the releases includes a migration, rehearse the
-  rollback on it and record that the previous version works with the new schema (US3-4);
-  otherwise record that this check waits for the first release with a migration.
+- [ ] T064 [US3] Developer action: validate User Story 3 with quickstart scenarios 12 to 16 and 18
+  (with releases by hand where T062 was skipped); record five releases' approval-to-serving times
+  and longest outages (SC-009) and the forced rollback's recovery time (SC-010). If one of the
+  releases includes a migration, rehearse the rollback on it and record that the previous version
+  works with the new schema (US3-4); otherwise record that this check waits for the first release
+  with a migration.
 
 **Checkpoint**: Releases are repeatable, approved, checked, and reversible.
 
@@ -972,6 +976,17 @@ of the same form; every number in both reports has its denominator, commit, and 
   `HealthCheckPercentageHealthy` for the period (SC-001); after the first full month, record the
   hosting cost from Cost Explorer (SC-002); record the highest daily model spend in that month
   (SC-003).
+- [X] T078 Run the pilot in `us-east-2` within the account's organization policies (research R20;
+  plan.md "Region and account limits"):
+  - Default `region` to `us-east-2` and `availability_zone` to `us-east-2a`; use `us-east-2` in
+    both `backend.hcl.example` files, `deploy/put-secrets.sh`'s fallback, the bats fixtures, and
+    CI's placeholders.
+  - In infra/stack/monitoring.tf, create the health checks, `site-down`, `web-down`, and the
+    health check graph only in `us-east-1`, instead of requiring `us-east-1`.
+  - Add `enable_release_role` (default off) to infra/shared, creating the OIDC provider and the
+    release role only with it; `github_oidc_subject_prefix` is required only then.
+  - Skip every job of `.github/workflows/release.yml` while `RELEASE_ROLE_ARN` is unset.
+  - Update docs/operations.md, README.md, ADRs 0010 to 0012, and the spec's assumptions.
 
 ---
 

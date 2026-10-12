@@ -1,11 +1,18 @@
-# Credentials for the release workflow (specs/004-pilot-deployment research R7; ADR 0011): GitHub's
-# OIDC provider and the only release role. No AWS key is stored in GitHub (FR-024).
+# Credentials for the release workflow (specs/004-pilot-deployment research R7 and R20; ADR 0011):
+# GitHub's OIDC provider and the only release role. No AWS key is stored in GitHub (FR-024). Created
+# only with enable_release_role, since some accounts' policies forbid OIDC providers.
+
+locals {
+  release_role = var.enable_release_role ? 1 : 0
+}
 
 data "aws_partition" "current" {}
 
 # An account has at most one provider per URL; if it already has GitHub's, import it instead
 # (docs/operations.md, "Setting up releases").
 resource "aws_iam_openid_connect_provider" "github" {
+  count = local.release_role
+
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
 }
@@ -14,12 +21,14 @@ resource "aws_iam_openid_connect_provider" "github" {
 # developer's approval and allows only `main`. The subject uses GitHub's immutable format, so the
 # prefix (with the owner and repository IDs) is a variable.
 data "aws_iam_policy_document" "release_trust" {
+  count = local.release_role
+
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github.arn]
+      identifiers = [aws_iam_openid_connect_provider.github[0].arn]
     }
 
     condition {
@@ -37,12 +46,23 @@ data "aws_iam_policy_document" "release_trust" {
 }
 
 resource "aws_iam_role" "release" {
+  count = local.release_role
+
   name               = "codeatlas-release"
   description        = "The release workflow's job in the pilot environment, after approval"
-  assume_role_policy = data.aws_iam_policy_document.release_trust.json
+  assume_role_policy = data.aws_iam_policy_document.release_trust[0].json
+
+  lifecycle {
+    precondition {
+      condition     = var.github_oidc_subject_prefix != null
+      error_message = "enable_release_role needs github_oidc_subject_prefix."
+    }
+  }
 }
 
 data "aws_iam_policy_document" "release" {
+  count = local.release_role
+
   statement {
     sid       = "RegistryLogin"
     actions   = ["ecr:GetAuthorizationToken"]
@@ -108,7 +128,9 @@ data "aws_iam_policy_document" "release" {
 }
 
 resource "aws_iam_role_policy" "release" {
+  count = local.release_role
+
   name   = "codeatlas-release"
-  role   = aws_iam_role.release.id
-  policy = data.aws_iam_policy_document.release.json
+  role   = aws_iam_role.release[0].id
+  policy = data.aws_iam_policy_document.release[0].json
 }

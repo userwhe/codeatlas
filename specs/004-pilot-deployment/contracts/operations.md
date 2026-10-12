@@ -17,18 +17,18 @@ data volume is protected by `prevent_destroy`. Shared resources come from `infra
 
 ## Terraform
 
-`infra/shared/` variables: `region` (default `us-east-1`), `domain` (the hosted zone),
-`github_oidc_subject_prefix` (the repository's OIDC subject prefix, read with
-`gh api repos/<owner>/<repo>/actions/oidc/customization/sub`, for example
-`repo:<owner>@<owner ID>/<repo>@<repo ID>`), `alert_email`, `monthly_budget_usd` (default 40).
-Outputs: `ecr_repositories`, `bucket`, `alert_topic_arn`, `release_role_arn`, `zone_id`,
-`name_servers`.
+`infra/shared/` variables: `region` (default `us-east-2`), `domain` (the hosted zone),
+`enable_release_role` (default `false`; the OIDC provider and the release role, research R20),
+`github_oidc_subject_prefix` (required only with `enable_release_role`: the repository's OIDC
+subject prefix, read with `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`, for
+example `repo:<owner>@<owner ID>/<repo>@<repo ID>`), `alert_email`, `monthly_budget_usd` (default
+40). Outputs: `ecr_repositories`, `bucket`, `alert_topic_arn`, `release_role_arn` (null without
+`enable_release_role`), `zone_id`, `name_servers`.
 
 `infra/stack/` variables: `environment` (`pilot`, `drill`, or `loadtest`), `hostname`, `domain`,
-`availability_zone` (default `us-east-1a`), `instance_type` (default `t4g.medium`),
-`data_volume_gib` (default 20), `root_volume_gib` (default 20), `parameters_path` (default
-`/codeatlas/<environment>`).
-Outputs: `instance_id`, `public_ip`, `url`.
+`availability_zone` (default `us-east-2a`; the region is derived from it), `instance_type` (default
+`t4g.medium`), `data_volume_gib` (default 20), `root_volume_gib` (default 20), `parameters_path`
+(default `/codeatlas/<environment>`). Outputs: `instance_id`, `public_ip`, `url`.
 
 Both modules require Terraform 1.11 or later and read their state location from
 `-backend-config=backend.hcl`. Workflow: `terraform plan -var-file=<env>.tfvars -out=plan.out`,
@@ -106,6 +106,7 @@ paths.
 
 | Aspect | Contract |
 | --- | --- |
+| Setup | Every job is skipped while the repository variable `RELEASE_ROLE_ARN` is unset; an account that forbids OIDC providers releases by hand instead (research R20) |
 | Triggers | `workflow_run` after CI completes; `workflow_dispatch` with inputs `commit` (a `main` commit; default the head) and `expect_version` (default empty) |
 | Gate | The `workflow_run` trigger is filtered to `branches: [main]`. Every job requires a dispatch, or a CI run that concluded `success` for a `push` to this repository's `main` (`event`, `head_repository`, and `head_branch` checked); jobs check out `head_sha`. A dispatched commit must be an ancestor of `origin/main` with a successful CI run |
 | Jobs | `build` (no cloud credentials: image tarballs as artifacts kept 3 days), `summary` (release summary in the run; `actions: read`), `release` (on `ubuntu-24.04`, environment `pilot`; after approval: push images, upload bundle, Run Command) |
@@ -143,10 +144,11 @@ lines `method`, `route`, `status`, `duration_ms`; on `job_finished` lines `kind`
 
 ## Health checks and alarms (pilot)
 
-Route 53 HTTPS health checks of `/readyz` and `/`, every 30 seconds.
+Route 53 HTTPS health checks of `/readyz` and `/`, every 30 seconds, only when the pilot runs in
+`us-east-1`, the only region with their metrics (research R20).
 
-Alarms: `site-down`, `web-down`, `worker-down`, `jobs-waiting`, `jobs-failing`, `root-disk-full`,
-`data-disk-full`, `backup-missing`, `certificate-expiring`, and `host-status-check`, with
-conditions in research R10. Each notifies the SNS topic `codeatlas-alerts` when it fires and when
-it recovers. The budget `codeatlas-monthly` emails once at 80% and 100% of actual spend and at 80%
-of forecast spend (forecasts start after about five weeks of data).
+Alarms: `site-down` and `web-down` (with the health checks only), `worker-down`, `jobs-waiting`,
+`jobs-failing`, `root-disk-full`, `data-disk-full`, `backup-missing`, `certificate-expiring`, and
+`host-status-check`, with conditions in research R10. Each notifies the SNS topic `codeatlas-alerts`
+when it fires and when it recovers. The budget `codeatlas-monthly` emails once at 80% and 100% of
+actual spend and at 80% of forecast spend (forecasts start after about five weeks of data).

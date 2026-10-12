@@ -37,13 +37,16 @@ defaults:
 
 jobs:
   build:
-    # A dispatch, or a successful CI run of a push to this repository's main.
+    # A dispatch, or a successful CI run of a push to this repository's main. Every job is skipped
+    # until releases are set up (docs/operations.md, "Setting up releases"): an account that cannot
+    # have the release role releases by hand and leaves RELEASE_ROLE_ARN unset.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      vars.RELEASE_ROLE_ARN != '' &&
+      (github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository)
+      github.event.workflow_run.head_repository.full_name == github.repository))
     name: build (${{ matrix.image }})
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -91,11 +94,12 @@ jobs:
 
   summary:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      vars.RELEASE_ROLE_ARN != '' &&
+      (github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository)
+      github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -185,11 +189,12 @@ jobs:
 
   release:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      vars.RELEASE_ROLE_ARN != '' &&
+      (github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository)
+      github.event.workflow_run.head_repository.full_name == github.repository))
     needs: [build, summary]
     # Pinned: loading and pushing the Arm image archives is proven on this image's Docker.
     runs-on: ubuntu-24.04

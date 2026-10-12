@@ -2,7 +2,8 @@
 
 - **Status**: Accepted
 - **Date**: 2026-10-07 (revised 2026-10-08: build before approval without cloud credentials, one
-  release role, immutable OIDC subject, and a push-only gate)
+  release role, immutable OIDC subject, and a push-only gate; revised 2026-10-09: the release role
+  is optional)
 - **Scope**: `specs/004-pilot-deployment`
 
 ## Context
@@ -35,7 +36,7 @@ Option 1:
   OIDC provider and release role, hosted zone, budget) and `infra/stack/` (one environment:
   `pilot`, `drill`, or `loadtest`). State is in S3 with Terraform's native lock file (Terraform
   1.11 or later). The developer runs `plan`, reviews it, and applies the saved plan, with
-  short-lived IAM Identity Center credentials. Secret values never enter Terraform.
+  short-lived credentials from `aws login`. Secret values never enter Terraform.
 - **Releases**: `release.yml` runs only for a successful CI run of a push to this repository's
   `main`, or for a dispatched commit that is an ancestor of `main` with successful CI. It builds
   both images tagged with the commit and keeps them as workflow artifacts, writes a release summary
@@ -49,6 +50,10 @@ Option 1:
   prefix is a Terraform variable read from the repository's OIDC settings. It can push to the two
   image repositories, upload the release bundle, run the release command on the pilot instance,
   read the command's results, and publish alerts.
+- **Accounts without OIDC**: some organization policies forbid creating an OIDC provider. The
+  provider and the role are therefore created only with `enable_release_role`. Without them, the
+  developer runs the same release steps by hand with short-lived `aws login` credentials, still
+  storing no key, and the workflow skips its jobs until `RELEASE_ROLE_ARN` is set.
 
 ## Trade-off
 
@@ -67,9 +72,11 @@ Option 1:
   - The developer applies infrastructure from their machine rather than from CI.
   - The trust policy depends on the repository's numeric owner and repository IDs; transferring or
     recreating the repository changes the prefix.
+  - In an account without OIDC, the summary, the approval, and the `main`-only rule are the
+    developer's own steps, not the workflow's.
 - **Revisit when**:
   - more than one person releases or changes infrastructure: plan and apply in CI with reviews;
   - releases become frequent enough that approval slows the work; or
   - the deployment moves to ECS (ADR 0010), which replaces Run Command with service updates.
 
-Details: `specs/004-pilot-deployment/research.md` R5 to R8.
+Details: `specs/004-pilot-deployment/research.md` R5 to R8, and R20.

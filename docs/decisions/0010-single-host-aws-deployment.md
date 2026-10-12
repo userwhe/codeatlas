@@ -1,7 +1,7 @@
 # ADR 0010: The pilot runs on one EC2 host with Docker Compose
 
 - **Status**: Accepted
-- **Date**: 2026-10-07
+- **Date**: 2026-10-07 (revised 2026-10-09: `us-east-2`, and the account's limits)
 - **Scope**: `specs/004-pilot-deployment`
 
 ## Context
@@ -23,8 +23,9 @@ providers.
 
 Option 2:
 
-- One `t4g.medium` (Arm, 2 vCPUs, 4 GiB) in `us-east-1`, Ubuntu 24.04, with an Elastic IP, in the
-  default VPC.
+- One `t4g.medium` (Arm, 2 vCPUs, 4 GiB) in `us-east-2`, Ubuntu 24.04, with an Elastic IP, in the
+  default VPC. The account's organization policies allow regional services only in `us-east-2`;
+  prices there equal `us-east-1`'s.
 - Caddy terminates TLS with Let's Encrypt and routes API paths to the API and the rest to the web
   app. Only ports 80 and 443 are open; administration uses SSM Session Manager.
 - PostgreSQL runs in a container, with its data on a separate encrypted EBS volume that survives
@@ -50,6 +51,8 @@ Option 2:
     is not fixed before the next).
   - The developer patches the host (unattended security upgrades, rebooting at 04:30 UTC when an
     update requires it).
+  - Outside `us-east-1` there are no Route 53 health checks (ADR 0012), and where the account
+    forbids OIDC providers, releases run by hand (ADR 0011).
 - **Revisit when**:
   - the pilot needs availability beyond one host, or releases must not interrupt service: move the
     containers to ECS on Fargate behind a load balancer;
@@ -58,4 +61,4 @@ Option 2:
   - the API and the worker need to scale separately; or
   - the load test shows a `t4g.small` is enough, or a `t4g.medium` is not.
 
-Details: `specs/004-pilot-deployment/research.md` R1 to R3, R12, and R19.
+Details: `specs/004-pilot-deployment/research.md` R1 to R3, R12, R19, and R20.

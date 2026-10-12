@@ -1,6 +1,7 @@
 # Implementation Plan: Pilot Deployment
 
-**Branch**: `004-pilot-deployment` | **Date**: 2026-10-07 | **Spec**: [spec.md](spec.md)
+**Branch**: `004-pilot-deployment` | **Date**: 2026-10-07; revised 2026-10-09 (region and account
+limits, research R20) | **Spec**: [spec.md](spec.md)
 
 **Input**: Feature specification from `specs/004-pilot-deployment/spec.md`
 
@@ -13,7 +14,7 @@ hardware and an evaluation with the real model providers, including a public rev
 
 Technical approach:
 
-- **Hosting** (ADR 0010): one `t4g.medium` EC2 instance in `us-east-1` runs the existing Compose
+- **Hosting** (ADR 0010): one `t4g.medium` EC2 instance in `us-east-2` runs the existing Compose
   services behind Caddy, which provides HTTPS with Let's Encrypt. PostgreSQL keeps its data on a
   separate EBS volume. The host has no SSH; administration uses SSM. About $34 a month.
 - **Infrastructure and releases** (ADR 0011): Terraform defines a shared module and one stack
@@ -21,10 +22,14 @@ Technical approach:
   repository's `main`, GitHub Actions builds Arm images as workflow artifacts, posts a release
   summary, and waits for the developer's approval. Only then does it push the images to ECR and
   run a host script that migrates, starts the new images, checks them, and rolls back on failure.
-  One OIDC role, trusted only for the `pilot` environment, replaces stored AWS keys.
+  One OIDC role, trusted only for the `pilot` environment, replaces stored AWS keys. Where the
+  account forbids OIDC providers, the role is off and the developer releases by hand with
+  short-lived credentials (research R20).
 - **Monitoring** (ADR 0012): container logs go to CloudWatch through Docker's `awslogs` driver.
   Nine custom metrics and two Route 53 health checks (`/readyz` and `/`) feed ten alarms, emailed
   through SNS with recovery notices. The dashboard computes everything else from the JSON logs.
+  Route 53 publishes health check metrics only in `us-east-1`, so the health checks and their two
+  alarms exist only there; the pilot in `us-east-2` has eight alarms (research R20).
 - **Backups**: a nightly `pg_dump` to S3 with row counts taken in the dump's own snapshot, kept 7
   days and never overwritable by the host; a recovery exercise rebuilds a drill environment and
   restores into it.
@@ -72,7 +77,7 @@ audit actions. S3 holds nightly dumps (7 days) and release bundles.
 - Operational validation by the developer: fault tests, the recovery exercise, releases and a
   forced rollback, a port scan, and a credential scan (quickstart).
 
-**Target Platform**: Linux containers on one `arm64` EC2 instance (Ubuntu 24.04) in `us-east-1`;
+**Target Platform**: Linux containers on one `arm64` EC2 instance (Ubuntu 24.04) in `us-east-2`;
 current desktop browsers.
 
 **Project Type**: Web application (frontend, HTTP API, background worker) plus infrastructure code.
@@ -94,6 +99,8 @@ current desktop browsers.
   preview: `terraform plan`, the release summary, or a drafted command. A release writes nothing
   to AWS before its approval.
 - Logs and backups kept 7 days; at most 24 hours of data loss.
+- The account's organization policies allow regional services only in `us-east-2` and forbid OIDC
+  providers (research R20).
 
 **Scale/Scope**:
 
@@ -112,7 +119,7 @@ current desktop browsers.
 | English only | All artifacts, ADRs, code, and commit messages in English | Pass | Pass: every artifact is in English |
 | Simplicity | Every new tool, service, table, and endpoint serves a current requirement | Pass, with the design document's ECS, RDS, SQS, staging, and tracing flagged for review | Pass: one host instead of managed services; no staging, SQS, tracing, or operations UI; nine custom metrics, everything else from log queries; an in-process rate limiter instead of a proxy module or WAF. Each tool maps to a requirement below, and each deferral has a revisit condition (research deviations table) |
 | Tested core | Core logic has automated tests; a story is done only when its tests pass | Pass | Pass: R18 covers the access list, limits, rate limiter, settings validation, readiness, metrics, and restore verification; `bats` tests cover the release script's state transitions and the configuration check; the rest of the operational behavior is validated by recorded exercises (quickstart) |
-| Recorded decisions | Costly-to-reverse choices have ADRs | Pending | Pass: ADR 0010 (hosting), ADR 0011 (Terraform and approved releases), ADR 0012 (monitoring), ADR 0013 (access list and limits, with the schema change); ADRs 0002 and 0003 record that they were revisited and kept; ADR 0007's accepted risk now names the rate limit |
+| Recorded decisions | Costly-to-reverse choices have ADRs | Pending | Pass: ADR 0010 (hosting), ADR 0011 (Terraform and approved releases), ADR 0012 (monitoring), ADR 0013 (access list and limits, with the schema change); ADRs 0010 to 0012 are amended for the region and the account's limits (R20); ADRs 0002 and 0003 record that they were revisited and kept; ADR 0007's accepted risk now names the rate limit |
 | Human in the loop | No external write without a draft and confirmation | Pass | Pass: infrastructure applies only a reviewed saved plan; each release builds without cloud credentials, then waits for approval of its summary in a protected environment before pushing images or touching the host, and covers only that commit; only pushes to this repository's `main` start a release; secrets, the GitHub App, DNS, and operator commands are developer actions; the evaluation never posts to GitHub. Scheduled writes to the project's own account (the nightly backup upload, metrics, and alert emails) run without a per-run confirmation: the developer confirms them once, by approving the Terraform plan and the release that install them, and each does only what that preview shows. This is recorded as a justified deviation in Complexity Tracking |
 | Repository hygiene | No absolute local paths, secrets, or personal notes committed | Pass | Pass: secret values go to Parameter Store by script, never to the repository or Terraform state; real `*.tfvars` files (alert email, domain, OIDC subject prefix) are ignored, and only examples are committed |
 
@@ -169,13 +176,13 @@ New and changed files. Everything else is unchanged from 003. tasks.md names the
 
 ```text
 infra/
-├── shared/                          # new: ECR, S3 bucket, SNS topic, OIDC provider and release role, hosted zone, budget
+├── shared/                          # new: ECR, S3 bucket, SNS topic, OIDC provider and release role (optional), hosted zone, budget
 │   ├── main.tf, iam.tf, variables.tf, outputs.tf, versions.tf
 │   └── shared.tfvars.example, backend.hcl.example
 └── stack/                           # new: one environment per state key
     ├── main.tf                      # instance, data volume, Elastic IP, security group, instance role
     ├── dns.tf, logs.tf
-    ├── monitoring.tf                # alarms, dashboard, health checks (pilot only)
+    ├── monitoring.tf                # alarms, dashboard, health checks (pilot only; health checks in us-east-1 only)
     ├── cloud-init.yaml.tftpl        # Docker, AWS CLI, CloudWatch agent, mount, swap, compose wrapper, timers
     ├── variables.tf, outputs.tf, versions.tf
     └── pilot.tfvars.example, drill.tfvars.example, loadtest.tfvars.example, backend.hcl.example
@@ -275,6 +282,21 @@ directories for operations.
   whose pure parts (`backup.py`) take plain data so unit tests cover them without a database.
 - The only external boundaries are still `GitHubGateway` and the model adapters; the application
   itself never calls AWS.
+
+### Region and account limits (research R20)
+
+Configuration only; no application code, schema, or HTTP API changes, so data-model.md and
+contracts/http-api.md are unchanged.
+
+| File | Change |
+| --- | --- |
+| `infra/shared/variables.tf`, `shared.tfvars.example`; both `backend.hcl.example` files | Region `us-east-2`; `enable_release_role` (default off), with `github_oidc_subject_prefix` needed only then |
+| `infra/shared/release.tf`, `outputs.tf` | The OIDC provider and the release role only with `enable_release_role`; `release_role_arn` is null without it |
+| `infra/stack/variables.tf` | `availability_zone` defaults to `us-east-2a` |
+| `infra/stack/monitoring.tf` | Health checks, their two alarms, and their dashboard graph only in `us-east-1`, replacing the precondition that required `us-east-1` |
+| `.github/workflows/release.yml` | Every job is skipped while `RELEASE_ROLE_ARN` is unset |
+| `deploy/put-secrets.sh`; `deploy/tests/*`; `.github/workflows/ci.yml` | Fallback region and placeholders in `us-east-2` |
+| `docs/operations.md`, `README.md` | `aws login` and `us-east-2`; the state bucket's `LocationConstraint`; when to skip the release setup and the health check faults |
 
 ## Complexity Tracking
 

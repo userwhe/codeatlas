@@ -409,6 +409,14 @@ reports states its denominator and the commit and configuration it was measured 
 - The developer provides a domain name; its cost is excluded from SC-002.
 - The developer pays for the cloud account and the model providers, and receives all alerts by
   email.
+- The developer's cloud account belongs to an organization whose policies allow one region, which
+  has no external-check metrics, and forbid the trust between the CI service and the account that
+  a release pipeline needs. In that account the pilot has no external checks, so FR-014's alerts
+  for the public address and the web app are unavailable; a lost host still alerts through its
+  status checks and the worker's silence. Releases run by hand with the developer's short-lived
+  credentials, through the same steps: the summary, migrations first, the post-release check, and
+  the automatic restore (FR-020 to FR-023), with the developer applying FR-019's main-branch rule
+  and FR-020's approval. The plan keeps both parts for an account that allows them (research R20).
 - The external model services are unchanged from 001 and 003.
 - Writes to external systems are developer actions: releases, changes to the hosting environment,
   GitHub App registration and settings, domain records, and billing settings. An agent may prepare

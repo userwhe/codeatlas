@@ -1,10 +1,14 @@
 # The pilot's monitoring (specs/004-pilot-deployment research R10; contracts/operations.md,
-# "Health checks and alarms"): two Route 53 health checks, ten alarms that notify the shared
-# codeatlas-alerts topic when they fire and when they recover, the dashboard codeatlas-pilot, and
-# saved Logs Insights queries. The drill and the load test have none of them.
+# "Health checks and alarms"): the alarms, which notify the shared codeatlas-alerts topic when they
+# fire and when they recover, the dashboard codeatlas-pilot, saved Logs Insights queries, and, in
+# us-east-1 only, two Route 53 health checks with their alarms. The drill and the load test have
+# none of them.
 
 locals {
-  health_check_paths = local.is_pilot ? { readyz = "/readyz", web = "/" } : {}
+  # Route 53 publishes health check metrics only in us-east-1, and an alarm can notify only a topic
+  # in its own region, so the health checks exist only when the pilot runs there (research R20).
+  health_checks      = local.is_pilot && local.region == "us-east-1"
+  health_check_paths = local.health_checks ? { readyz = "/readyz", web = "/" } : {}
 
   log_group_prefix = "/codeatlas/${var.environment}"
 
@@ -20,7 +24,7 @@ locals {
   # Every alarm has the same attributes, so that they form one map. Daily metrics are evaluated
   # over 26 one-hour periods that must all breach, with missing data breaching: a longer single
   # period would let the previous day's data point keep the alarm quiet (research R10).
-  alarms = local.is_pilot ? tomap({
+  health_check_alarms = local.health_checks ? tomap({
     site-down = {
       description = "The API or its database is down: the /readyz health check has failed for 5 minutes."
       namespace   = "AWS/Route53"
@@ -45,6 +49,9 @@ locals {
       threshold   = 1
       missing     = "missing"
     }
+  }) : {}
+
+  alarms = local.is_pilot ? merge(local.health_check_alarms, tomap({
     worker-down = {
       description = "The worker has reported no heartbeat for 5 minutes."
       namespace   = "CodeAtlas"
@@ -141,7 +148,7 @@ locals {
       threshold   = 1
       missing     = "missing"
     }
-  }) : {}
+  })) : {}
 }
 
 # HTTPS checks from several Route 53 regions (research R10).
@@ -158,13 +165,6 @@ resource "aws_route53_health_check" "pilot" {
 
   tags = {
     Name = "codeatlas-${var.environment}-${each.key}"
-  }
-
-  lifecycle {
-    precondition {
-      condition     = local.region == "us-east-1"
-      error_message = "Route 53 publishes health check metrics only in us-east-1, and an alarm can notify only a topic in its own region, so the pilot must run in us-east-1."
-    }
   }
 }
 
@@ -203,7 +203,9 @@ resource "aws_cloudwatch_dashboard" "pilot" {
   dashboard_body = jsonencode({
     start          = "-P7D"
     periodOverride = "inherit"
-    widgets = [
+    # Without health checks (outside us-east-1) their graph is left out, and the worker's graph takes
+    # the whole row.
+    widgets = [for widget in [
       {
         type   = "alarm"
         x      = 0
@@ -215,7 +217,7 @@ resource "aws_cloudwatch_dashboard" "pilot" {
           alarms = [for alarm in aws_cloudwatch_metric_alarm.pilot : alarm.arn]
         }
       },
-      {
+      local.health_checks ? {
         type   = "metric"
         x      = 0
         y      = 3
@@ -232,12 +234,12 @@ resource "aws_cloudwatch_dashboard" "pilot" {
             ["AWS/Route53", "HealthCheckStatus", "HealthCheckId", aws_route53_health_check.pilot["web"].id, { label = "/" }],
           ]
         }
-      },
+      } : null,
       {
         type   = "metric"
-        x      = 12
+        x      = local.health_checks ? 12 : 0
         y      = 3
-        width  = 12
+        width  = local.health_checks ? 12 : 24
         height = 6
         properties = {
           title  = "Worker and queue"
@@ -360,7 +362,7 @@ resource "aws_cloudwatch_dashboard" "pilot" {
           ])
         }
       },
-    ]
+    ] : widget if widget != null]
   })
 }
 

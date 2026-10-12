@@ -89,8 +89,8 @@ jobs:
         # in for /opt/codeatlas.
         env:
           ENVIRONMENT: pilot
-          AWS_REGION: us-east-1
-          REGISTRY: 123456789012.dkr.ecr.us-east-1.amazonaws.com
+          AWS_REGION: us-east-2
+          REGISTRY: 123456789012.dkr.ecr.us-east-2.amazonaws.com
           CODEATLAS_HOSTNAME: codeatlas.example.dev
           IMAGE_TAG: 0000000000000000000000000000000000000000
         run: |
@@ -106,7 +106,7 @@ jobs:
         # The agent's own translator checks it against the agent's schema, as the host's
         # bootstrap does with the latest agent.
         run: >-
-          docker run --rm -v "$PWD/deploy:/deploy:ro" -e RUN_IN_CONTAINER=False -e AWS_REGION=us-east-1
+          docker run --rm -v "$PWD/deploy:/deploy:ro" -e RUN_IN_CONTAINER=False -e AWS_REGION=us-east-2
           --entrypoint /opt/aws/amazon-cloudwatch-agent/bin/config-translator
           public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest
           --input /deploy/cloudwatch-agent.json --input-dir /tmp/none --output /tmp/agent.toml

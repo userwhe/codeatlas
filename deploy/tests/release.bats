@@ -43,8 +43,8 @@ release() {
 	[ "$(readlink "$CODEATLAS_ROOT/current")" = "$CODEATLAS_ROOT/releases/$FIRST" ]
 	grep -qxF "IMAGE_TAG=$FIRST" "$CODEATLAS_ROOT/.env"
 	grep -qxF 'ENVIRONMENT=pilot' "$CODEATLAS_ROOT/.env"
-	grep -qxF 'AWS_REGION=us-east-1' "$CODEATLAS_ROOT/.env"
-	grep -qxF 'REGISTRY=123456789012.dkr.ecr.us-east-1.amazonaws.com' "$CODEATLAS_ROOT/.env"
+	grep -qxF 'AWS_REGION=us-east-2' "$CODEATLAS_ROOT/.env"
+	grep -qxF 'REGISTRY=123456789012.dkr.ecr.us-east-2.amazonaws.com' "$CODEATLAS_ROOT/.env"
 	grep -qxF 'CODEATLAS_HOSTNAME=pilot.example.dev' "$CODEATLAS_ROOT/.env"
 	[ "$(cat "$CODEATLAS_DATA/state/running")" = "$FIRST" ]
 	[ ! -e "$CODEATLAS_DATA/state/previous" ]
@@ -53,8 +53,8 @@ release() {
 
 	bundle="$CODEATLAS_ROOT/releases/$FIRST"
 	compose="docker compose --project-directory $CODEATLAS_ROOT -f $bundle/compose.yml"
-	grep -qxF "aws ecr get-login-password --region us-east-1" "$STUB_LOG"
-	grep -qF "docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-1.amazonaws.com" "$STUB_LOG"
+	grep -qxF "aws ecr get-login-password --region us-east-2" "$STUB_LOG"
+	grep -qF "docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-east-2.amazonaws.com" "$STUB_LOG"
 	grep -qxF "IMAGE_TAG=$FIRST $compose pull --quiet api web" "$STUB_LOG"
 	grep -qxF "IMAGE_TAG=$FIRST $compose run --rm migrate" "$STUB_LOG"
 	grep -qxF "codeatlas-compose up -d --remove-orphans" "$STUB_LOG"

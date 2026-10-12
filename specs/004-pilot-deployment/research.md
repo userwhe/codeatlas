@@ -3,8 +3,9 @@
 Phase 0 output for [plan.md](plan.md). Each entry records the decision, the rationale, and the
 alternatives considered. This feature builds on `specs/001-repository-qa`,
 `specs/002-push-reindexing`, and `specs/003-pr-review`; references such as "001 R11" point to
-their research notes. AWS prices are on-demand prices in `us-east-1`, checked against AWS's
-pricing pages on 2026-10-07; R19 adds them up.
+their research notes. AWS prices are on-demand prices in `us-east-2`, the pilot's region (R20), and
+equal `us-east-1`'s for every item; they were checked against AWS's pricing pages on 2026-10-07
+and 2026-10-09. R19 adds them up.
 
 ## Unknowns resolved
 
@@ -29,6 +30,7 @@ pricing pages on 2026-10-07; R19 adds them up.
 | README, diagram, recording, and operations guide | R17 |
 | Tests and checks | R18 |
 | Monthly cost | R19 |
+| The region, and what depends on the account's policies | R20, ADR 0010 |
 
 New tools and services, each tied to a requirement: Terraform (FR-016, FR-025), Caddy (FR-001),
 and these AWS services: EC2, EBS, ECR, S3, SSM, CloudWatch, SNS, Route 53, Budgets, and IAM
@@ -53,7 +55,7 @@ or npm dependency.
 
 **Decision**:
 
-- **Host**: one `t4g.medium` instance (2 Arm vCPUs, 4 GiB) in `us-east-1`, in the account's
+- **Host**: one `t4g.medium` instance (2 Arm vCPUs, 4 GiB) in `us-east-2` (R20), in the account's
   default VPC, with an Elastic IP. It runs the development services, `db`
   (`pgvector/pgvector:pg17`), `api`, `worker`, `web`, and the one-shot `migrate`, with `caddy` in
   front of them.
@@ -425,11 +427,12 @@ Command needs no inbound port and no SSH key.
 - **Terraform** (1.11 or later, AWS provider 6), in two root modules:
   - `infra/shared/`: ECR repositories, the S3 bucket, the SNS alert topic and its email
     subscription, the GitHub OIDC provider and the release role (trusted for the subject prefix in
-    `github_oidc_subject_prefix`, R7), the Route 53 hosted zone, and the monthly budget.
+    `github_oidc_subject_prefix`, R7; only with `enable_release_role`, R20), the Route 53 hosted
+    zone, and the monthly budget.
   - `infra/stack/`: one environment, selected by a variable file: the instance, its role and
     profile, the data volume, the Elastic IP, the security group, the DNS record, log groups, and,
-    in the pilot only, alarms, the dashboard, and the health checks. `pilot`, `drill`, and
-    `loadtest` each have their own state key.
+    in the pilot only, alarms, the dashboard, and the health checks (in `us-east-1` only, R20).
+    `pilot`, `drill`, and `loadtest` each have their own state key.
   - The pilot's data volume is a separate resource with `prevent_destroy`; the temporary
     environments use another resource without it (`count` on the environment), because a
     lifecycle setting must be a literal.
@@ -449,7 +452,8 @@ Command needs no inbound port and no SSH key.
 - **Preview and approval** (FR-025): the developer runs `terraform plan -out=<file>`, reads it, and
   then applies that saved plan. Applying anything else is not part of the guide. A plan that
   replaces the instance says so; the data volume survives (R12).
-- **Developer credentials**: short-lived credentials from IAM Identity Center (`aws sso login`).
+- **Developer credentials**: short-lived credentials from the developer's console sign-in
+  (`aws login`, AWS CLI 2.32 or later); no access key is stored.
 - **Variables kept out of the repository**: the alert email address, the domain, and the OIDC
   subject prefix go in `*.tfvars` files that `.gitignore` excludes; `*.tfvars.example` files are
   committed.
@@ -546,12 +550,14 @@ CloudWatch's free tier covers 10 custom metrics, 10 alarms, 3 dashboards, and 5 
   `HealthCheckStatus` and `HealthCheckPercentageHealthy`.
 - **External checks**: two Route 53 HTTPS health checks every 30 seconds from several regions:
   `https://<domain>/readyz` (the API and the database) and `https://<domain>/` (the web app).
+  Route 53 publishes their metrics only in `us-east-1`, so they and their alarms exist only when
+  the pilot runs there; the pilot in `us-east-2` has neither (R20).
 - **Dashboard** `codeatlas-pilot`: metric widgets for the above, plus Logs Insights widgets for the
   last 7 days: request count, 5xx count, and p95 latency by route group (searches, views,
   submissions, other); job duration, retries, and failures by kind; and provider errors by
   provider (FR-013).
-- **Alarms** (10, pilot only), each with an alarm action and an OK action on the SNS topic, so a
-  recovery notice follows every alert (FR-014):
+- **Alarms** (10 in `us-east-1`, 8 elsewhere; pilot only), each with an alarm action and an OK
+  action on the SNS topic, so a recovery notice follows every alert (FR-014):
 
   | Alarm | Condition |
   | --- | --- |
@@ -993,9 +999,51 @@ diagram image (harder to keep current).
 | Data transfer out (under the 100 GB monthly free allowance) | $0.00 |
 | **Total** | **about $34** |
 
+In `us-east-2` the pilot has no health checks (R20), so it costs $2.00 less, about $32.
 Standard CPU credits avoid surplus-credit charges (R1). If Route 53 classes a check of the domain
 as a non-AWS endpoint, each check costs up to $2.75, about $3.50 more in total, still under $40.
 The temporary environments cost cents per hour while they exist. Excluded, as in SC-002: model
 providers and the domain name (about $10 to $20 a year). A one-year Compute Savings Plan would cut
 the instance cost by about a third; it is a commitment, so it is left for after a month of measured
 use.
+
+## R20. Region and account limits (ADR 0010)
+
+**Decision**:
+
+- The pilot runs in `us-east-2`. `infra/shared/`'s `region` defaults to `us-east-2` and
+  `infra/stack/`'s `availability_zone` to `us-east-2a`; test fixtures and CI placeholders use the
+  same region. Creating the state bucket there needs
+  `--create-bucket-configuration LocationConstraint=us-east-2`.
+- The pilot's AWS account belongs to an organization whose service control policies allow regional
+  services only in `us-east-2` and forbid creating IAM OIDC providers. Two parts of the design
+  depend on such policies, so each is created only where it can work:
+  - **Health checks**: Route 53 publishes health check metrics only in `us-east-1`, and an alarm can
+    notify only a topic in its own region. `infra/stack/` creates the two health checks, the
+    `site-down` and `web-down` alarms, and their dashboard graph only when the pilot runs in
+    `us-east-1`. In `us-east-2` the pilot has eight alarms: a lost host still fires
+    `host-status-check` and `worker-down`, but a stopped edge proxy or web app on a running host is
+    not alerted.
+  - **Release role**: `infra/shared/` creates GitHub's OIDC provider and the release role only with
+    `enable_release_role` (default off; `github_oidc_subject_prefix` is then required). Without
+    them, the developer releases by hand with the same steps and short-lived `aws login`
+    credentials (docs/operations.md, "Releasing by hand"), and the Release workflow skips every job
+    while the repository variable `RELEASE_ROLE_ARN` is unset, instead of failing after each push
+    to `main`.
+- Everything else the pilot needs is allowed: checked on 2026-10-09 with read-only calls and the
+  IAM policy simulator, whose results include service control policies.
+
+**Rationale**: Changing the policies needs the organization's management account, which the
+developer's sign-in cannot reach. A switch on each part keeps it for an account that allows it, at
+the cost of one condition each; the pilot in `us-east-2` costs about $2 a month less (R19).
+
+**Alternatives considered**:
+
+- **Allow `us-east-1` and OIDC providers in the policies**: no design change, but it needs the
+  management account.
+- **Health check alarms in `us-east-1` with a second topic there**: forbidden by the same policies,
+  which deny SNS and alarm creation outside `us-east-2`.
+- **An outside check within `us-east-2`** (a scheduled Lambda function, or CloudWatch Synthetics at
+  about $10 a month per check): more parts or cost for an alert that the host's own alarms partly
+  cover. Revisit if a stopped edge proxy or web app goes unnoticed.
+- **An IAM user's access key stored in GitHub**: forbidden by FR-024.

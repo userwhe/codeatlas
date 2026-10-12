@@ -56,7 +56,7 @@ is backed up to S3 every night (see [Deployment](#deployment)).
 
 ## Deployment
 
-The pilot runs on one EC2 instance (`t4g.medium`, Arm) in AWS `us-east-1`, where Docker Compose
+The pilot runs on one EC2 instance (`t4g.medium`, Arm) in AWS `us-east-2`, where Docker Compose
 runs the same services as in development, with Caddy in front. Terraform in `infra/` defines the
 environment, and `deploy/` holds the Compose file, the configuration, and the host scripts.
 
@@ -70,11 +70,14 @@ environment, and `deploy/` holds the Compose file, the configuration, and the ho
   waits for the operator's approval. Only then, with short-lived credentials from GitHub's OIDC
   provider, does it push the images to ECR, upload the release bundle to S3, and start the host's
   release script through SSM Run Command. The script migrates, starts the new release, checks it,
-  and returns to the previous release when the check fails.
-- **Monitoring**: the services' and host scripts' logs go to CloudWatch Logs. Ten alarms watch
-  two external health checks, the worker's metrics, disk use, the EC2 status checks, the nightly
-  backup, and the certificate, and email the operator through SNS when they fire and when they
-  recover. A CloudWatch dashboard shows the last 7 days.
+  and returns to the previous release when the check fails. Where the AWS account may not trust
+  GitHub's OIDC provider, the operator runs the same steps by hand, also with short-lived
+  credentials.
+- **Monitoring**: the services' and host scripts' logs go to CloudWatch Logs. Alarms watch the
+  worker's metrics, disk use, the EC2 status checks, the nightly backup, and the certificate, and
+  email the operator through SNS when they fire and when they recover. Two external Route 53 health
+  checks add their own alarms when the pilot runs in `us-east-1`, the only region with their
+  metrics. A CloudWatch dashboard shows the last 7 days.
 - **Credentials**: SSM parameters, rendered into the services' configuration on the host at each
   release. No container has AWS credentials, and GitHub stores no AWS key.
 

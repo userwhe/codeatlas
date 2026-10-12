@@ -26,7 +26,7 @@ variable "hostname" {
 variable "availability_zone" {
   description = "The zone of the host and its data volume; the region is derived from it."
   type        = string
-  default     = "us-east-1a"
+  default     = "us-east-2a"
 }
 
 variable "instance_type" {

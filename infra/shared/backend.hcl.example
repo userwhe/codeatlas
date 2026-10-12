@@ -3,5 +3,5 @@
 # The state bucket is created once with the AWS CLI (docs/operations.md, "The state bucket").
 bucket  = "codeatlas-tfstate-<account ID>"
 key     = "shared.tfstate"
-region  = "us-east-1"
+region  = "us-east-2"
 encrypt = true

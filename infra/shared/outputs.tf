@@ -14,8 +14,8 @@ output "alert_topic_arn" {
 }
 
 output "release_role_arn" {
-  description = "The role that the release workflow assumes; the repository variable RELEASE_ROLE_ARN."
-  value       = aws_iam_role.release.arn
+  description = "The role that the release workflow assumes; the repository variable RELEASE_ROLE_ARN. Null without enable_release_role."
+  value       = one(aws_iam_role.release[*].arn)
 }
 
 output "zone_id" {

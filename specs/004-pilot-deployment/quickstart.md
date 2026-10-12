@@ -12,16 +12,19 @@ developer confirms that draft; any change to it needs a new confirmation.
 
 ## Prerequisites
 
-- An AWS account with IAM Identity Center access for the developer, and the AWS CLI v2.
+- An AWS account the developer signs in to with `aws login`, and the AWS CLI v2 (2.32 or later),
+  with the `codeatlas` profile's region set to `us-east-2` (research R20).
 - Terraform 1.11 or later.
 - A domain name, delegated to the Route 53 hosted zone that `infra/shared/` creates.
 - The pilot GitHub App (research R5), with the pilot's callback and webhook URLs.
 - Gemini (paid tier) and Voyage AI keys, as in 001.
 - For the benchmark only: a judge key (Anthropic for Claude Opus 4.5, or OpenAI for GPT-5.2) and a
   read-only GitHub token (research R16).
-- For User Story 3: the repository's GitHub environment `pilot`, with the developer as required
-  reviewer and `main` as the only allowed branch, and the repository's OIDC subject prefix
-  (`gh api repos/<owner>/<repo>/actions/oidc/customization/sub`) in `shared.tfvars`.
+- For User Story 3's workflow, only in an account that allows OIDC providers (research R20): the
+  repository's GitHub environment `pilot`, with the developer as required reviewer and `main` as
+  the only allowed branch, and `enable_release_role = true` with the repository's OIDC subject
+  prefix (`gh api repos/<owner>/<repo>/actions/oidc/customization/sub`) in `shared.tfvars`.
+  Otherwise, run scenarios 12 to 16 with releases by hand, as the operations guide describes.
 
 ## Automated checks
 
@@ -42,7 +45,7 @@ docker build --target production frontend && docker build backend
 
 The operations guide has every command. For the MVP (User Story 1), in order:
 
-1. Create the Terraform state bucket once with the AWS CLI.
+1. Create the Terraform state bucket once with the AWS CLI, in `us-east-2`.
 2. `infra/shared/`: plan, review, apply. Delegate the domain to the zone's name servers.
 3. Register the pilot GitHub App, then write the pilot's parameters with
    `deploy/put-secrets.sh pilot`.
@@ -53,7 +56,8 @@ The operations guide has every command. For the MVP (User Story 1), in order:
 
 User Story 2 later adds the alert topic (confirm the subscription email) and replaces the host so
 that the new bootstrap installs the CloudWatch agent and timers. User Story 3 adds the release
-role and the `pilot` environment, after which releases go through the workflow.
+role and the `pilot` environment, after which releases go through the workflow; in an account that
+forbids OIDC providers, releases stay by hand.
 
 ## Validation scenarios
 
@@ -86,8 +90,8 @@ backup alert within an hour after the 26-hour mark), and a recovery email must f
 
 | Fault | How | Expected alert |
 | --- | --- | --- |
-| Edge proxy down | `codeatlas-compose stop caddy` | `site-down` and `web-down` |
-| Web app down | `codeatlas-compose stop web` | `web-down` |
+| Edge proxy down (`us-east-1` only) | `codeatlas-compose stop caddy` | `site-down` and `web-down` |
+| Web app down (`us-east-1` only) | `codeatlas-compose stop web` | `web-down` |
 | Worker down with jobs queued | `codeatlas-compose stop worker`, then request a re-index | `worker-down` |
 | Disk full | `fallocate` a file on the data volume past 80% | `data-disk-full` |
 | Backup skipped | `systemctl disable --now codeatlas-backup.timer` until 26 hours after the last backup | `backup-missing` |
@@ -129,7 +133,8 @@ outputs, with the review status label of each set.
 ## Cost and availability checks (SC-001 to SC-003)
 
 - After 14 days: the average of the `/readyz` check's `HealthCheckPercentageHealthy` over the
-  period is at least 99%.
+  period is at least 99%. This needs the health checks, so only in `us-east-1` (research R20);
+  elsewhere the validation record says it was not measured.
 - After the first full month: Cost Explorer's total, excluding the domain, is at most $40.
 - Daily: the provider's billing shows model spend below $15 on every day.
 
