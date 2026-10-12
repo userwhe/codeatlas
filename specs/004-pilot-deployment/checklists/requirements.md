@@ -49,4 +49,20 @@
   after 26 hours (US2-6, SC-007), spending alerts include actual spend and send no recovery notice,
   deleted data may stay in backups for up to 10 days (FR-018), and the limitations state the
   60-second interruption and the backup condition (FR-031). All items still pass.
+- Iteration 5 (2026-10-12): the developer moved hosting from one AWS host to Railway. The spec now
+  says "hosting platform" instead of "host" and names Railway only in the Input line. Changes: the
+  platform's address replaces the domain name (FR-001); only the web app has a public address
+  (FR-007, SC-005); releases go out without approval once the checks pass, the checks flag schema
+  changes, a failed readiness check keeps the previous version serving, and rollback takes one
+  action (US3, FR-019 to FR-025, SC-009, SC-010); the core alerts keep the outage, worker, queue,
+  job-failure, backup, release, and spending conditions and drop the disk and certificate alerts
+  (FR-014, SC-007); the platform's resource view and logs replace a metrics system (FR-013);
+  backups stay in private storage separate from the database, on the same platform (FR-015,
+  FR-031); the recorded configuration replaces the infrastructure definition (FR-016); the budget
+  is $25 a month with no domain cost (SC-002); and the AWS account assumption is gone. All items
+  still pass.
+- Iteration 6 (2026-10-12, during planning): Railway rolls back one service at a time, so FR-024
+  and User Story 3 now ask for a rollback of each service in one action; SC-007's failing-jobs
+  fault now names a failure that counts, such as exceeding a deadline, which the developer can
+  cause without changing code. All items still pass.
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`

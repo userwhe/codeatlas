@@ -1,6 +1,7 @@
 # ADR 0011: Terraform defines the environment, and releases run only after approval
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR 0015](0015-releases-on-merge.md) on 2026-10-12, before anything was
+  deployed. The code it describes is in the history at commit `c0b0e22`.
 - **Date**: 2026-10-07 (revised 2026-10-08: build before approval without cloud credentials, one
   release role, immutable OIDC subject, and a push-only gate; revised 2026-10-09: the release role
   is optional)

@@ -1,6 +1,8 @@
 # ADR 0012: CloudWatch monitoring with a few custom metrics and log queries
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR 0016](0016-status-endpoints-and-external-monitor.md) on
+  2026-10-12, before anything was deployed. The code it describes is in the history at commit
+  `c0b0e22`.
 - **Date**: 2026-10-07 (revised 2026-10-09: health checks only in `us-east-1`)
 - **Scope**: `specs/004-pilot-deployment`
 

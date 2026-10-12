@@ -1,6 +1,7 @@
 # ADR 0010: The pilot runs on one EC2 host with Docker Compose
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR 0014](0014-railway-hosting.md) on 2026-10-12, before anything was
+  deployed. The code it describes is in the history at commit `c0b0e22`.
 - **Date**: 2026-10-07 (revised 2026-10-09: `us-east-2`, and the account's limits)
 - **Scope**: `specs/004-pilot-deployment`
 
