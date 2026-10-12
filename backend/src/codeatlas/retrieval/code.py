@@ -57,6 +57,9 @@ CODE_KEYWORDS = frozenset(
 
 # Runs of word characters, dots, slashes, and hyphens: words, identifiers, and paths.
 _TOKEN = re.compile(r"[\w./-]+")
+# Runs of CJK ideographs, kana, and Hangul. These scripts put no spaces between words, and `\w`
+# matches them, so a question can glue them to an identifier or a path ("设置pulse").
+_CJK_RUN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]+")
 _LEADING_JUNK = re.compile(r"^(?:\.?/|-)+")
 _CAMEL = re.compile(r"[a-z][A-Z]|[A-Z]{2}[a-z]")
 _LEXEME = re.compile(r"[^\W_]+")
@@ -79,6 +82,15 @@ class Candidate:
     label_hint: str | None = None
 
 
+def separate_scripts(text: str) -> str:
+    """Put spaces around runs of CJK ideographs, kana, and Hangul in `text`.
+
+    The identifiers, words, and paths that a question writes next to such text then become
+    tokens of their own. Other text, including accented Latin words, is unchanged.
+    """
+    return _CJK_RUN.sub(lambda match: f" {match.group(0)} ", text)
+
+
 def identifier_tokens(question: str) -> list[str]:
     """Return identifier-like tokens and meaningful plain words from `question`, in order.
 
@@ -89,7 +101,7 @@ def identifier_tokens(question: str) -> list[str]:
     """
     tokens: list[str] = []
     seen: set[str] = set()
-    for raw in _TOKEN.findall(question):
+    for raw in _TOKEN.findall(separate_scripts(question)):
         token = _clean(raw)
         parts = [token] if _is_path_like(token) else [_clean(part) for part in token.split("-")]
         for part in parts:
@@ -219,7 +231,7 @@ def fts_query(question: str) -> str:
     """
     parts: list[str] = []
     seen: set[str] = set()
-    for term in split_identifiers(question).split():
+    for term in split_identifiers(separate_scripts(question)).split():
         if len(term) < 2 or term in STOP_WORDS or term in CODE_KEYWORDS:
             continue
         if not _LEXEME.fullmatch(term):

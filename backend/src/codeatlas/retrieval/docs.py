@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from codeatlas.models import DocChunk, File, Snapshot
 from codeatlas.providers.embeddings import Embedder, get_embedder
 from codeatlas.providers.errors import ProviderUnavailable
+from codeatlas.retrieval.code import separate_scripts
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ def docs_query(query: str) -> str:
     """The `to_tsquery('english', ...)` OR query for `query`: its words (letters and digits
     only, so no tsquery operator survives), each quoted. Returns "" when there is no word."""
     words: list[str] = []
-    for word in _WORD.findall(query.lower()):
+    for word in _WORD.findall(separate_scripts(query).lower()):
         if word not in words:
             words.append(word)
         if len(words) == MAX_QUERY_WORDS:
