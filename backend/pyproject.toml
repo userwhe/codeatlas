@@ -51,6 +51,10 @@ plugins = ["pydantic.mypy"]
 module = ["voyageai.*", "tree_sitter_python.*", "tree_sitter_typescript.*", "pgvector.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["integration: needs a PostgreSQL database"]

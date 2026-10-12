@@ -358,7 +358,7 @@ exercise).
   `fail` with a non-permanent failure on its last attempt has `error_permanent` false and its code;
   a permanent failure sets it true; a job failed at claim time for its deadline has code `timeout`
   and `error_permanent` true; nothing calls the removed metrics module.
-- [ ] T030 [P] [US2] Unit tests in backend/tests/unit/test_backup_pruning.py for
+- [X] T030 [P] [US2] Unit tests in backend/tests/unit/test_backup_pruning.py for
   `codeatlas.ops.backup` (research R12):
   - `backup_prefix(now)` is `backups/<UTC date>/<UTC time as HHMMSS>/`, so two runs on one day get
     different prefixes;
@@ -368,7 +368,7 @@ exercise).
     are never expired;
   - `newest_complete(keys, day)` picks the newest prefix of that day that has both
     `codeatlas.dump` and `manifest.json`, and ignores a prefix with only the dump.
-- [ ] T031 [P] [US2] Integration tests in backend/tests/integration/test_backup_restore.py, skipped
+- [X] T031 [P] [US2] Integration tests in backend/tests/integration/test_backup_restore.py, skipped
   with a reason unless `pg_dump --version` reports 17 or later, using an in-memory object store
   (a test helper implementing the storage protocol of T037):
   - `run_backup()` stores `<prefix>codeatlas.dump` and then `<prefix>manifest.json`, and writes one
@@ -389,7 +389,7 @@ exercise).
     `0005` passes `verify-restore` at `0004` and is then migrated to `0005`;
   - a dump whose bytes no longer match the manifest's SHA-256 is refused before anything is
     dropped.
-- [ ] T032 [P] [US2] Update the operator command tests:
+- [X] T032 [P] [US2] Update the operator command tests:
   - in backend/tests/integration/test_ops_commands.py, remove the `backup-manifest` tests, keep the
     `verify-restore` tests, and add that `backup` and `restore` exit 1 naming each missing
     `BACKUP_*` setting without printing any value, and that `restore` without `--yes` restores
@@ -440,13 +440,13 @@ exercise).
   when the database raises `SQLAlchemyError`; `Cache-Control: no-store` on every response. Include
   the router in backend/src/codeatlas/api/app.py and add `"/status/"` to
   `RATE_LIMITED_PATH_PREFIXES`.
-- [ ] T037 [P] [US2] Create backend/src/codeatlas/ops/storage.py (research R12): an `ObjectStore`
+- [X] T037 [P] [US2] Create backend/src/codeatlas/ops/storage.py (research R12): an `ObjectStore`
   protocol (`put(key, path)`, `get(key, path)`, `list(prefix) -> list[str]`,
   `delete(keys)`) and `S3Store`, a `boto3` client built from the `BACKUP_*` settings with
   `endpoint_url`, `region_name`, the key pair, and virtual-hosted addressing, which Railway's
   current buckets use. `S3Store.from_settings()` raises one error naming every missing `BACKUP_*`
   setting, with no value.
-- [ ] T038 [P] [US2] Create backend/src/codeatlas/ops/dump.py (research R12):
+- [X] T038 [P] [US2] Create backend/src/codeatlas/ops/dump.py (research R12):
   - the libpq environment (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`) derived from
     `DATABASE_URL`, so no password appears on a command line;
   - `snapshot_dump(path)`: on one connection in `REPEATABLE READ`, `SELECT pg_export_snapshot()`,
@@ -458,7 +458,7 @@ exercise).
     (`pg_terminate_backend` for `pg_stat_activity` rows of the current database other than its
     own), runs `DROP SCHEMA public CASCADE` and `CREATE SCHEMA public`, then
     `pg_restore --no-owner --exit-on-error`.
-- [ ] T039 [US2] Backup and restore commands (contracts/operations.md, "Operator commands"):
+- [X] T039 [US2] Backup and restore commands (contracts/operations.md, "Operator commands"):
   - add `backup_prefix`, `expired_keys`, and `newest_complete` to
     backend/src/codeatlas/ops/backup.py;
   - in backend/src/codeatlas/ops/__main__.py, add `backup`: first prune (delete the expired keys
@@ -603,7 +603,7 @@ tests.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T052 [P] Remove stale references to the AWS design outside specs/ and the superseded ADRs
+- [X] T052 [P] Remove stale references to the AWS design outside specs/ and the superseded ADRs
   (0010 to 0012): update the fourth-increment note in docs/design/codeatlas-v1.md (ADRs 0013 to
   0016 apply: the pilot runs on Railway, without ECS, RDS, SQS, or a staging environment); in
   docs/decisions/0013-pilot-access-list-and-limits.md, replace "through Session Manager" with

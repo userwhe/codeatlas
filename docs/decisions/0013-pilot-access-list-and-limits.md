@@ -15,8 +15,8 @@ users without a release.
 ## Options considered
 
 1. A `pilot_users` table keyed by GitHub user ID, checked at sign-in before anything is stored, and
-   managed with operator commands on the host; plus a `pilot_usage_counters` table with pilot-wide
-   daily limits.
+   managed with operator commands in the API's container; plus a `pilot_usage_counters` table with
+   pilot-wide daily limits.
 2. A list of logins in an environment variable.
 3. Membership of a GitHub organization or team.
 4. Open sign-up, bounded only by the daily limits.
@@ -42,7 +42,8 @@ Option 1:
   - Access changes take effect at once, are audited, and are restored with backups.
   - Daily model spend has a known ceiling.
 - **Accepted**:
-  - Adding a user needs a command on the host, through the platform's SSH (`railway ssh`), ADR 0014.
+  - Adding a user needs a command in the API's container, through the platform's SSH
+    (`railway ssh`), ADR 0014.
   - Heavy use by a few users can exhaust the pilot-wide limit for everyone that day.
   - Removing a user keeps their data until the developer deletes it.
 - **Revisit when**:
