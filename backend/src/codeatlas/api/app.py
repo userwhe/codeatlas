@@ -23,6 +23,7 @@ from codeatlas.api.routes import (
     repositories,
     search,
     snapshots,
+    status,
     usage,
     webhooks,
 )
@@ -39,8 +40,9 @@ STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # GitHub calls these paths, and their signature check replaces the Origin check
 # (specs/002-push-reindexing, research R2).
 WEBHOOK_PATH_PREFIX = "/webhooks/"
-# The endpoints reachable without a session: sign-in and GitHub's deliveries (FR-006).
-RATE_LIMITED_PATH_PREFIXES = ("/auth/", WEBHOOK_PATH_PREFIX)
+# The endpoints reachable without a session: sign-in, GitHub's deliveries, and the alert
+# conditions (FR-006).
+RATE_LIMITED_PATH_PREFIXES = ("/auth/", WEBHOOK_PATH_PREFIX, "/status/")
 
 
 def _request_id(request: Request) -> str | None:
@@ -237,6 +239,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(webhooks.router)
+    app.include_router(status.router)
     for module in (me, usage, jobs, github, repositories, snapshots, search, analysis_runs):
         app.include_router(module.router, prefix=API_PREFIX)
     return app

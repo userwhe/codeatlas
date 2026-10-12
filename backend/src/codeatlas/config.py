@@ -94,13 +94,12 @@ class Settings(BaseSettings):
     # Pilot-wide daily limits across every workspace (FR-005).
     pilot_daily_question_limit: int = 30
     pilot_daily_review_limit: int = 15
-    # Requests per client address per minute on `/auth/*` and `/webhooks/*` (FR-006); 0 disables.
+    # Requests per client address per minute on `/auth/*`, `/webhooks/*`, and `/status/*` (FR-006);
+    # 0 disables.
     rate_limit_per_minute: int = 60
     # The request header that carries the client's address; empty uses the connection's address
     # (research R4).
     client_address_header: str = ""
-    emit_metrics: bool = False
-    metrics_environment: str = "local"
     # The commit reported by `/version`. The platform's commit replaces it (see
     # `_platform_commit_first`) because the image always defines `CODEATLAS_RELEASE`, which would
     # otherwise hide it (research R6).

@@ -74,8 +74,6 @@ PILOT_ENVIRONMENT = (
     "PILOT_DAILY_QUESTION_LIMIT",
     "PILOT_DAILY_REVIEW_LIMIT",
     "RATE_LIMIT_PER_MINUTE",
-    "EMIT_METRICS",
-    "METRICS_ENVIRONMENT",
     "CODEATLAS_RELEASE",
     "RAILWAY_GIT_COMMIT_SHA",
 )
@@ -93,9 +91,18 @@ def test_pilot_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.pilot_daily_question_limit == 30
     assert settings.pilot_daily_review_limit == 15
     assert settings.rate_limit_per_minute == 60
-    assert settings.emit_metrics is False
-    assert settings.metrics_environment == "local"
     assert settings.release == "development"
+
+
+def test_an_emit_metrics_variable_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The status endpoints replaced the embedded metric format and its settings (research R10).
+    monkeypatch.setenv("EMIT_METRICS", "1")
+    monkeypatch.setenv("METRICS_ENVIRONMENT", "pilot")
+
+    settings = make()
+
+    assert {"emit_metrics", "metrics_environment"}.isdisjoint(Settings.model_fields)
+    assert not hasattr(settings, "emit_metrics")
 
 
 PLATFORM_ENVIRONMENT = (

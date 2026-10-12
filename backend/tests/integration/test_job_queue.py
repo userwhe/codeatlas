@@ -1,5 +1,6 @@
 """Integration tests for the job queue and worker (T039, research R3 and R4)."""
 
+import importlib.util
 import itertools
 import logging
 import threading
@@ -446,6 +447,61 @@ def test_a_passed_deadline_fails_the_job_with_timeout(db: Session) -> None:
     row = reload(db, question.id)
     assert (row.status, row.attempt, row.error_code) == ("failed", 1, "timeout")
     assert events(db, question.id)[-1].data == {"code": "timeout"}
+
+
+def test_a_failed_job_records_whether_its_failure_was_permanent(db: Session) -> None:
+    repository = make_repository(db)
+    retried = add_job(db, repository)
+    rejected = add_job(db, repository, kind="answer_question")
+    # The next attempt is the last one.
+    db.execute(update(Job).where(Job.id == retried.id).values(attempt=2))
+    db.commit()
+    last = claim(db)
+    assert (last.job_id, last.attempt) == (retried.id, 3)
+    queue.fail(
+        db,
+        retried.id,
+        last.fencing_token,
+        code="github_unavailable",
+        message="GitHub is unavailable.",
+        permanent=False,
+    )
+    queue.fail(
+        db,
+        rejected.id,
+        claim(db).fencing_token,
+        code="branch_not_found",
+        message="The branch does not exist.",
+        permanent=True,
+    )
+
+    row = reload(db, retried.id)
+    assert (row.status, row.error_code, row.error_permanent) == (
+        "failed",
+        "github_unavailable",
+        False,
+    )
+    row = reload(db, rejected.id)
+    assert (row.status, row.error_code, row.error_permanent) == ("failed", "branch_not_found", True)
+    # Jobs that have not failed record nothing.
+    assert reload(db, add_job(db, repository).id).error_permanent is None
+
+
+def test_a_job_failed_at_claim_time_for_its_deadline_is_a_permanent_timeout(db: Session) -> None:
+    job = add_job(db, make_repository(db), kind="answer_question")
+    claimed = claim(db, now=datetime.now(UTC))
+
+    assert queue.claim_next(db, now=claimed.deadline_at + timedelta(seconds=1)) is None
+
+    row = reload(db, job.id)
+    assert (row.status, row.error_code, row.error_permanent) == ("failed", "timeout", True)
+
+
+def test_nothing_calls_the_removed_metrics_module() -> None:
+    # The failing-jobs check reads `error_permanent` instead of a metric (research R10).
+    assert importlib.util.find_spec("codeatlas.metrics") is None
+    assert not hasattr(queue, "metrics")
+    assert not hasattr(worker, "metrics")
 
 
 @pytest.mark.parametrize(

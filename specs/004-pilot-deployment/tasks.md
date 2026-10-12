@@ -307,7 +307,7 @@ exercise).
 
 ### Tests for User Story 2 ⚠️ (write first, confirm they fail)
 
-- [ ] T025 [P] [US2] Extend backend/tests/integration/test_pilot_schema.py for migration `0005`
+- [X] T025 [P] [US2] Extend backend/tests/integration/test_pilot_schema.py for migration `0005`
   (data-model.md):
   - `worker_heartbeats`: `worker_id` text primary key, `started_at` and `beat_at` timestamptz not
     null;
@@ -316,7 +316,7 @@ exercise).
     rejects `ABC` and a 63-character value); `alembic_revision` and `release` text, all not null;
   - `jobs.error_permanent` is boolean and "nullable";
   - `alembic_version.version_num` is `0005` (replacing the `0004` assertion).
-- [ ] T026 [P] [US2] Unit tests in backend/tests/unit/test_status_conditions.py for the pure
+- [X] T026 [P] [US2] Unit tests in backend/tests/unit/test_status_conditions.py for the pure
   condition functions of `codeatlas.status` (data-model.md, "Alert conditions"), each returning the
   condition's name, whether it fails, its value, and its threshold:
   - `worker`: fails when the newest heartbeat is older than `WORKER_SILENT_SECONDS` (300 s ok,
@@ -329,7 +329,7 @@ exercise).
     the largest count of a 60-minute window ending at a failure of the last hour;
   - `backup`: fails when the newest backup is older than `BACKUP_MISSING_HOURS` (26 h ok, 26 h and
     1 s failing) or there is none (value `None`).
-- [ ] T027 [P] [US2] Integration tests in backend/tests/integration/test_status_endpoints.py
+- [X] T027 [P] [US2] Integration tests in backend/tests/integration/test_status_endpoints.py
   (contracts/http-api.md, `GET /status/{condition}`):
   - `worker`: a heartbeat 10 s old gives 200 with its value; 301 s old gives 503; none gives 503
     with `value` null;
@@ -347,14 +347,14 @@ exercise).
   - every response has `Cache-Control: no-store`; no status path is in the OpenAPI document;
   - with `rate_limit_per_minute` 2 in an app built with `create_app()`, the third request to a
     status path gets 429 `rate_limited`.
-- [ ] T028 [P] [US2] Integration tests in backend/tests/integration/test_worker_reporter.py,
+- [X] T028 [P] [US2] Integration tests in backend/tests/integration/test_worker_reporter.py,
   replacing backend/tests/integration/test_worker_metrics.py (delete it): `status.report_once()`
   inserts the worker's `worker_heartbeats` row with `started_at` and `beat_at`, and a second call
   moves only `beat_at`; a row whose `beat_at` is 25 hours old is deleted; a row 23 hours old
   stays; it logs one `worker_status` line with `queued_jobs` (jobs `queued` or `retry_wait`) and
   `oldest_runnable_job_age_seconds` (by the `runnable_waiting` rule, 0 when none); and the worker's
   `main()` starts the reporter with no setting enabled (job loop patched to stop at once).
-- [ ] T029 [P] [US2] Extend backend/tests/integration/test_job_queue.py: a job failed through
+- [X] T029 [P] [US2] Extend backend/tests/integration/test_job_queue.py: a job failed through
   `fail` with a non-permanent failure on its last attempt has `error_permanent` false and its code;
   a permanent failure sets it true; a job failed at claim time for its deadline has code `timeout`
   and `error_permanent` true; nothing calls the removed metrics module.
@@ -401,7 +401,7 @@ exercise).
 
 ### Implementation for User Story 2
 
-- [ ] T033 [US2] Migration backend/alembic/versions/0005_operations_status.py with
+- [X] T033 [US2] Migration backend/alembic/versions/0005_operations_status.py with
   `revision = "0005"` and `down_revision = "0004"`, and models in backend/src/codeatlas/models.py
   (data-model.md):
   - `WorkerHeartbeat` (`worker_heartbeats`): `worker_id` Text primary key, `started_at` and
@@ -411,12 +411,12 @@ exercise).
     `alembic_revision` Text, `release` Text, all not null;
   - `Job.error_permanent`: Boolean, nullable;
   - the downgrade drops the column and both tables.
-- [ ] T034 [US2] Record permanence in backend/src/codeatlas/jobs/queue.py: `_mark_failed` sets
+- [X] T034 [US2] Record permanence in backend/src/codeatlas/jobs/queue.py: `_mark_failed` sets
   `job.error_permanent = failure.permanent`; remove the `metrics.emit` call and the import; add
   `counted_failure()`, a SQL predicate (`error_permanent IS false OR error_code IN
   COUNTED_PERMANENT_CODES`), and update the comment on `COUNTED_PERMANENT_CODES` to say the
   failing-jobs check reads it (research R10).
-- [ ] T035 [US2] Create backend/src/codeatlas/status.py, replacing backend/src/codeatlas/metrics.py
+- [X] T035 [US2] Create backend/src/codeatlas/status.py, replacing backend/src/codeatlas/metrics.py
   (delete it and backend/tests/unit/test_metrics.py):
   - the pure condition functions of T026;
   - readers for each condition over a session at a given time: the newest `beat_at`; the oldest
@@ -434,7 +434,7 @@ exercise).
   `get_settings().worker_report_seconds`. Remove `emit_metrics` and `metrics_environment` from
   backend/src/codeatlas/config.py, and add to backend/tests/unit/test_config.py that an
   `EMIT_METRICS` variable is ignored.
-- [ ] T036 [US2] Create backend/src/codeatlas/api/routes/status.py with `GET /status/{condition}`
+- [X] T036 [US2] Create backend/src/codeatlas/api/routes/status.py with `GET /status/{condition}`
   (`include_in_schema=False`) per contracts/http-api.md: 200 or 503 with `condition`, `status`
   (`ok` or `failing`), `value`, and `threshold`; 404 `not_found` for another name; 503 `not_ready`
   when the database raises `SQLAlchemyError`; `Cache-Control: no-store` on every response. Include

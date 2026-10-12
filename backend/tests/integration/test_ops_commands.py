@@ -20,6 +20,7 @@ from codeatlas.config import Settings
 from codeatlas.github.fake import NO_CODE_ID, SAMPLE_APP_ID, SOLO_ID
 from codeatlas.models import AuditEvent, GitHubCredential, PilotUser, Repository, User, UserSession
 from codeatlas.ops.__main__ import main
+from codeatlas.ops.release import known_revisions_and_head
 
 pytestmark = pytest.mark.integration
 
@@ -253,9 +254,13 @@ def row_counts(db: Session) -> dict[str, int]:
     return counts
 
 
+# The test database is migrated to the head revision.
+HEAD = known_revisions_and_head()[1]
+
+
 def write_counts(db: Session, path: Path) -> dict[str, int]:
     counts = row_counts(db)
-    path.write_text(json.dumps({"alembic_revision": "0004", "row_counts": counts}))
+    path.write_text(json.dumps({"alembic_revision": HEAD, "row_counts": counts}))
     return counts
 
 
@@ -298,7 +303,7 @@ def test_backup_manifest_then_verify_restore(
     assert manifest == {
         "created_at": manifest["created_at"],
         "release": RELEASE,
-        "alembic_revision": "0004",
+        "alembic_revision": HEAD,
         "dump": {"key": "K", "bytes": 10, "sha256": sha256},
         "row_counts": counts,
     }
@@ -326,7 +331,7 @@ def test_verify_restore_reports_a_different_revision(
 
     assert main(["verify-restore", str(manifest_file)]) == 1
 
-    assert "Alembic revision: 0003 in the backup, 0004 restored" in capsys.readouterr().err
+    assert f"Alembic revision: 0003 in the backup, {HEAD} restored" in capsys.readouterr().err
 
 
 def test_backup_manifest_refuses_an_invalid_counts_file(

@@ -1,10 +1,11 @@
-"""Integration tests for the pilot access schema (T004, data-model.md, migration 0004).
+"""Integration tests for the pilot schema (T004, T025, data-model.md, migrations 0004 and 0005).
 
 Rows are inserted with SQL rather than through the models, so the database's own defaults and
 checks are tested. A rejected row names the constraint it breaks.
 """
 
-from datetime import date, datetime
+import uuid
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlalchemy import select, text
@@ -50,6 +51,25 @@ def add_pilot_user(db: Session, github_user_id: int, note: str | None = None) ->
             " VALUES (:github_user_id, 'octocat', :note)"
         ),
         {"github_user_id": github_user_id, "note": note},
+    )
+    db.commit()
+
+
+def add_backup(db: Session, object_key: str, sha256: str = "0" * 64) -> None:
+    db.execute(
+        text(
+            "INSERT INTO backups"
+            " (id, object_key, completed_at, bytes, sha256, alembic_revision, release)"
+            " VALUES (:id, :object_key, :completed_at, :bytes, :sha256, '0005', 'development')"
+        ),
+        {
+            "id": uuid.uuid4(),
+            "object_key": object_key,
+            "completed_at": datetime(2026, 10, 13, 3, 30, 12, tzinfo=UTC),
+            # Dumps can exceed 32 bits.
+            "bytes": 5 * 2**30,
+            "sha256": sha256,
+        },
     )
     db.commit()
 
@@ -132,6 +152,60 @@ def test_one_pilot_usage_row_per_day(db: Session) -> None:
         db.execute(insert, {"usage_date": date(2026, 10, 8)})
 
 
+# --- worker_heartbeats --------------------------------------------------------------------------
+
+
+def test_worker_heartbeats_columns(db: Session) -> None:
+    assert columns(db, "worker_heartbeats") == {
+        "worker_id": ("text", "NO", None),
+        "started_at": ("timestamp with time zone", "NO", None),
+        "beat_at": ("timestamp with time zone", "NO", None),
+    }
+    assert primary_key(db, "worker_heartbeats") == ["worker_id"]
+
+
+# --- backups ------------------------------------------------------------------------------------
+
+
+def test_backups_columns(db: Session) -> None:
+    assert columns(db, "backups") == {
+        "id": ("uuid", "NO", None),
+        "object_key": ("text", "NO", None),
+        "completed_at": ("timestamp with time zone", "NO", None),
+        "bytes": ("bigint", "NO", None),
+        "sha256": ("text", "NO", None),
+        "alembic_revision": ("text", "NO", None),
+        "release": ("text", "NO", None),
+    }
+    assert primary_key(db, "backups") == ["id"]
+
+
+def test_a_dump_is_recorded_once(db: Session) -> None:
+    key = "backups/2026-10-13/033012/codeatlas.dump"
+    add_backup(db, key)
+
+    with rejected_by("uq_backups_object_key"):
+        add_backup(db, key)
+
+
+def test_a_backups_sha256_is_64_lowercase_hexadecimal_characters(db: Session) -> None:
+    add_backup(db, "backups/2026-10-13/033012/codeatlas.dump", sha256="0123456789abcdef" * 4)
+
+    with rejected_by("ck_backups_sha256"):
+        add_backup(db, "backups/2026-10-14/033012/codeatlas.dump", sha256="ABC")
+    db.rollback()
+    with rejected_by("ck_backups_sha256"):
+        add_backup(db, "backups/2026-10-15/033012/codeatlas.dump", sha256="a" * 63)
+
+
+# --- jobs ---------------------------------------------------------------------------------------
+
+
+def test_a_jobs_failure_permanence_is_nullable(db: Session) -> None:
+    # Null for jobs that have not failed and for failures recorded before the migration.
+    assert columns(db, "jobs")["error_permanent"] == ("boolean", "YES", None)
+
+
 # --- audit_events and the migration -------------------------------------------------------------
 
 
@@ -157,5 +231,5 @@ def test_audit_events_still_reject_an_unknown_action(db: Session) -> None:
         db.commit()
 
 
-def test_the_database_is_at_revision_0004(db: Session) -> None:
-    assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
+def test_the_database_is_at_revision_0005(db: Session) -> None:
+    assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0005"
